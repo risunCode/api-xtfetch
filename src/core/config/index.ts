@@ -1,0 +1,82 @@
+/**
+ * Core Config Module
+ * Centralized configuration and constants.
+ */
+
+// Platform Configuration
+export {
+    matchesPlatform,
+    detectPlatform,
+    isPlatformUrl,
+    getPlatformRegex,
+    getPlatformAliases,
+    PLATFORM_CONFIGS,
+    getPlatformDomainConfig as getApiPlatformConfig,
+    getBaseUrl,
+    getReferer,
+    getOrigin,
+    getApiEndpoint,
+    type PlatformId,
+    type PlatformDomainConfig as ApiPlatformConfig,
+} from '@/lib/services/helper/api-config';
+
+// Environment Helpers
+export function getEnv(key: string, defaultValue?: string): string {
+    const value = process.env[key];
+    if (value === undefined) {
+        if (defaultValue !== undefined) return defaultValue;
+        throw new Error(`Missing required environment variable: ${key}`);
+    }
+    return value;
+}
+
+export function getEnvOptional(key: string): string | undefined {
+    return process.env[key];
+}
+
+export function isProduction(): boolean {
+    return process.env.NODE_ENV === 'production';
+}
+
+export function isDevelopment(): boolean {
+    return process.env.NODE_ENV === 'development';
+}
+
+// Application Constants
+export const APP_NAME = 'XTFetch API';
+export const APP_VERSION = '1.0.0';
+export const APP_DESCRIPTION = 'Social Media Downloader API';
+
+export const CACHE_TTL = {
+    SHORT: 5 * 60 * 1000,
+    MEDIUM: 30 * 60 * 1000,
+    LONG: 24 * 60 * 60 * 1000,
+};
+
+export const TIMEOUTS = {
+    SHORT: 5000,
+    NORMAL: 10000,
+    LONG: 30000,
+};
+
+export const RATE_LIMIT_WINDOWS = {
+    SHORT: 60 * 1000,
+    MEDIUM: 5 * 60 * 1000,
+    LONG: 60 * 60 * 1000,
+};
+
+export const ALLOWED_SOCIAL_DOMAINS = [
+    'facebook.com', 'fb.com', 'fb.watch', 'fbcdn.net',
+    'instagram.com', 'cdninstagram.com', 'instagr.am',
+    'twitter.com', 'x.com', 't.co', 'twimg.com',
+    'tiktok.com', 'tiktokcdn.com', 'musical.ly',
+    'weibo.com', 'weibo.cn', 'sinaimg.cn',
+    'youtube.com', 'youtu.be', 'googlevideo.com', 'ytimg.com',
+];
+
+export const ALLOWED_CDN_DOMAINS = [
+    'fbcdn.net', 'cdninstagram.com', 'scontent.cdninstagram.com',
+    'pbs.twimg.com', 'video.twimg.com',
+    'tiktokcdn.com', 'tiktokcdn-us.com',
+    'sinaimg.cn', 'weibocdn.com',
+];
