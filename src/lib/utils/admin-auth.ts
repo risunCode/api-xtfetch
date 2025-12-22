@@ -91,3 +91,44 @@ export async function verifyAdminToken(request: NextRequest): Promise<{ valid: b
         error: result.error
     };
 }
+
+interface ApiKeyValidation {
+    valid: boolean;
+    rateLimit?: number;
+    error?: string;
+}
+
+export async function verifyApiKey(apiKey: string): Promise<ApiKeyValidation> {
+    if (!supabase) {
+        console.error('[Auth] Supabase not configured');
+        return { valid: false, error: 'Auth service not configured' };
+    }
+
+    try {
+        const { data: keyData, error } = await supabase
+            .from('api_keys')
+            .select('id, rate_limit, is_active, expires_at')
+            .eq('key_hash', apiKey) // In production, this should be hashed
+            .single();
+
+        if (error || !keyData) {
+            return { valid: false, error: 'Invalid API key' };
+        }
+
+        if (!keyData.is_active) {
+            return { valid: false, error: 'API key is disabled' };
+        }
+
+        if (keyData.expires_at && new Date(keyData.expires_at) < new Date()) {
+            return { valid: false, error: 'API key has expired' };
+        }
+
+        return {
+            valid: true,
+            rateLimit: keyData.rate_limit || 100,
+        };
+    } catch (error) {
+        console.error('[Auth] API key verification error:', error);
+        return { valid: false, error: 'API key verification failed' };
+    }
+}

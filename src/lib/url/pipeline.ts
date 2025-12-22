@@ -2,8 +2,8 @@
  * Central URL Pipeline
  */
 
-import { logger } from '@/core';
-import { type PlatformId, detectPlatform } from '@/core/config';
+import { logger } from '@/lib/services/helper/logger';
+import { type PlatformId, detectPlatform } from '@/lib/services/helper/api-config';
 import { resolveUrl as resolveUrlAxios, ResolveResult } from '@/lib/http/client';
 
 export type ContentType = 'video' | 'reel' | 'story' | 'post' | 'image' | 'unknown';

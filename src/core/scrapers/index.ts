@@ -12,6 +12,7 @@ export { scrapeInstagram } from '@/lib/services/instagram';
 export { scrapeTwitter } from '@/lib/services/twitter';
 export { scrapeTikTok } from '@/lib/services/tiktok';
 export { scrapeWeibo } from '@/lib/services/weibo';
+export { scrapeYouTube } from '@/lib/services/youtube';
 
 // Types
 import type { ScraperResult, ScraperOptions, ScraperFn, PlatformId } from './types';
@@ -22,6 +23,7 @@ import { scrapeInstagram } from '@/lib/services/instagram';
 import { scrapeTwitter } from '@/lib/services/twitter';
 import { scrapeTikTok } from '@/lib/services/tiktok';
 import { scrapeWeibo } from '@/lib/services/weibo';
+import { scrapeYouTube } from '@/lib/services/youtube';
 import { ScraperErrorCode as ErrorCode } from './types';
 
 export function getScraper(platform: PlatformId): ScraperFn | null {
@@ -31,6 +33,7 @@ export function getScraper(platform: PlatformId): ScraperFn | null {
         twitter: scrapeTwitter,
         tiktok: scrapeTikTok,
         weibo: scrapeWeibo,
+        youtube: scrapeYouTube,
     };
     return scrapers[platform] || null;
 }
@@ -57,6 +60,7 @@ export const SUPPORTED_PLATFORMS: PlatformId[] = [
     'twitter',
     'tiktok',
     'weibo',
+    'youtube',
 ];
 
 export function isPlatformSupported(platform: string): platform is PlatformId {

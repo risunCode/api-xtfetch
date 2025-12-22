@@ -1,0 +1,12 @@
+# Render deployment config
+services:
+  - type: web
+    name: xtfetch-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3002
