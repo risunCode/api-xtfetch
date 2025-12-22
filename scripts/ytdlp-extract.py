@@ -15,8 +15,8 @@ def extract(url: str) -> dict:
         'extract_flat': False,
         'skip_download': True,
         'format': 'best',
-        # Use cookies from browser if available
-        'cookiesfrombrowser': ('chrome',),
+        # Don't use browser cookies on server
+        # 'cookiesfrombrowser': ('chrome',),
     }
     
     try:
