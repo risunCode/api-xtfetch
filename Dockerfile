@@ -19,14 +19,17 @@ RUN pip3 install --break-system-packages yt-dlp
 # Copy package files
 COPY package*.json ./
 
-# Install Node dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci
 
 # Copy source code
 COPY . .
 
 # Build Next.js
 RUN npm run build
+
+# Remove devDependencies after build
+RUN npm prune --production
 
 # Expose port
 EXPOSE 3002
