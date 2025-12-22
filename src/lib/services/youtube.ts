@@ -56,9 +56,10 @@ export async function scrapeYouTube(url: string, _options?: ScraperOptions): Pro
         // Escape URL for shell
         const escapedUrl = url.replace(/"/g, '\\"');
         
-        // Execute Python script
+        // Execute Python script (use 'python' on Windows, 'python3' on Linux/Mac)
+        const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         const { stdout, stderr } = await execAsync(
-            `python3 "${scriptPath}" "${escapedUrl}"`,
+            `${pythonCmd} "${scriptPath}" "${escapedUrl}"`,
             { 
                 timeout: 60000, // 60s timeout
                 maxBuffer: 10 * 1024 * 1024, // 10MB buffer
