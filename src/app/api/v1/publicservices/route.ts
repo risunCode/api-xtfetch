@@ -41,17 +41,18 @@ export async function POST(request: NextRequest) {
             logger.error(urlResult.platform, result.error || 'Unknown error');
         }
 
+        const responseTime = Date.now() - startTime;
+
         return NextResponse.json({
             success: result.success,
-            data: result.data,
+            data: result.data ? { ...result.data, responseTime } : result.data,
             error: result.error,
             errorCode: result.errorCode,
             meta: {
                 tier: 'free',
                 platform: urlResult.platform,
                 rateLimit: '10 requests per minute',
-                endpoint: '/api/v1/publicservices',
-                responseTime: `${Date.now() - startTime}ms`
+                endpoint: '/api/v1/publicservices'
             }
         });
 

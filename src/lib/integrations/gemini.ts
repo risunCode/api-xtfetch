@@ -98,31 +98,30 @@ export async function getNextApiKey(): Promise<GeminiApiKey | null> {
 /**
  * Update API key usage stats
  */
-export async function updateKeyUsage(keyId: string, success: boolean, error?: string): Promise<void> {
+export async function updateKeyUsage(keyId: string, success: boolean, error?: string, rateLimitSeconds?: number): Promise<void> {
     if (!supabaseAdmin) return;
     
     const updates: Record<string, unknown> = {
         last_used_at: new Date().toISOString(),
-        use_count: supabaseAdmin.rpc('increment', { row_id: keyId, column_name: 'use_count' }),
     };
     
     if (!success) {
-        updates.error_count = supabaseAdmin.rpc('increment', { row_id: keyId, column_name: 'error_count' });
         updates.last_error = error || 'Unknown error';
         
-        // If rate limited, set reset time (1 minute)
-        if (error?.includes('429') || error?.toLowerCase().includes('rate limit')) {
-            updates.rate_limit_reset = new Date(Date.now() + 60000).toISOString();
+        // If rate limited, set reset time
+        if (rateLimitSeconds && rateLimitSeconds > 0) {
+            updates.rate_limit_reset = new Date(Date.now() + rateLimitSeconds * 1000).toISOString();
         }
+    } else {
+        // Clear rate limit on success
+        updates.rate_limit_reset = null;
+        updates.last_error = null;
     }
     
-    // Simple update without RPC
+    // Update the record
     const { error: updateError } = await supabaseAdmin
         .from('gemini_api_keys')
-        .update({
-            last_used_at: new Date().toISOString(),
-            ...(success ? {} : { last_error: error || 'Unknown error' }),
-        })
+        .update(updates)
         .eq('id', keyId);
     
     // Increment counters separately
@@ -180,7 +179,7 @@ export async function callGeminiApi(
     model: GeminiModel,
     contents: ChatMessage[],
     webSearch: boolean = false
-): Promise<{ success: boolean; text?: string; error?: string; tokensUsed?: number }> {
+): Promise<{ success: boolean; text?: string; error?: string; tokensUsed?: number; isRateLimited?: boolean; retryAfterSeconds?: number }> {
     const url = `${GEMINI_API_BASE}/${model}:generateContent`;
     
     const body: Record<string, unknown> = {
@@ -214,7 +213,30 @@ export async function callGeminiApi(
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             const errorMsg = errorData?.error?.message || `HTTP ${response.status}`;
-            return { success: false, error: errorMsg };
+            
+            // Check for rate limit (429) or quota exceeded
+            const isRateLimited = response.status === 429 || 
+                errorMsg.toLowerCase().includes('rate limit') ||
+                errorMsg.toLowerCase().includes('quota') ||
+                errorMsg.toLowerCase().includes('resource exhausted');
+            
+            // Parse retry-after header or default to 60 seconds
+            let retryAfterSeconds = 60;
+            const retryAfter = response.headers.get('retry-after');
+            if (retryAfter) {
+                retryAfterSeconds = parseInt(retryAfter) || 60;
+            } else if (errorMsg.includes('retry after')) {
+                // Try to extract seconds from error message
+                const match = errorMsg.match(/retry after (\d+)/i);
+                if (match) retryAfterSeconds = parseInt(match[1]);
+            }
+            
+            return { 
+                success: false, 
+                error: `[${response.status}] ${errorMsg}`,
+                isRateLimited,
+                retryAfterSeconds: isRateLimited ? retryAfterSeconds : undefined
+            };
         }
         
         const data = await response.json();
@@ -222,6 +244,11 @@ export async function callGeminiApi(
         const tokensUsed = data?.usageMetadata?.totalTokenCount;
         
         if (!text) {
+            // Check for safety block
+            const blockReason = data?.candidates?.[0]?.finishReason;
+            if (blockReason === 'SAFETY') {
+                return { success: false, error: 'Response blocked by safety filters' };
+            }
             return { success: false, error: 'No response generated' };
         }
         
@@ -239,6 +266,7 @@ export async function callGeminiApi(
  */
 export async function chat(request: GeminiChatRequest): Promise<GeminiChatResponse> {
     const model = request.model || 'gemini-2.5-flash';
+    const MAX_RETRIES = 3;
     
     // Get session
     const session = getChatSession(request.sessionKey);
@@ -262,54 +290,66 @@ export async function chat(request: GeminiChatRequest): Promise<GeminiChatRespon
     // Build full conversation
     const contents: ChatMessage[] = [...session.history, userMessage];
     
-    // Get API key
-    const apiKeyRecord = await getNextApiKey();
-    if (!apiKeyRecord) {
-        return { success: false, error: 'No API keys available. Please configure Gemini API keys in admin settings.' };
-    }
+    // Track tried keys to avoid retrying same key
+    const triedKeyIds = new Set<string>();
+    let lastError = 'No API keys available';
     
-    // Call Gemini
-    const result = await callGeminiApi(apiKeyRecord.key, model, contents, request.webSearch);
-    
-    // Update key usage
-    await updateKeyUsage(apiKeyRecord.id, result.success, result.error);
-    
-    if (!result.success) {
-        // Try next key if available
-        const nextKey = await getNextApiKey();
-        if (nextKey && nextKey.id !== apiKeyRecord.id) {
-            const retryResult = await callGeminiApi(nextKey.key, model, contents, request.webSearch);
-            await updateKeyUsage(nextKey.id, retryResult.success, retryResult.error);
-            
-            if (retryResult.success) {
-                // Save to session
-                saveToSession(session.key, userMessage);
-                saveToSession(session.key, { role: 'model', parts: [{ text: retryResult.text }] });
-                
-                return {
-                    success: true,
-                    text: retryResult.text,
-                    model,
-                    sessionKey: session.key,
-                    tokensUsed: retryResult.tokensUsed,
-                };
-            }
+    // Try up to MAX_RETRIES times with different keys
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        // Get API key (excluding already tried ones)
+        const apiKeyRecord = await getNextApiKey();
+        
+        if (!apiKeyRecord) {
+            return { success: false, error: 'No API keys available. Please configure Gemini API keys in admin settings.' };
         }
         
-        return { success: false, error: result.error };
+        // Skip if already tried this key
+        if (triedKeyIds.has(apiKeyRecord.id)) {
+            // All available keys have been tried
+            break;
+        }
+        
+        triedKeyIds.add(apiKeyRecord.id);
+        
+        // Call Gemini
+        const result = await callGeminiApi(apiKeyRecord.key, model, contents, request.webSearch);
+        
+        // Update key usage with rate limit info
+        await updateKeyUsage(
+            apiKeyRecord.id, 
+            result.success, 
+            result.error,
+            result.retryAfterSeconds
+        );
+        
+        if (result.success) {
+            // Save to session
+            saveToSession(session.key, userMessage);
+            saveToSession(session.key, { role: 'model', parts: [{ text: result.text }] });
+            
+            return {
+                success: true,
+                text: result.text,
+                model,
+                sessionKey: session.key,
+                tokensUsed: result.tokensUsed,
+            };
+        }
+        
+        lastError = result.error || 'Unknown error';
+        
+        // If rate limited, try next key immediately
+        if (result.isRateLimited) {
+            continue;
+        }
+        
+        // For other errors (invalid key, safety block, etc.), don't retry
+        if (result.error?.includes('API key') || result.error?.includes('safety')) {
+            break;
+        }
     }
     
-    // Save to session
-    saveToSession(session.key, userMessage);
-    saveToSession(session.key, { role: 'model', parts: [{ text: result.text }] });
-    
-    return {
-        success: true,
-        text: result.text,
-        model,
-        sessionKey: session.key,
-        tokensUsed: result.tokensUsed,
-    };
+    return { success: false, error: lastError };
 }
 
 /**

@@ -141,10 +141,12 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
     
     try {
         const userId = await getUserId(username, cookie);
-        if (!userId) return createError(ScraperErrorCode.NOT_FOUND, 'Could not find user');
+        // Better error detection for cookie issues vs user not found
+        if (!userId) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie may be expired or user not found. Please update your cookie.');
         
         const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
         const res = await httpGet(apiUrl, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie } });
+        if (res.status === 401 || res.status === 403) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired. Please update your cookie.');
         if (res.status !== 200) return createError(ScraperErrorCode.API_ERROR, `Story API error: ${res.status}`);
         
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
@@ -178,7 +180,8 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
         }
         
         if (formats.length === 0) return createError(ScraperErrorCode.NO_MEDIA, 'Could not extract story media');
-        return { success: true, data: { title: `${username}'s Story`, thumbnail, author: `@${username}`, description: `${items.length} story${items.length > 1 ? 's' : ''} available`, formats, url } };
+        // ✅ FIX: Mark usedCookie for stories (always uses cookie)
+        return { success: true, data: { title: `${username}'s Story`, thumbnail, author: `@${username}`, description: `${items.length} story${items.length > 1 ? 's' : ''} available`, formats, url, usedCookie: true } };
     } catch (e) {
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Story fetch failed');
     }
@@ -216,7 +219,11 @@ export async function scrapeInstagram(url: string, options?: ScraperOptions): Pr
         const { media: authMedia } = await fetchGraphQL(shortcode, cookie);
         if (authMedia) {
             const result = parseGraphQLMedia(authMedia, shortcode);
-            if (result.success) setCache('instagram', url, result);
+            if (result.success) {
+                // ✅ FIX: Mark usedCookie when cookie was used for auth
+                result.data!.usedCookie = true;
+                setCache('instagram', url, result);
+            }
             return result;
         }
         return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Post is private or has been deleted');

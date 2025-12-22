@@ -7,6 +7,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
+import { getCache, setCache } from './helper/cache';
+import { logger } from './helper/logger';
 
 const execAsync = promisify(exec);
 
@@ -43,11 +45,23 @@ interface YtdlpResult {
 /**
  * Scrape YouTube video using yt-dlp
  */
-export async function scrapeYouTube(url: string, _options?: ScraperOptions): Promise<ScraperResult> {
+export async function scrapeYouTube(url: string, options?: ScraperOptions): Promise<ScraperResult> {
+    const { skipCache = false } = options || {};
+    
     // Validate URL
     if (!isYouTubeUrl(url)) {
         return createError(ScraperErrorCode.INVALID_URL, 'Invalid YouTube URL');
     }
+
+    // ✅ ADD: Check cache first (YouTube is slow, cache helps a lot)
+    if (!skipCache) {
+        const cached = await getCache<ScraperResult>('youtube', url);
+        if (cached?.success) {
+            logger.cache('youtube', true);
+            return { ...cached, cached: true };
+        }
+    }
+    logger.cache('youtube', false);
 
     try {
         // Path to Python script
@@ -71,13 +85,13 @@ export async function scrapeYouTube(url: string, _options?: ScraperOptions): Pro
         }
 
         // Parse result
-        const result: YtdlpResult = JSON.parse(stdout);
+        const ytdlpResult: YtdlpResult = JSON.parse(stdout);
 
-        if (!result.success || !result.data) {
-            return createError(ScraperErrorCode.PARSE_ERROR, result.error || 'Failed to extract video');
+        if (!ytdlpResult.success || !ytdlpResult.data) {
+            return createError(ScraperErrorCode.PARSE_ERROR, ytdlpResult.error || 'Failed to extract video');
         }
 
-        const { data } = result;
+        const { data } = ytdlpResult;
 
         // Map formats to XTFetch format
         const formats = data.formats
@@ -114,7 +128,7 @@ export async function scrapeYouTube(url: string, _options?: ScraperOptions): Pro
 
         const finalFormats = sortedFormats.length > 0 ? sortedFormats : formats;
 
-        return {
+        const result: ScraperResult = {
             success: true,
             data: {
                 title: data.title,
@@ -128,6 +142,12 @@ export async function scrapeYouTube(url: string, _options?: ScraperOptions): Pro
                 },
             },
         };
+
+        // ✅ ADD: Cache successful results (YouTube is slow ~3-5s, cache saves time)
+        setCache('youtube', url, result);
+        logger.complete('youtube', Date.now());
+        
+        return result;
     } catch (error: any) {
         // Handle specific errors
         if (error.code === 'ETIMEDOUT' || error.killed) {

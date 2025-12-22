@@ -7,12 +7,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/redis';
 import { chat, getChatSession, type GeminiModel } from '@/lib/integrations/gemini';
-
-// Rate limit: 20 requests per minute per IP
-const RATE_LIMIT = 20;
-const RATE_WINDOW = 60; // seconds
+import { loadConfigFromDB, getGeminiRateLimit, getGeminiRateWindow } from '@/lib/services/helper/service-config';
 
 export async function POST(request: NextRequest) {
+    // Load config from DB
+    await loadConfigFromDB();
+    const RATE_LIMIT = getGeminiRateLimit();
+    const RATE_WINDOW = getGeminiRateWindow() * 60; // convert minutes to seconds
+    
     // Rate limiting
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 
                request.headers.get('x-real-ip') || 

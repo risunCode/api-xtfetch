@@ -1,24 +1,27 @@
-/**
- * Root Page - Redirect to API docs or show simple message
- */
+'use client';
 
-export default function Home() {
+import { useState } from 'react';
+import { SidebarLayout, NavSection } from '@/components/Sidebar';
+import { HomePage } from '@/components/sections/Home';
+import { Documentation } from '@/components/sections/Documentation';
+
+export default function Page() {
+    const [activeSection, setActiveSection] = useState<NavSection>('home');
+
+    const renderContent = () => {
+        switch (activeSection) {
+            case 'home':
+                return <HomePage />;
+            case 'docs':
+                return <Documentation />;
+            default:
+                return <HomePage />;
+        }
+    };
+
     return (
-        <main style={{ 
-            display: 'flex', 
-            flexDirection: 'column',
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            minHeight: '100vh',
-            fontFamily: 'system-ui, sans-serif',
-            background: '#0a0a0a',
-            color: '#fafafa'
-        }}>
-            <h1 style={{ fontSize: '2rem', marginBottom: '1rem' }}>🚀 XTFetch API</h1>
-            <p style={{ color: '#888' }}>Social Media Video Downloader Backend</p>
-            <p style={{ marginTop: '2rem', fontSize: '0.875rem', color: '#666' }}>
-                API Endpoint: <code style={{ background: '#1a1a1a', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>/api</code>
-            </p>
-        </main>
+        <SidebarLayout activeSection={activeSection} onSectionChange={setActiveSection}>
+            {renderContent()}
+        </SidebarLayout>
     );
 }

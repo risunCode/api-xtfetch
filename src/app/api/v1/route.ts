@@ -68,9 +68,11 @@ export async function GET(request: NextRequest) {
             logger.error(urlResult.platform, result.error || 'Unknown error');
         }
 
+        const responseTime = Date.now() - startTime;
+
         return NextResponse.json({
             success: result.success,
-            data: result.data,
+            data: result.data ? { ...result.data, responseTime } : result.data,
             error: result.error,
             errorCode: result.errorCode,
             meta: {
@@ -78,8 +80,7 @@ export async function GET(request: NextRequest) {
                 platform: urlResult.platform,
                 apiKey: apiKey.substring(0, 8) + '...',
                 rateLimit: keyValidation.rateLimit,
-                endpoint: '/api/v1',
-                responseTime: `${Date.now() - startTime}ms`
+                endpoint: '/api/v1'
             }
         });
 

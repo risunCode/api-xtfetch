@@ -5,6 +5,51 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+// ═══════════════════════════════════════════════════════════════
+// SECURITY: Blocked paths and patterns
+// ═══════════════════════════════════════════════════════════════
+
+const BLOCKED_PATHS = [
+    '/.env',
+    '/.git',
+    '/.gitignore',
+    '/.htaccess',
+    '/wp-admin',
+    '/wp-login',
+    '/wp-content',
+    '/phpinfo',
+    '/phpmyadmin',
+    '/config.php',
+    '/admin.php',
+    '/shell',
+    '/cmd',
+    '/eval',
+    '/.aws',
+    '/.docker',
+    '/node_modules',
+    '/package.json',
+    '/tsconfig.json',
+];
+
+const SUSPICIOUS_PATTERNS = [
+    /\.\.\//,              // Directory traversal
+    /\.\.%2f/i,            // Encoded traversal
+    /%2e%2e/i,             // Double encoded
+    /\x00/,                // Null bytes
+    /<script/i,            // XSS attempts
+    /javascript:/i,        // JS protocol
+    /union\s+select/i,     // SQL injection
+    /select\s+.*\s+from/i, // SQL injection
+    /insert\s+into/i,      // SQL injection
+    /drop\s+table/i,       // SQL injection
+    /exec\s*\(/i,          // Command injection
+    /eval\s*\(/i,          // Eval injection
+];
+
+// ═══════════════════════════════════════════════════════════════
+// CORS: Allowed origins
+// ═══════════════════════════════════════════════════════════════
+
 // Allowed origins for CORS
 const ALLOWED_ORIGINS = [
     'https://xt-fetch.vercel.app',
@@ -91,6 +136,36 @@ function getCorsHeaders(origin: string | null): Record<string, string> {
 export function middleware(request: NextRequest) {
     const origin = request.headers.get('origin');
     const pathname = request.nextUrl.pathname;
+    const fullUrl = request.url;
+
+    // ═══════════════════════════════════════════════════════════════
+    // SECURITY: Block suspicious requests
+    // ═══════════════════════════════════════════════════════════════
+
+    // Block known malicious paths
+    const lowerPath = pathname.toLowerCase();
+    for (const blocked of BLOCKED_PATHS) {
+        if (lowerPath.startsWith(blocked) || lowerPath.includes(blocked)) {
+            return new NextResponse(
+                JSON.stringify({ success: false, error: 'Not found' }),
+                { status: 404, headers: { 'Content-Type': 'application/json' } }
+            );
+        }
+    }
+
+    // Block suspicious patterns in URL
+    for (const pattern of SUSPICIOUS_PATTERNS) {
+        if (pattern.test(fullUrl) || pattern.test(pathname)) {
+            return new NextResponse(
+                JSON.stringify({ success: false, error: 'Bad request' }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } }
+            );
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CORS: Handle preflight
+    // ═══════════════════════════════════════════════════════════════
 
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
@@ -128,14 +203,6 @@ export function middleware(request: NextRequest) {
     const requestId = crypto.randomUUID();
     response.headers.set('X-Request-ID', requestId);
 
-    // Log API requests with service tier info
-    if (pathname.startsWith('/api')) {
-        const apiKey = request.nextUrl.searchParams.get('key') || 
-                       request.headers.get('X-API-Key');
-        const keyInfo = apiKey ? `key=${apiKey.substring(0, 8)}...` : 'no-key';
-        console.log(`[${requestId}] ${request.method} ${pathname} [${serviceTier}] [${keyInfo}]`);
-    }
-
     return response;
 }
 
@@ -143,5 +210,12 @@ export const config = {
     matcher: [
         // Match all API routes
         '/api/:path*',
+        // Match root for homepage
+        '/',
+        // Block common attack paths
+        '/.env',
+        '/.git/:path*',
+        '/wp-admin/:path*',
+        '/wp-login.php',
     ],
 };

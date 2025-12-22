@@ -14,6 +14,7 @@ import {
     setGlobalRateLimit,
     setPlaygroundEnabled,
     setPlaygroundRateLimit,
+    setGeminiRateLimit,
     loadConfigFromDB,
     type PlatformId,
     type MaintenanceType
@@ -60,12 +61,15 @@ export async function POST(request: NextRequest) {
             }
 
             case 'updateGlobal': {
-                const { playgroundEnabled, playgroundRateLimit, maintenanceMode, maintenanceType, maintenanceMessage, globalRateLimit } = updates;
+                const { playgroundEnabled, playgroundRateLimit, maintenanceMode, maintenanceType, maintenanceMessage, globalRateLimit, geminiRateLimit, geminiRateWindow } = updates;
                 
                 if (playgroundEnabled !== undefined) await setPlaygroundEnabled(playgroundEnabled);
                 if (playgroundRateLimit !== undefined) await setPlaygroundRateLimit(playgroundRateLimit);
                 if (maintenanceMode !== undefined) await setMaintenanceMode(maintenanceMode, maintenanceType as MaintenanceType, maintenanceMessage);
                 if (globalRateLimit !== undefined) await setGlobalRateLimit(globalRateLimit);
+                if (geminiRateLimit !== undefined || geminiRateWindow !== undefined) {
+                    await setGeminiRateLimit(geminiRateLimit ?? 60, geminiRateWindow);
+                }
                 
                 const config = await getServiceConfigAsync();
                 return NextResponse.json({ success: true, message: 'Global settings updated', data: config });

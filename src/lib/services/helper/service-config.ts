@@ -24,6 +24,7 @@ export type MaintenanceType = 'off' | 'api' | 'full';
 export interface ServiceConfig {
     platforms: Record<PlatformId, PlatformConfig>;
     globalRateLimit: number; playgroundRateLimit: number; playgroundEnabled: boolean;
+    geminiRateLimit: number; geminiRateWindow: number; // AI Chat rate limit
     maintenanceMode: boolean; maintenanceType: MaintenanceType; maintenanceMessage: string; apiKeyRequired: boolean; lastUpdated: string;
 }
 
@@ -39,6 +40,7 @@ const DEFAULT_CONFIG: ServiceConfig = {
         youtube: { id: 'youtube', name: 'YouTube', enabled: true, method: 'External API', rateLimit: 10, cacheTime: 3600, disabledMessage: 'YouTube service is temporarily unavailable.', lastUpdated: new Date().toISOString(), stats: { totalRequests: 0, successCount: 0, errorCount: 0, avgResponseTime: 0 } },
     },
     globalRateLimit: 15, playgroundRateLimit: 5, playgroundEnabled: true,
+    geminiRateLimit: 60, geminiRateWindow: 1, // 60 requests per 1 minute
     maintenanceMode: false, maintenanceType: 'off', maintenanceMessage: '🔧 XTFetch is under maintenance. Please try again later.',
     apiKeyRequired: false, lastUpdated: new Date().toISOString()
 };
@@ -66,13 +68,15 @@ export async function loadConfigFromDB(): Promise<boolean> {
         if (error || !data) return false;
         for (const row of data) {
             if (row.id === 'global') {
-                serviceConfig.maintenanceMode = row.maintenance_mode ?? false;
-                serviceConfig.maintenanceType = row.maintenance_type ?? 'off';
+                serviceConfig.maintenanceMode = row.maintenance_mode ?? DEFAULT_CONFIG.maintenanceMode;
+                serviceConfig.maintenanceType = row.maintenance_type ?? DEFAULT_CONFIG.maintenanceType;
                 serviceConfig.maintenanceMessage = row.maintenance_message ?? DEFAULT_CONFIG.maintenanceMessage;
-                serviceConfig.apiKeyRequired = row.api_key_required ?? true;
-                serviceConfig.globalRateLimit = row.rate_limit ?? 60;
-                serviceConfig.playgroundRateLimit = row.playground_rate_limit ?? 5;
-                serviceConfig.playgroundEnabled = row.playground_enabled ?? true;
+                serviceConfig.apiKeyRequired = row.api_key_required ?? DEFAULT_CONFIG.apiKeyRequired;
+                serviceConfig.globalRateLimit = row.rate_limit ?? DEFAULT_CONFIG.globalRateLimit;
+                serviceConfig.playgroundRateLimit = row.playground_rate_limit ?? DEFAULT_CONFIG.playgroundRateLimit;
+                serviceConfig.playgroundEnabled = row.playground_enabled ?? DEFAULT_CONFIG.playgroundEnabled;
+                serviceConfig.geminiRateLimit = row.gemini_rate_limit ?? DEFAULT_CONFIG.geminiRateLimit;
+                serviceConfig.geminiRateWindow = row.gemini_rate_window ?? DEFAULT_CONFIG.geminiRateWindow;
                 serviceConfig.lastUpdated = row.updated_at;
             } else if (row.id in serviceConfig.platforms) {
                 const pid = row.id as PlatformId;
@@ -103,6 +107,7 @@ export async function saveGlobalConfig(): Promise<boolean> {
         const { error } = await db.from('service_config').upsert({
             id: 'global', enabled: true, rate_limit: serviceConfig.globalRateLimit,
             playground_rate_limit: serviceConfig.playgroundRateLimit, playground_enabled: serviceConfig.playgroundEnabled,
+            gemini_rate_limit: serviceConfig.geminiRateLimit, gemini_rate_window: serviceConfig.geminiRateWindow,
             maintenance_mode: serviceConfig.maintenanceMode, maintenance_type: serviceConfig.maintenanceType,
             maintenance_message: serviceConfig.maintenanceMessage,
             api_key_required: serviceConfig.apiKeyRequired, updated_at: new Date().toISOString()
@@ -134,6 +139,8 @@ export function isApiKeyRequired(): boolean { return serviceConfig.apiKeyRequire
 export function isPlaygroundEnabled(): boolean { return serviceConfig.playgroundEnabled; }
 export function getPlaygroundRateLimit(): number { return serviceConfig.playgroundRateLimit; }
 export function getGlobalRateLimit(): number { return serviceConfig.globalRateLimit; }
+export function getGeminiRateLimit(): number { return serviceConfig.geminiRateLimit; }
+export function getGeminiRateWindow(): number { return serviceConfig.geminiRateWindow; }
 export function getPlatformDisabledMessage(platformId: PlatformId): string { return serviceConfig.platforms[platformId]?.disabledMessage || `${platformId} service is currently disabled.`; }
 export function getAllPlatforms(): PlatformConfig[] { return Object.values(serviceConfig.platforms); }
 
@@ -168,6 +175,13 @@ export async function setPlaygroundEnabled(enabled: boolean): Promise<boolean> {
 
 export async function setPlaygroundRateLimit(limit: number): Promise<boolean> {
     serviceConfig.playgroundRateLimit = Math.max(1, Math.min(100, limit));
+    serviceConfig.lastUpdated = new Date().toISOString();
+    return await saveGlobalConfig();
+}
+
+export async function setGeminiRateLimit(limit: number, window?: number): Promise<boolean> {
+    serviceConfig.geminiRateLimit = Math.max(1, Math.min(1000, limit));
+    if (window !== undefined) serviceConfig.geminiRateWindow = Math.max(1, Math.min(60, window));
     serviceConfig.lastUpdated = new Date().toISOString();
     return await saveGlobalConfig();
 }

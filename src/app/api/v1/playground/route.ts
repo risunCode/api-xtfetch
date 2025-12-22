@@ -8,10 +8,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
+import { loadConfigFromDB, getPlaygroundRateLimit } from '@/lib/services/helper/service-config';
 
 // GET method for browser testing
 export async function GET(request: NextRequest) {
     const startTime = Date.now();
+    
+    // Load config from DB (service_config table - synced with admin console)
+    await loadConfigFromDB();
+    const rateLimit = getPlaygroundRateLimit();
+    
     try {
         const searchParams = request.nextUrl.searchParams;
         const url = searchParams.get('url');
@@ -21,8 +27,8 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({
                 success: true,
                 data: {
-                    remaining: 5, // Default for playground
-                    limit: 5,
+                    remaining: rateLimit, // From DB config
+                    limit: rateLimit,
                     resetIn: 0,
                 },
                 meta: {
@@ -60,7 +66,7 @@ export async function GET(request: NextRequest) {
             meta: {
                 tier: 'playground',
                 platform: urlResult.platform,
-                rateLimit: '5 requests per 2 minutes',
+                rateLimit: `${rateLimit} requests per 2 minutes`,
                 endpoint: '/api/v1/playground',
                 responseTime: `${Date.now() - startTime}ms`,
                 note: 'For testing purposes only. Get API key for production use.'
@@ -87,6 +93,11 @@ export async function GET(request: NextRequest) {
 // POST method for API integration
 export async function POST(request: NextRequest) {
     const startTime = Date.now();
+    
+    // Load config from DB (service_config table - synced with admin console)
+    await loadConfigFromDB();
+    const rateLimit = getPlaygroundRateLimit();
+    
     try {
         const body = await request.json();
         const { url } = body;
@@ -126,7 +137,7 @@ export async function POST(request: NextRequest) {
             meta: {
                 tier: 'playground',
                 platform: urlResult.platform,
-                rateLimit: '5 requests per 2 minutes',
+                rateLimit: `${rateLimit} requests per 2 minutes`,
                 endpoint: '/api/v1/playground',
                 responseTime: `${Date.now() - startTime}ms`,
                 note: 'For testing purposes only. Get API key for production use.'

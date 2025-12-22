@@ -136,14 +136,10 @@ export async function GET(request: NextRequest) {
         }
 
         // Fix double/triple-encoded URLs - decode aggressively until stable
-        const originalUrl = url;
         url = fullyDecodeUrl(url);
-        console.log('[Proxy] Original URL:', originalUrl.substring(0, 100) + '...');
-        console.log('[Proxy] Decoded URL:', url.substring(0, 100) + '...');
 
         // SSRF Prevention
         if (!isAllowedProxyUrl(url)) {
-            console.log('[Proxy] URL not allowed:', url.substring(0, 100));
             return NextResponse.json({ 
                 success: false,
                 error: 'URL not allowed - only CDN domains are supported',
@@ -182,9 +178,23 @@ export async function GET(request: NextRequest) {
             try {
                 const headRes = await fetch(url, { method: 'HEAD', headers, redirect: 'follow' });
                 const size = headRes.headers.get('content-length') || '0';
-                return new NextResponse(null, { status: 200, headers: { 'x-file-size': size } });
+                return new NextResponse(null, { 
+                    status: 200, 
+                    headers: { 
+                        'x-file-size': size,
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Expose-Headers': 'x-file-size',
+                    } 
+                });
             } catch {
-                return new NextResponse(null, { status: 200, headers: { 'x-file-size': '0' } });
+                return new NextResponse(null, { 
+                    status: 200, 
+                    headers: { 
+                        'x-file-size': '0',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Expose-Headers': 'x-file-size',
+                    } 
+                });
             }
         }
 
@@ -196,10 +206,7 @@ export async function GET(request: NextRequest) {
 
         const response = await fetch(url, { headers, redirect: 'follow' });
 
-        console.log('[Proxy] Fetch response:', response.status, 'for:', url.substring(0, 80) + '...');
-
         if (!response.ok) {
-            console.log('[Proxy] Fetch failed:', response.status, response.statusText);
             return NextResponse.json({ 
                 success: false,
                 error: `Download failed: ${response.status}`,

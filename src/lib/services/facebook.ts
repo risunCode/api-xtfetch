@@ -502,9 +502,13 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
     const isGroup = /\/groups\//.test(inputUrl);
     const isVideoShare = /\/share\/v\//.test(inputUrl);
     
+    // ✅ OPTIMIZE: Track if cookie was already tried to avoid double usage
+    let cookieAlreadyTried = false;
+    
     if (isStory) return doScrape(true);
     if ((isGroup || isVideoShare) && hasCookie) {
         logger.debug('facebook', `${isGroup ? 'Group' : 'Video share'} URL detected, trying with cookie first...`);
+        cookieAlreadyTried = true;
         const cookieResult = await doScrape(true);
         if (cookieResult.success && (cookieResult.data?.formats?.length || 0) > 0) {
             const hasVideo = cookieResult.data?.formats?.some(f => f.type === 'video') || false;
@@ -517,7 +521,8 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
     const hasVideo = guestResult.data?.formats?.some(f => f.type === 'video') || false;
     const shouldRetryVideoShare = isVideoShare && hasCookie && guestResult.success && !hasVideo;
     
-    const shouldRetry = hasCookie && (!guestResult.success || (guestResult.data?.formats?.length === 0) || guestResult.errorCode === ScraperErrorCode.AGE_RESTRICTED || guestResult.errorCode === ScraperErrorCode.COOKIE_REQUIRED || guestResult.errorCode === ScraperErrorCode.PRIVATE_CONTENT || guestResult.errorCode === ScraperErrorCode.NO_MEDIA || shouldRetryVideoShare);
+    // ✅ OPTIMIZE: Skip retry if cookie was already tried (saves cookie usage)
+    const shouldRetry = hasCookie && !cookieAlreadyTried && (!guestResult.success || (guestResult.data?.formats?.length === 0) || guestResult.errorCode === ScraperErrorCode.AGE_RESTRICTED || guestResult.errorCode === ScraperErrorCode.COOKIE_REQUIRED || guestResult.errorCode === ScraperErrorCode.PRIVATE_CONTENT || guestResult.errorCode === ScraperErrorCode.NO_MEDIA || shouldRetryVideoShare);
 
     if (shouldRetry) {
         logger.debug('facebook', 'Retrying with cookie...');

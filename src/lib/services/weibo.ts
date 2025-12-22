@@ -122,7 +122,8 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             const seen = new Set<string>(), unique = formats.filter(f => { if (seen.has(f.url)) return false; seen.add(f.url); return true; });
             logger.media('weibo', { videos: unique.length });
             logger.complete('weibo', Date.now() - startTime);
-            const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video' } };
+            // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
+            const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video', usedCookie: true } };
             setCache('weibo', url, result);
             return result;
         }
@@ -228,7 +229,8 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         logger.media('weibo', { videos: unique.filter(f => f.type === 'video').length, images: unique.filter(f => f.type === 'image').length });
         logger.complete('weibo', Date.now() - startTime);
 
-        const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image') } };
+        // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
+        const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image'), usedCookie: true } };
         setCache('weibo', url, result);
         return result;
     } catch (e) {
