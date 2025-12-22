@@ -4,15 +4,18 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { supabaseAdmin } from '@/lib/supabase';
 
 // POST - Subscribe to push notifications
 export async function POST(request: NextRequest) {
+    if (!supabaseAdmin) {
+        return NextResponse.json({
+            success: false,
+            error: 'Database not configured',
+            meta: { endpoint: '/api/v1/push/subscribe' }
+        }, { status: 503 });
+    }
+
     try {
         const { subscription } = await request.json();
         
@@ -29,7 +32,7 @@ export async function POST(request: NextRequest) {
         const userAgent = request.headers.get('user-agent') || '';
         
         // Upsert subscription (update if exists, insert if new)
-        const { error } = await supabase
+        const { error } = await supabaseAdmin
             .from('push_subscriptions')
             .upsert({
                 endpoint: subscription.endpoint,
@@ -74,6 +77,14 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Unsubscribe from push notifications
 export async function DELETE(request: NextRequest) {
+    if (!supabaseAdmin) {
+        return NextResponse.json({
+            success: false,
+            error: 'Database not configured',
+            meta: { endpoint: '/api/v1/push/subscribe' }
+        }, { status: 503 });
+    }
+
     try {
         const { endpoint } = await request.json();
         
@@ -88,7 +99,7 @@ export async function DELETE(request: NextRequest) {
         }
         
         // Mark as inactive instead of deleting (for analytics)
-        const { error } = await supabase
+        const { error } = await supabaseAdmin
             .from('push_subscriptions')
             .update({ is_active: false })
             .eq('endpoint', endpoint);
@@ -125,12 +136,20 @@ export async function DELETE(request: NextRequest) {
 
 // GET - Check subscription status
 export async function GET(request: NextRequest) {
+    if (!supabaseAdmin) {
+        return NextResponse.json({
+            success: false,
+            error: 'Database not configured',
+            meta: { endpoint: '/api/v1/push/subscribe' }
+        }, { status: 503 });
+    }
+
     try {
         const endpoint = request.nextUrl.searchParams.get('endpoint');
         
         if (!endpoint) {
             // Return total subscriber count
-            const { count, error } = await supabase
+            const { count, error } = await supabaseAdmin
                 .from('push_subscriptions')
                 .select('*', { count: 'exact', head: true })
                 .eq('is_active', true);
@@ -150,7 +169,7 @@ export async function GET(request: NextRequest) {
         }
         
         // Check specific subscription
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('push_subscriptions')
             .select('is_active')
             .eq('endpoint', endpoint)
