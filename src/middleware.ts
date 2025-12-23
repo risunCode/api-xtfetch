@@ -50,14 +50,20 @@ const SUSPICIOUS_PATTERNS = [
 // CORS: Allowed origins
 // ═══════════════════════════════════════════════════════════════
 
+// Parse ALLOWED_ORIGINS from env (comma-separated)
+const envOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean) || [];
+
 // Allowed origins for CORS
 const ALLOWED_ORIGINS = [
     'https://xt-fetch.vercel.app',
     'https://xtfetch.com',
     'https://www.xtfetch.com',
-    process.env.ALLOWED_ORIGIN,
-    process.env.NODE_ENV === 'development' ? 'http://localhost:3000' : null,
-    process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : null, // Frontend dev
+    'https://xtfetch-api-production.up.railway.app',
+    ...envOrigins,
+    // Development origins
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
 ].filter(Boolean) as string[];
 
 // Rate limits per service tier

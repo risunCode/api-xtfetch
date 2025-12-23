@@ -189,43 +189,113 @@ function extractStories(html: string, seenUrls: Set<string>): MediaFormat[] {
     const formats: MediaFormat[] = [];
     let m;
 
+    // Extract video-thumbnail pairs by finding them close together in HTML
+    // Pattern: look for story blocks that contain both video and thumbnail
+    const storyBlocks: { videoUrl: string; isHD: boolean; thumbnail?: string; position: number }[] = [];
+    
+    // Pattern 1: progressive_url with quality metadata
     const storyRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)","failure_reason":null,"metadata":\{"quality":"(HD|SD)"\}/g;
-    const videoPairs: { url: string; isHD: boolean }[] = [];
     while ((m = storyRe.exec(html)) !== null) {
         const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url)) { seenUrls.add(url); videoPairs.push({ url, isHD: m[2] === 'HD' }); }
-    }
-
-    if (videoPairs.length === 0) {
-        const fallbackRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g;
-        while ((m = fallbackRe.exec(html)) !== null) {
-            const url = utilDecodeUrl(m[1]);
-            if (!seenUrls.has(url)) { seenUrls.add(url); videoPairs.push({ url, isHD: /720p|1080p|_hd/.test(url) }); }
+        if (!seenUrls.has(url)) {
+            seenUrls.add(url);
+            // Look for thumbnail near this video (within 2000 chars before)
+            const searchStart = Math.max(0, m.index - 2000);
+            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
+            const thumbMatch = nearbyHtml.match(/"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/);
+            storyBlocks.push({ 
+                videoUrl: url, 
+                isHD: m[2] === 'HD', 
+                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
+                position: m.index 
+            });
         }
     }
 
-    const thumbs: string[] = [];
+    // Pattern 2: progressive_urls array format (stories)
+    if (storyBlocks.length === 0) {
+        const arrayRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g;
+        while ((m = arrayRe.exec(html)) !== null) {
+            const url = utilDecodeUrl(m[1]);
+            if (!seenUrls.has(url)) {
+                seenUrls.add(url);
+                const searchStart = Math.max(0, m.index - 2000);
+                const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
+                const thumbMatch = nearbyHtml.match(/"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/);
+                storyBlocks.push({ 
+                    videoUrl: url, 
+                    isHD: /720|1080|_hd/i.test(url),
+                    thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
+                    position: m.index 
+                });
+            }
+        }
+    }
+
+    // Pattern 3: fallback - any progressive_url
+    if (storyBlocks.length === 0) {
+        const fallbackRe = /progressive_url['":\s]+['"]?(https:[^"'\s]+\.mp4[^"'\s]*)/g;
+        while ((m = fallbackRe.exec(html)) !== null) {
+            const url = utilDecodeUrl(m[1]);
+            if (!seenUrls.has(url)) {
+                seenUrls.add(url);
+                const searchStart = Math.max(0, m.index - 2000);
+                const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
+                const thumbMatch = nearbyHtml.match(/"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/);
+                storyBlocks.push({ 
+                    videoUrl: url, 
+                    isHD: /720|1080|_hd/.test(url),
+                    thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
+                    position: m.index 
+                });
+            }
+        }
+    }
+
+    // Fallback: collect all thumbnails for videos without matched thumbnail
+    const allThumbs: string[] = [];
     const thumbRe = /"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/g;
     while ((m = thumbRe.exec(html)) !== null) {
         const url = clean(m[1]);
-        if (isValidMedia(url) && !thumbs.includes(url)) thumbs.push(url);
+        if (isValidMedia(url) && !allThumbs.includes(url)) allThumbs.push(url);
     }
 
+    // Sort by position to maintain order
+    storyBlocks.sort((a, b) => a.position - b.position);
+
     let videoIdx = 0;
-    if (videoPairs.some(v => v.isHD) && videoPairs.some(v => !v.isHD)) {
-        const count = Math.ceil(videoPairs.length / 2);
+    let fallbackThumbIdx = 0;
+    
+    // Group HD/SD pairs if both exist
+    if (storyBlocks.some(v => v.isHD) && storyBlocks.some(v => !v.isHD)) {
+        const count = Math.ceil(storyBlocks.length / 2);
         for (let i = 0; i < count; i++) {
-            const pair = videoPairs.slice(i * 2, i * 2 + 2);
+            const pair = storyBlocks.slice(i * 2, i * 2 + 2);
             const best = pair.find(v => v.isHD) || pair[0];
             if (best) {
-                seenUrls.add(best.url);
-                formats.push({ quality: `Story ${++videoIdx}`, type: 'video', url: best.url, format: 'mp4', itemId: `story-v-${videoIdx}`, thumbnail: thumbs[i] });
+                // Use matched thumbnail, or fallback to allThumbs by index
+                const thumb = best.thumbnail || pair.find(p => p.thumbnail)?.thumbnail || allThumbs[fallbackThumbIdx++];
+                formats.push({ 
+                    quality: `Story ${++videoIdx}`, 
+                    type: 'video', 
+                    url: best.videoUrl, 
+                    format: 'mp4', 
+                    itemId: `story-v-${videoIdx}`, 
+                    thumbnail: thumb 
+                });
             }
         }
-    } else if (videoPairs.length > 0) {
-        videoPairs.forEach((v, i) => {
-            seenUrls.add(v.url);
-            formats.push({ quality: `Story ${++videoIdx}`, type: 'video', url: v.url, format: 'mp4', itemId: `story-v-${videoIdx}`, thumbnail: thumbs[i] });
+    } else if (storyBlocks.length > 0) {
+        storyBlocks.forEach((v) => {
+            const thumb = v.thumbnail || allThumbs[fallbackThumbIdx++];
+            formats.push({ 
+                quality: `Story ${++videoIdx}`, 
+                type: 'video', 
+                url: v.videoUrl, 
+                format: 'mp4', 
+                itemId: `story-v-${videoIdx}`, 
+                thumbnail: thumb 
+            });
         });
     }
 
@@ -381,7 +451,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
     const hasCookie = !!parsedCookie;
 
     if (/\/stories\//.test(inputUrl) && !parsedCookie) {
-        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Stories require login.');
+        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Stories membutuhkan cookie. Admin cookie pool kosong atau tidak tersedia.');
     }
 
     const doScrape = async (useCookie: boolean): Promise<ScraperResult> => {
@@ -419,13 +489,13 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
 
             const hasMediaPatterns = html.includes('browser_native') || html.includes('all_subattachments') || html.includes('viewer_image') || html.includes('photo_image');
             if (!hasMediaPatterns && html.length < 500000 && (html.includes('login_form') || html.includes('Log in to Facebook'))) {
-                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'This content requires login.');
+                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login. Admin cookie pool tidak tersedia.');
             }
 
             const contentIssue = detectContentIssue(html);
             if (contentIssue && !useCookie) {
-                if (contentIssue === ScraperErrorCode.AGE_RESTRICTED) return createError(ScraperErrorCode.AGE_RESTRICTED, 'Age-restricted content. Cookie required.');
-                if (contentIssue === ScraperErrorCode.PRIVATE_CONTENT) return createError(ScraperErrorCode.PRIVATE_CONTENT, 'This content is private or unavailable.');
+                if (contentIssue === ScraperErrorCode.AGE_RESTRICTED) return createError(ScraperErrorCode.AGE_RESTRICTED, 'Konten 18+. Admin cookie pool tidak tersedia.');
+                if (contentIssue === ScraperErrorCode.PRIVATE_CONTENT) return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Konten ini privat atau tidak tersedia.');
             }
 
             const hasUnavailableAttachment = html.includes('"UnavailableAttachment"') || html.includes('"unavailable_attachment_style"') || (html.includes("This content isn't available") && html.includes('attachment'));
@@ -467,9 +537,9 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             }
 
             if (formats.length === 0) {
-                if (contentIssue === ScraperErrorCode.AGE_RESTRICTED) return createError(ScraperErrorCode.AGE_RESTRICTED, 'Age-restricted content. Try with a different cookie.');
-                if (contentIssue === ScraperErrorCode.PRIVATE_CONTENT) return createError(ScraperErrorCode.PRIVATE_CONTENT, 'This content is private or has been removed.');
-                return createError(ScraperErrorCode.NO_MEDIA, 'No media found. Post may be text-only or private.');
+                if (contentIssue === ScraperErrorCode.AGE_RESTRICTED) return createError(ScraperErrorCode.AGE_RESTRICTED, 'Konten 18+. Coba dengan cookie lain.');
+                if (contentIssue === ScraperErrorCode.PRIVATE_CONTENT) return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Konten ini privat atau sudah dihapus.');
+                return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada media. Post mungkin hanya teks atau privat.');
             }
 
             const seen = new Set<string>();

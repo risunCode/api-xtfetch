@@ -9,7 +9,8 @@
  * 2. URL resolution (only if cache miss)
  * 3. Cache check with resolved URL
  * 4. Scrape (only if cache miss)
- * 5. Cache result
+ * 5. Fetch file sizes for formats
+ * 6. Cache result
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -18,6 +19,7 @@ import { prepareUrl, prepareUrlSync } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { platformDetect } from '@/lib/config';
+import { utilFetchFilesizes } from '@/lib/utils';
 import { 
     cacheGetQuick, 
     cacheGet, 
@@ -33,7 +35,7 @@ export async function POST(request: NextRequest) {
     const startTime = Date.now();
     try {
         const body = await request.json();
-        const { url } = body;
+        const { url, cookie: bodyCookie, skipCache } = body;
 
         // Validate required parameters
         if (!url) {
@@ -105,17 +107,37 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 5: Get cookie from admin pool for this platform
-        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        // Step 5: Get cookie from admin pool for this platform (body cookie overrides pool)
+        const poolCookie = bodyCookie || await cookiePoolGetRotating(urlResult.platform);
         
         // Step 6: Run scraper (cache miss)
         logger.cache(urlResult.platform, false);
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
             cookie: poolCookie || undefined,
-            skipCache: true // Scrapers no longer handle cache
+            skipCache: skipCache || true // Scrapers no longer handle cache
         });
 
-        // Step 7: Cache successful result
+        // Step 7: Fetch file sizes for formats (all platforms - YouTube already has estimated sizes)
+        if (result.success && result.data?.formats) {
+            try {
+                // Only fetch for formats that don't already have filesize
+                const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
+                if (formatsNeedingSize.length > 0) {
+                    const sizesResult = await utilFetchFilesizes(formatsNeedingSize, urlResult.platform);
+                    // Merge back sizes
+                    const sizeMap = new Map(sizesResult.map(f => [f.url, f.filesize]));
+                    result.data.formats = result.data.formats.map(f => ({
+                        ...f,
+                        filesize: f.filesize || sizeMap.get(f.url)
+                    }));
+                }
+            } catch (e) {
+                // Non-critical - continue without sizes
+                logger.warn(urlResult.platform, `Failed to fetch file sizes: ${e}`);
+            }
+        }
+
+        // Step 8: Cache successful result
         if (result.success && result.data) {
             const contentType = (result.data.type as ContentType) || 'unknown';
             await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);

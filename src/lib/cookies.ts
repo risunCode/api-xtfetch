@@ -419,62 +419,98 @@ export function cookieGetFormat(input: unknown): 'json' | 'string' | 'array' | '
  */
 export async function cookiePoolGetRotating(platform: string): Promise<string | null> {
     const db = getSupabase();
-    if (!db) return null;
+    if (!db) {
+        logger.warn('cookies', `No database configured for cookie pool`);
+        return null;
+    }
 
     try {
         try { await db.rpc('reset_expired_cooldowns'); } catch { /* ignore */ }
 
+        // First try: healthy cookies
         const { data, error } = await db
             .from('admin_cookie_pool')
             .select('*')
             .eq('platform', platform)
             .eq('enabled', true)
-            .in('status', ['healthy'])
+            .eq('status', 'healthy')
             .or('cooldown_until.is.null,cooldown_until.lt.now()')
             .order('last_used_at', { ascending: true, nullsFirst: true })
             .order('use_count', { ascending: true })
             .limit(1)
             .single();
 
-        if (error || !data) {
-            const { data: fallback } = await db
-                .from('admin_cookie_pool')
-                .select('*')
-                .eq('platform', platform)
-                .eq('enabled', true)
-                .eq('status', 'cooldown')
-                .lt('cooldown_until', new Date().toISOString())
-                .order('cooldown_until', { ascending: true })
-                .limit(1)
-                .single();
-            
-            if (!fallback) return null;
-            
+        if (data) {
+            logger.debug('cookies', `[${platform}] Found healthy cookie: ${data.id.substring(0, 8)}...`);
             await db
                 .from('admin_cookie_pool')
-                .update({ status: 'healthy', cooldown_until: null })
-                .eq('id', fallback.id);
-            
-            lastUsedCookieId = fallback.id;
-            const decrypted = decryptCookie(fallback.cookie);
-            // Parse JSON cookie format to string if needed
+                .update({
+                    last_used_at: new Date().toISOString(),
+                    use_count: data.use_count + 1
+                })
+                .eq('id', data.id);
+
+            lastUsedCookieId = data.id;
+            const decrypted = decryptCookie(data.cookie);
             return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
         }
 
-        await db
+        // Second try: cooldown cookies that have expired
+        logger.debug('cookies', `[${platform}] No healthy cookie found (error: ${error?.message || 'none'}), trying cooldown...`);
+        const { data: cooldownData } = await db
             .from('admin_cookie_pool')
-            .update({
-                last_used_at: new Date().toISOString(),
-                use_count: data.use_count + 1
-            })
-            .eq('id', data.id);
+            .select('*')
+            .eq('platform', platform)
+            .eq('enabled', true)
+            .eq('status', 'cooldown')
+            .lt('cooldown_until', new Date().toISOString())
+            .order('cooldown_until', { ascending: true })
+            .limit(1)
+            .single();
+        
+        if (cooldownData) {
+            logger.debug('cookies', `[${platform}] Found expired cooldown cookie: ${cooldownData.id.substring(0, 8)}...`);
+            await db
+                .from('admin_cookie_pool')
+                .update({ status: 'healthy', cooldown_until: null })
+                .eq('id', cooldownData.id);
+            
+            lastUsedCookieId = cooldownData.id;
+            const decrypted = decryptCookie(cooldownData.cookie);
+            return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+        }
 
-        lastUsedCookieId = data.id;
-        const decrypted = decryptCookie(data.cookie);
-        // Parse JSON cookie format to string if needed
-        return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+        // Third try: ANY enabled cookie regardless of status (last resort)
+        logger.debug('cookies', `[${platform}] No cooldown cookie found, trying any enabled cookie...`);
+        const { data: anyData } = await db
+            .from('admin_cookie_pool')
+            .select('*')
+            .eq('platform', platform)
+            .eq('enabled', true)
+            .order('last_used_at', { ascending: true, nullsFirst: true })
+            .limit(1)
+            .single();
+        
+        if (anyData) {
+            logger.debug('cookies', `[${platform}] Found fallback cookie (status: ${anyData.status}): ${anyData.id.substring(0, 8)}...`);
+            await db
+                .from('admin_cookie_pool')
+                .update({
+                    last_used_at: new Date().toISOString(),
+                    use_count: anyData.use_count + 1,
+                    status: 'healthy' // Reset status since we're using it
+                })
+                .eq('id', anyData.id);
+
+            lastUsedCookieId = anyData.id;
+            const decrypted = decryptCookie(anyData.cookie);
+            return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+        }
+
+        logger.warn('cookies', `[${platform}] No cookies found in pool!`);
+        return null;
     } catch (e) {
-        console.error('[CookiePool] cookiePoolGetRotating error:', e);
+        logger.error('cookies', `[${platform}] cookiePoolGetRotating error: ${e}`);
         return null;
     }
 }

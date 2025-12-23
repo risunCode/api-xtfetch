@@ -273,6 +273,7 @@ export async function GET(req: NextRequest) {
                     height: f.height,
                     needsMerge: f.needsMerge || false,
                     filesize: f.filesize,
+                    filesizeEstimated: f.filesizeEstimated || false,
                     downloadUrl: `${API_BASE_URL}/api/v1/youtube?url=${encodeURIComponent(url)}&quality=${f.quality}`
                 }));
 
@@ -282,6 +283,7 @@ export async function GET(req: NextRequest) {
                     quality: f.quality,
                     format: f.format,
                     filesize: f.filesize,
+                    filesizeEstimated: f.filesizeEstimated || false,
                     downloadUrl: `${API_BASE_URL}/api/v1/youtube?url=${encodeURIComponent(url)}&quality=audio`
                 }));
 

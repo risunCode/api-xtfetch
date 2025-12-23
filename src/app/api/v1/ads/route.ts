@@ -1,7 +1,8 @@
 /**
  * Public Ads API - Get active ads for display
  * GET /api/v1/ads - Returns active ads within date range
- * POST /api/v1/ads/click - Track ad click
+ * GET /api/v1/ads?placement=compact - Returns compact ads (different table)
+ * POST /api/v1/ads - Track ad click
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -17,9 +18,31 @@ export async function GET(request: NextRequest) {
 
     const limit = parseInt(request.nextUrl.searchParams.get('limit') || '3');
     const page = request.nextUrl.searchParams.get('page') || 'home';
+    const placement = request.nextUrl.searchParams.get('placement');
     const now = new Date().toISOString();
 
-    // Fetch active ads within date range, filtered by page
+    // Compact ads - separate table (simple GIF banners)
+    if (placement === 'compact') {
+        const { data, error } = await db
+            .from('compact_ads')
+            .select('id, gif_url, link_url')
+            .eq('is_active', true)
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            console.error('[Ads API] Compact error:', error);
+            return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+        }
+
+        return NextResponse.json({ 
+            success: true, 
+            data,
+            meta: { count: data?.length || 0, placement: 'compact' }
+        });
+    }
+
+    // Regular ads
     const { data, error } = await db
         .from('ads')
         .select('id, title, description, image_url, link_url, link_text, platform, badge_text, badge_color, dismissable, pages')
@@ -39,9 +62,7 @@ export async function GET(request: NextRequest) {
     if (data && data.length > 0) {
         const ids = data.map(ad => ad.id);
         (async () => {
-            try {
-                await db.rpc('increment_ad_impressions', { ad_ids: ids });
-            } catch {}
+            try { await db.rpc('increment_ad_impressions', { ad_ids: ids }); } catch {}
         })();
     }
 
@@ -64,21 +85,27 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json();
-        const { id } = body;
+        const { id, placement } = body;
 
         if (!id) {
             return NextResponse.json({ success: false, error: 'Ad id is required' }, { status: 400 });
         }
 
-        // Increment click count
+        // Compact ads click tracking
+        if (placement === 'compact') {
+            try {
+                await db.rpc('increment_compact_ad_clicks', { ad_id: id });
+            } catch {
+                await db.from('compact_ads').update({ click_count: 1 }).eq('id', id);
+            }
+            return NextResponse.json({ success: true });
+        }
+
+        // Regular ads click tracking
         const { error } = await db.rpc('increment_ad_clicks', { ad_id: id });
 
         if (error) {
-            // Fallback: direct update if RPC doesn't exist
-            await db
-                .from('ads')
-                .update({ click_count: 1 }) // Will be handled by trigger or manual increment
-                .eq('id', id);
+            await db.from('ads').update({ click_count: 1 }).eq('id', id);
         }
 
         return NextResponse.json({ success: true });

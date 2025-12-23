@@ -16,6 +16,8 @@ import { prepareUrl, prepareUrlSync } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
 import { authVerifyApiKey } from '@/lib/auth';
 import { platformDetect } from '@/lib/config';
+import { cookiePoolGetRotating } from '@/lib/cookies';
+import { utilFetchFilesizes } from '@/lib/utils';
 import { 
     cacheGetQuick, 
     cacheGet, 
@@ -139,13 +141,34 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        // Step 5: Run scraper (cache miss)
+        // Step 5: Get cookie from admin pool for this platform
+        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        
+        // Step 6: Run scraper (cache miss)
         logger.cache(urlResult.platform, false);
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+            cookie: poolCookie || undefined,
             skipCache: true // Scrapers no longer handle cache
         });
 
-        // Step 6: Cache successful result
+        // Step 7: Fetch file sizes for formats
+        if (result.success && result.data?.formats) {
+            try {
+                const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
+                if (formatsNeedingSize.length > 0) {
+                    const sizesResult = await utilFetchFilesizes(formatsNeedingSize, urlResult.platform);
+                    const sizeMap = new Map(sizesResult.map(f => [f.url, f.filesize]));
+                    result.data.formats = result.data.formats.map(f => ({
+                        ...f,
+                        filesize: f.filesize || sizeMap.get(f.url)
+                    }));
+                }
+            } catch (e) {
+                logger.warn(urlResult.platform, `Failed to fetch file sizes: ${e}`);
+            }
+        }
+
+        // Step 8: Cache successful result
         if (result.success && result.data) {
             const contentType = (result.data.type as ContentType) || 'unknown';
             await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);

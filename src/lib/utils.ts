@@ -601,12 +601,12 @@ export function utilExtractMeta(html: string, $?: ReturnType<typeof import('chee
  * @param quality - Quality label
  * @param type - Media type (video, image, audio)
  * @param url - Media URL
- * @param opts - Optional properties (itemId, thumbnail, filename)
+ * @param opts - Optional properties (itemId, thumbnail, filename, filesize)
  * @returns MediaFormat object
  */
 export function utilCreateFormat(
     quality: string, type: 'video' | 'image' | 'audio', url: string,
-    opts?: { itemId?: string; thumbnail?: string; filename?: string }
+    opts?: { itemId?: string; thumbnail?: string; filename?: string; filesize?: number }
 ): MediaFormat {
     return {
         quality, type, url,
@@ -621,15 +621,80 @@ export function utilCreateFormat(
  * @param quality - Quality label
  * @param type - Media type
  * @param url - Media URL
- * @param opts - Optional properties
+ * @param opts - Optional properties (itemId, thumbnail, filename, filesize)
  */
 export function utilAddFormat(
     formats: MediaFormat[], quality: string, type: 'video' | 'image' | 'audio', url: string,
-    opts?: { itemId?: string; thumbnail?: string; filename?: string }
+    opts?: { itemId?: string; thumbnail?: string; filename?: string; filesize?: number }
 ) {
     if (url && !formats.find(f => f.url === url)) {
         formats.push(utilCreateFormat(quality, type, url, opts));
     }
+}
+
+/**
+ * Fetch file size for a media URL via HEAD request
+ * @param url - Media URL
+ * @param platform - Platform identifier for proper headers
+ * @param timeout - Request timeout in ms (default: 5000)
+ * @returns File size in bytes, or undefined if unavailable
+ */
+export async function utilFetchFilesize(url: string, platform: PlatformId, timeout = 5000): Promise<number | undefined> {
+    try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), timeout);
+        const ua = httpGetUserAgent(platform);
+        const referer = platformGetReferer(platform);
+        
+        const res = await fetch(url, {
+            method: 'HEAD',
+            signal: ctrl.signal,
+            headers: { 
+                'User-Agent': ua, 
+                'Referer': referer,
+                'Accept': '*/*',
+            },
+        });
+        clearTimeout(tid);
+        
+        if (!res.ok) return undefined;
+        
+        const contentLength = res.headers.get('content-length');
+        if (contentLength) {
+            const size = parseInt(contentLength, 10);
+            return size > 0 ? size : undefined;
+        }
+        return undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Batch fetch file sizes for multiple formats
+ * @param formats - Array of media formats
+ * @param platform - Platform identifier
+ * @returns Formats array with filesize populated where available
+ */
+export async function utilFetchFilesizes(formats: MediaFormat[], platform: PlatformId): Promise<MediaFormat[]> {
+    // Fetch sizes in parallel with concurrency limit
+    const BATCH_SIZE = 5;
+    const results = [...formats];
+    
+    for (let i = 0; i < results.length; i += BATCH_SIZE) {
+        const batch = results.slice(i, i + BATCH_SIZE);
+        const sizes = await Promise.all(
+            batch.map(f => utilFetchFilesize(f.url, platform))
+        );
+        
+        sizes.forEach((size, idx) => {
+            if (size) {
+                results[i + idx] = { ...results[i + idx], filesize: size };
+            }
+        });
+    }
+    
+    return results;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

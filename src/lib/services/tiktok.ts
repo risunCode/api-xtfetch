@@ -53,15 +53,18 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
                 utilAddFormat(formats, `Image ${i + 1}`, 'image', img, { itemId: `img-${i}`, thumbnail: img });
             });
         } else {
-            const [hdSize, sdSize] = [d.hd_size || d.size || 0, d.wm_size || 0];
+            const hdSize = d.hd_size || d.size || 0;
+            const sdSize = d.wm_size || d.size || 0;
             if (d.hdplay && d.play && d.hdplay !== d.play) {
-                const [hdUrl, sdUrl] = hdSize >= sdSize ? [d.hdplay, d.play] : [d.play, d.hdplay];
-                utilAddFormat(formats, 'HD (No Watermark)', 'video', hdUrl, { itemId: 'video-hd' });
-                utilAddFormat(formats, 'SD (No Watermark)', 'video', sdUrl, { itemId: 'video-sd' });
+                const [hdUrl, sdUrl, hdFilesize, sdFilesize] = hdSize >= sdSize 
+                    ? [d.hdplay, d.play, hdSize, sdSize] 
+                    : [d.play, d.hdplay, sdSize, hdSize];
+                utilAddFormat(formats, 'HD (No Watermark)', 'video', hdUrl, { itemId: 'video-hd', filesize: hdFilesize || undefined });
+                utilAddFormat(formats, 'SD (No Watermark)', 'video', sdUrl, { itemId: 'video-sd', filesize: sdFilesize || undefined });
             } else if (d.hdplay) {
-                utilAddFormat(formats, 'HD (No Watermark)', 'video', d.hdplay, { itemId: 'video-hd' });
+                utilAddFormat(formats, 'HD (No Watermark)', 'video', d.hdplay, { itemId: 'video-hd', filesize: hdSize || undefined });
             } else if (d.play) {
-                utilAddFormat(formats, 'Video (No Watermark)', 'video', d.play, { itemId: 'video-main' });
+                utilAddFormat(formats, 'Video (No Watermark)', 'video', d.play, { itemId: 'video-main', filesize: d.size || undefined });
             }
         }
 

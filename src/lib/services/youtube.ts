@@ -28,6 +28,45 @@ interface YtdlpFormat {
     abr: number | null;
 }
 
+// Typical bitrates for YouTube video streams (in kbps)
+// Based on actual YouTube encoding (AV1/VP9 - very efficient codecs)
+// These are CONSERVATIVE estimates - actual files are often smaller
+// AV1 is ~30-50% more efficient than VP9, VP9 is ~30% more efficient than H.264
+const VIDEO_BITRATES: Record<number, number> = {
+    2160: 8000,   // 4K: ~8 Mbps (AV1 actual: 5-12 Mbps)
+    1440: 4000,   // 2K: ~4 Mbps (AV1 actual: 3-6 Mbps)
+    1080: 2000,   // FHD: ~2 Mbps (AV1 actual: 1.5-3 Mbps)
+    720: 1200,    // HD: ~1.2 Mbps (AV1 actual: 0.8-1.5 Mbps)
+    480: 600,     // SD: ~600 kbps (AV1 actual: 300-800 kbps)
+    360: 350,     // Low: ~350 kbps (AV1 actual: 200-500 kbps)
+    240: 200,     // Very low: ~200 kbps
+    144: 100,     // Potato: ~100 kbps
+};
+
+const AUDIO_BITRATE = 128; // kbps for audio track
+
+/**
+ * Estimate filesize based on resolution and duration
+ * Formula: (video_bitrate + audio_bitrate) * duration / 8
+ * Returns bytes
+ */
+function estimateFilesize(height: number, duration: number, includeAudio: boolean = true): number {
+    // Find closest bitrate
+    const heights = Object.keys(VIDEO_BITRATES).map(Number).sort((a, b) => b - a);
+    let videoBitrate = VIDEO_BITRATES[360]; // default
+    
+    for (const h of heights) {
+        if (height >= h) {
+            videoBitrate = VIDEO_BITRATES[h];
+            break;
+        }
+    }
+    
+    const totalBitrate = videoBitrate + (includeAudio ? AUDIO_BITRATE : 0);
+    // bitrate (kbps) * duration (seconds) / 8 = bytes / 1000
+    return Math.round((totalBitrate * duration * 1000) / 8);
+}
+
 interface YtdlpResult {
     success: boolean;
     error?: string;
@@ -122,11 +161,14 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             type: 'video' | 'audio';
             format: string;
             filesize?: number;
+            filesizeEstimated?: boolean;
             width?: number;
             height?: number;
             needsMerge?: boolean;
             audioUrl?: string;
         }> = [];
+        
+        const duration = data.duration || 0;
         
         // Track seen qualities to avoid duplicates
         const seenQualities = new Set<string>();
@@ -137,12 +179,19 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             if (seenQualities.has(qualityKey)) continue;
             seenQualities.add(qualityKey);
             
+            // Use actual filesize or estimate
+            const hasActualSize = f.filesize && f.filesize > 0;
+            const filesize = hasActualSize 
+                ? f.filesize! 
+                : (f.height && duration ? estimateFilesize(f.height, duration, true) : undefined);
+            
             finalFormats.push({
                 url: f.url,
                 quality: f.quality || `${f.height}p`,
                 type: 'video',
                 format: f.ext,
-                filesize: f.filesize || undefined,
+                filesize,
+                filesizeEstimated: !hasActualSize && !!filesize,
                 width: f.width || undefined,
                 height: f.height || undefined,
             });
@@ -180,12 +229,16 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 if (seenQualities.has(qualityKey)) continue;
                 seenQualities.add(qualityKey);
                 
+                // Always estimate filesize - yt-dlp filesize for video-only streams is unreliable
+                const filesize = f.height && duration ? estimateFilesize(f.height, duration, true) : undefined;
+                
                 finalFormats.push({
                     url: f.url,
                     quality: `${f.height}p`,
                     type: 'video',
                     format: 'mp4', // Always output as mp4 after merge
-                    filesize: f.filesize || undefined,
+                    filesize,
+                    filesizeEstimated: !!filesize,
                     width: f.width || undefined,
                     height: f.height || undefined,
                     needsMerge: true,
@@ -196,18 +249,25 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         
         // 3. Add best audio format for audio-only download
         if (bestAudio) {
+            // Estimate audio size: bitrate * duration / 8
+            const hasActualSize = bestAudio.filesize && bestAudio.filesize > 0;
+            const audioBitrate = bestAudio.abr || 128;
+            const audioFilesize = hasActualSize 
+                ? bestAudio.filesize! 
+                : (duration ? Math.round((audioBitrate * duration * 1000) / 8) : undefined);
+            
             finalFormats.push({
                 url: bestAudio.url,
-                quality: bestAudio.quality || `${Math.round(bestAudio.abr || 128)}kbps`,
+                quality: bestAudio.quality || `${Math.round(audioBitrate)}kbps`,
                 type: 'audio',
                 format: bestAudio.ext,
-                filesize: bestAudio.filesize || undefined,
+                filesize: audioFilesize,
+                filesizeEstimated: !hasActualSize && !!audioFilesize,
             });
         }
         
-        // Deduplicate by height - prefer combined (has audio) over needsMerge for low res
-        // For HD (480p+), prefer needsMerge (better quality video-only streams)
-        // For SD (360p and below), prefer combined (already has audio, no merge needed)
+        // Deduplicate by height - ALWAYS prefer needsMerge (has filesize from yt-dlp)
+        // Combined formats rarely have filesize, needsMerge formats always do
         const heightMap = new Map<number, typeof finalFormats[0]>();
         for (const f of finalFormats) {
             if (f.type !== 'video' || !f.height) continue;
@@ -215,17 +275,13 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             if (!existing) {
                 heightMap.set(f.height, f);
             } else {
-                // For 480p and above: prefer needsMerge (better quality)
-                // For 360p and below: prefer combined (already has audio)
-                if (f.height >= 480) {
-                    if (f.needsMerge && !existing.needsMerge) {
-                        heightMap.set(f.height, f);
-                    }
-                } else {
-                    // For low res, prefer combined (no merge needed)
-                    if (!f.needsMerge && existing.needsMerge) {
-                        heightMap.set(f.height, f);
-                    }
+                // Always prefer format with filesize
+                if (f.filesize && !existing.filesize) {
+                    heightMap.set(f.height, f);
+                }
+                // If both have filesize or both don't, prefer needsMerge (better quality)
+                else if ((!!f.filesize === !!existing.filesize) && f.needsMerge && !existing.needsMerge) {
+                    heightMap.set(f.height, f);
                 }
             }
         }

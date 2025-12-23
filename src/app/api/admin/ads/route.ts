@@ -1,6 +1,7 @@
 /**
  * Admin Ads API - CRUD for advertisement banners
  * GET - List all ads (including inactive)
+ * GET ?type=compact - List compact ads
  * POST - Create new ad
  * PUT - Update ad
  * DELETE - Delete ad
@@ -23,8 +24,11 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'DB not configured' }, { status: 500 });
     }
 
+    const type = request.nextUrl.searchParams.get('type');
+    const table = type === 'compact' ? 'compact_ads' : 'ads';
+
     const { data, error } = await db
-        .from('ads')
+        .from(table)
         .select('*')
         .order('priority', { ascending: false })
         .order('created_at', { ascending: false });
@@ -49,7 +53,27 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json();
-        const { title, description, image_url, link_url, link_text, platform, badge_text, badge_color, is_active, priority, start_date, end_date } = body;
+        const { type } = body;
+
+        // Compact ads - simple GIF + link
+        if (type === 'compact') {
+            const { gif_url, link_url, is_active } = body;
+            if (!gif_url || !link_url) {
+                return NextResponse.json({ success: false, error: 'gif_url and link_url are required' }, { status: 400 });
+            }
+
+            const { data, error } = await db
+                .from('compact_ads')
+                .insert({ gif_url, link_url, is_active: is_active !== false })
+                .select()
+                .single();
+
+            if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+            return NextResponse.json({ success: true, data });
+        }
+
+        // Regular ads
+        const { title, description, image_url, link_url, link_text, platform, badge_text, badge_color, is_active, priority, start_date, end_date, pages, dismissable } = body;
 
         if (!title || !image_url || !link_url) {
             return NextResponse.json({ success: false, error: 'title, image_url, and link_url are required' }, { status: 400 });
@@ -70,16 +94,15 @@ export async function POST(request: NextRequest) {
                 priority: priority || 0,
                 start_date: start_date || null,
                 end_date: end_date || null,
+                pages: pages || ['home'],
+                dismissable: dismissable !== false,
             })
             .select()
             .single();
 
-        if (error) {
-            return NextResponse.json({ success: false, error: error.message }, { status: 500 });
-        }
-
+        if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
         return NextResponse.json({ success: true, data });
-    } catch (err) {
+    } catch {
         return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 });
     }
 }
@@ -97,17 +120,17 @@ export async function PUT(request: NextRequest) {
 
     try {
         const body = await request.json();
-        const { id, ...updates } = body;
+        const { id, type, ...updates } = body;
+        const table = type === 'compact' ? 'compact_ads' : 'ads';
 
         if (!id) {
             return NextResponse.json({ success: false, error: 'id is required' }, { status: 400 });
         }
 
-        // Add updated_at
         updates.updated_at = new Date().toISOString();
 
         const { data, error } = await db
-            .from('ads')
+            .from(table)
             .update(updates)
             .eq('id', id)
             .select()
@@ -118,7 +141,7 @@ export async function PUT(request: NextRequest) {
         }
 
         return NextResponse.json({ success: true, data });
-    } catch (err) {
+    } catch {
         return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 });
     }
 }
@@ -135,12 +158,15 @@ export async function DELETE(request: NextRequest) {
     }
 
     const id = request.nextUrl.searchParams.get('id');
+    const type = request.nextUrl.searchParams.get('type');
+    const table = type === 'compact' ? 'compact_ads' : 'ads';
+
     if (!id) {
         return NextResponse.json({ success: false, error: 'id is required' }, { status: 400 });
     }
 
     const { error } = await db
-        .from('ads')
+        .from(table)
         .delete()
         .eq('id', id);
 

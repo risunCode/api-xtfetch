@@ -9,6 +9,8 @@ import { runScraper } from '@/core/scrapers';
 import { prepareUrl } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
 import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/lib/config';
+import { cookiePoolGetRotating } from '@/lib/cookies';
+import { utilFetchFilesizes } from '@/lib/utils';
 
 // GET method for browser testing
 export async function GET(request: NextRequest) {
@@ -48,8 +50,30 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Run scraper
-        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {});
+        // Get cookie from admin pool for this platform
+        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        
+        // Run scraper with cookie
+        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+            cookie: poolCookie || undefined
+        });
+
+        // Fetch file sizes for formats
+        if (result.success && result.data?.formats) {
+            try {
+                const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
+                if (formatsNeedingSize.length > 0) {
+                    const sizesResult = await utilFetchFilesizes(formatsNeedingSize, urlResult.platform);
+                    const sizeMap = new Map(sizesResult.map(f => [f.url, f.filesize]));
+                    result.data.formats = result.data.formats.map(f => ({
+                        ...f,
+                        filesize: f.filesize || sizeMap.get(f.url)
+                    }));
+                }
+            } catch (e) {
+                logger.warn(urlResult.platform, `Failed to fetch file sizes: ${e}`);
+            }
+        }
 
         // Log successful download
         if (result.success) {
@@ -119,8 +143,30 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Run scraper
-        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {});
+        // Get cookie from admin pool for this platform
+        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        
+        // Run scraper with cookie
+        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+            cookie: poolCookie || undefined
+        });
+
+        // Fetch file sizes for formats
+        if (result.success && result.data?.formats) {
+            try {
+                const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
+                if (formatsNeedingSize.length > 0) {
+                    const sizesResult = await utilFetchFilesizes(formatsNeedingSize, urlResult.platform);
+                    const sizeMap = new Map(sizesResult.map(f => [f.url, f.filesize]));
+                    result.data.formats = result.data.formats.map(f => ({
+                        ...f,
+                        filesize: f.filesize || sizeMap.get(f.url)
+                    }));
+                }
+            } catch (e) {
+                logger.warn(urlResult.platform, `Failed to fetch file sizes: ${e}`);
+            }
+        }
 
         // Log successful download
         if (result.success) {
