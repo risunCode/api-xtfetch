@@ -1,20 +1,39 @@
 /**
  * Premium API v1 - Main Download Endpoint
  * GET /api/v1?key={API_KEY}&url={URL}
+ * 
+ * Cache Flow:
+ * 1. Quick cache check (content ID based, no HTTP)
+ * 2. URL resolution (only if cache miss)
+ * 3. Cache check with resolved URL
+ * 4. Scrape (only if cache miss)
+ * 5. Cache result
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
-import { prepareUrl } from '@/lib/url';
+import { prepareUrl, prepareUrlSync } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
+import { authVerifyApiKey } from '@/lib/auth';
+import { platformDetect } from '@/lib/config';
+import { 
+    cacheGetQuick, 
+    cacheGet, 
+    cacheSet, 
+    cacheSetAlias,
+    cacheExtractContentId,
+    cacheIsShortUrl,
+    type ContentType
+} from '@/lib/cache';
+import type { ScraperResult } from '@/core/scrapers/types';
 
-// Simple API key validation (will be replaced with Supabase)
+// API key validation using Supabase
 async function validateApiKey(apiKey: string) {
-    // TODO: Implement proper API key validation with Supabase
-    // For now, accept any key starting with 'xtf_'
+    const result = await authVerifyApiKey(apiKey);
     return {
-        valid: apiKey.startsWith('xtf_'),
-        rateLimit: 100
+        valid: result.valid,
+        rateLimit: result.rateLimit || 100,
+        error: result.error
     };
 }
 
@@ -44,12 +63,45 @@ export async function GET(request: NextRequest) {
         const keyValidation = await validateApiKey(apiKey);
         if (!keyValidation.valid) {
             return NextResponse.json(
-                { success: false, error: 'Invalid or expired API key' },
+                { 
+                    success: false, 
+                    error: keyValidation.error || 'Invalid or expired API key',
+                    meta: {
+                        tier: 'premium',
+                        endpoint: '/api/v1'
+                    }
+                },
                 { status: 401 }
             );
         }
 
-        // Prepare URL and detect platform
+        // Step 1: Quick platform detection (no HTTP)
+        const quickParse = prepareUrlSync(url);
+        const detectedPlatform = quickParse.platform || platformDetect(url);
+        
+        // Step 2: Quick cache check BEFORE URL resolution (fastest path)
+        if (detectedPlatform) {
+            const quickCache = await cacheGetQuick<ScraperResult>(detectedPlatform, url);
+            if (quickCache.hit && quickCache.data?.success) {
+                logger.cache(detectedPlatform, true);
+                const responseTime = Date.now() - startTime;
+                return NextResponse.json({
+                    success: true,
+                    data: quickCache.data.data ? { ...quickCache.data.data, responseTime } : quickCache.data.data,
+                    cached: true,
+                    cacheSource: quickCache.source,
+                    meta: {
+                        tier: 'premium',
+                        platform: detectedPlatform,
+                        apiKey: apiKey.substring(0, 8) + '...',
+                        rateLimit: keyValidation.rateLimit,
+                        endpoint: '/api/v1'
+                    }
+                });
+            }
+        }
+
+        // Step 3: URL resolution (only if cache miss)
         const urlResult = await prepareUrl(url);
         if (!urlResult.assessment.isValid || !urlResult.platform) {
             return NextResponse.json(
@@ -58,10 +110,54 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Run scraper
-        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {});
+        // Step 4: Check cache with resolved URL (if URL was resolved)
+        if (urlResult.wasResolved) {
+            const resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);
+            if (resolvedCache.hit && resolvedCache.data?.success) {
+                logger.cache(urlResult.platform, true);
+                
+                // Backfill alias for short URL → content ID mapping
+                const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
+                if (contentId && cacheIsShortUrl(url)) {
+                    await cacheSetAlias(url, urlResult.platform, contentId);
+                }
+                
+                const responseTime = Date.now() - startTime;
+                return NextResponse.json({
+                    success: true,
+                    data: resolvedCache.data.data ? { ...resolvedCache.data.data, responseTime } : resolvedCache.data.data,
+                    cached: true,
+                    cacheSource: resolvedCache.source,
+                    meta: {
+                        tier: 'premium',
+                        platform: urlResult.platform,
+                        apiKey: apiKey.substring(0, 8) + '...',
+                        rateLimit: keyValidation.rateLimit,
+                        endpoint: '/api/v1'
+                    }
+                });
+            }
+        }
 
-        // Log successful download
+        // Step 5: Run scraper (cache miss)
+        logger.cache(urlResult.platform, false);
+        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+            skipCache: true // Scrapers no longer handle cache
+        });
+
+        // Step 6: Cache successful result
+        if (result.success && result.data) {
+            const contentType = (result.data.type as ContentType) || 'unknown';
+            await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);
+            
+            // Set alias for short URLs
+            const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
+            if (contentId && cacheIsShortUrl(url)) {
+                await cacheSetAlias(url, urlResult.platform, contentId);
+            }
+        }
+
+        // Log result
         if (result.success) {
             logger.complete(urlResult.platform, Date.now() - startTime);
         } else {

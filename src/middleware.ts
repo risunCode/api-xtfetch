@@ -80,7 +80,6 @@ const RATE_LIMITS = {
         '/api': { requests: 60, window: 60000 }, // Legacy endpoint
         '/api/playground': { requests: 5, window: 120000 },
         '/api/proxy': { requests: 30, window: 60000 },
-        '/api/status': { requests: 30, window: 60000 },
     }
 };
 

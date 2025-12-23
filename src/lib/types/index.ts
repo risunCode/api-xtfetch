@@ -1,11 +1,11 @@
 // Platform types
-export type Platform = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
+export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
 
 /**
  * Unified Engagement Stats
  * Normalized across all platforms for consistent display
  */
-export interface UnifiedEngagement {
+export interface EngagementStats {
     views?: number;       // View/play count
     likes?: number;       // Like/favorite/heart count
     comments?: number;    // Comment count
@@ -29,12 +29,15 @@ export interface MediaFormat {
     thumbnail?: string; // Specific thumbnail for this item
     width?: number;
     height?: number;
+    isHLS?: boolean; // Flag for HLS/m3u8 streams (YouTube)
+    needsMerge?: boolean; // YouTube: video-only format that needs audio merge
+    audioUrl?: string; // YouTube: best audio URL for merging
 }
 
 // Download response from API
 export interface DownloadResponse {
     success: boolean;
-    platform: Platform;
+    platform: PlatformId;
     data?: MediaData;
     error?: string;
     // Flattened structure support (used by some route handlers)
@@ -59,7 +62,7 @@ export interface MediaData {
     usedCookie?: boolean; // Whether cookie was used to fetch this media (indicates private/authenticated content)
     cached?: boolean; // Whether this response was served from cache
     responseTime?: number; // API response time in milliseconds
-    engagement?: UnifiedEngagement;
+    engagement?: EngagementStats;
 }
 
 // API request body
@@ -69,7 +72,7 @@ export interface DownloadRequest {
 
 // Platform configuration
 export interface PlatformConfig {
-    id: Platform;
+    id: PlatformId;
     name: string;
     icon: string;
     color: string;
@@ -156,7 +159,7 @@ export const PLATFORMS: PlatformConfig[] = [
 ];
 
 // Helper to detect platform from URL
-export function detectPlatform(url: string): Platform | null {
+export function detectPlatform(url: string): PlatformId | null {
     for (const platform of PLATFORMS) {
         for (const pattern of platform.patterns) {
             if (pattern.test(url)) {
@@ -168,7 +171,7 @@ export function detectPlatform(url: string): Platform | null {
 }
 
 // Helper to validate URL for platform
-export function validateUrl(url: string, platform: Platform): boolean {
+export function validateUrl(url: string, platform: PlatformId): boolean {
     const config = PLATFORMS.find(p => p.id === platform);
     if (!config) return false;
     return config.patterns.some(pattern => pattern.test(url));

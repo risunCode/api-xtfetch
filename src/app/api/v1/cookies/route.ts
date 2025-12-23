@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getAdminCookie, type CookiePlatform } from '@/lib/cookies';
+import { adminCookieGet, type CookiePlatform } from '@/lib/cookies';
 
 const PLATFORMS: CookiePlatform[] = ['facebook', 'instagram', 'twitter', 'weibo'];
 
@@ -15,7 +15,7 @@ export async function GET() {
         
         await Promise.all(
             PLATFORMS.map(async (platform) => {
-                const cookie = await getAdminCookie(platform);
+                const cookie = await adminCookieGet(platform);
                 status[platform] = {
                     available: !!cookie,
                     label: platform.charAt(0).toUpperCase() + platform.slice(1),

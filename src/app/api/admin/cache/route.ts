@@ -8,19 +8,25 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
-import { clearCache, getCacheStats } from '@/core/database';
-import { isRedisAvailable, redis, getResultCacheKey } from '@/lib/redis';
-import type { Platform } from '@/core/database';
+import { authVerifyAdminSession } from '@/core/security';
+import { isRedisAvailable, redis } from '@/lib/redis';
+import { 
+    cacheGetStats, 
+    cacheClear, 
+    cacheGenerateKey,
+    cacheExtractContentId,
+    cacheResetStats
+} from '@/lib/cache';
+import type { PlatformId } from '@/lib/config';
 
 // GET - Get cache statistics
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    const stats = await getCacheStats();
+    const stats = await cacheGetStats();
     return NextResponse.json({ 
         success: true, 
         data: {
@@ -33,7 +39,7 @@ export async function GET(request: NextRequest) {
 
 // POST - Clear cache by platform or specific URL
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -44,12 +50,22 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json();
-        const { platform, url } = body as { platform?: Platform; url?: string };
+        const { platform, url, resetStats } = body as { platform?: PlatformId; url?: string; resetStats?: boolean };
+
+        // Reset stats only
+        if (resetStats) {
+            await cacheResetStats();
+            return NextResponse.json({
+                success: true,
+                message: 'Cache statistics reset'
+            });
+        }
 
         // Clear specific URL cache
         if (url && platform) {
-            const cacheKey = getResultCacheKey(platform, url);
-            if (cacheKey) {
+            const contentId = cacheExtractContentId(platform, url);
+            if (contentId) {
+                const cacheKey = cacheGenerateKey(platform, contentId);
                 await redis.del(cacheKey);
                 return NextResponse.json({
                     success: true,
@@ -63,7 +79,7 @@ export async function POST(request: NextRequest) {
 
         // Clear by platform
         if (platform) {
-            const cleared = await clearCache(platform);
+            const cleared = await cacheClear(platform);
             return NextResponse.json({
                 success: true,
                 message: `Cache cleared for ${platform}`,
@@ -80,7 +96,7 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Clear all cache
 export async function DELETE(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -92,7 +108,7 @@ export async function DELETE(request: NextRequest) {
         }, { status: 503 });
     }
 
-    const cleared = await clearCache();
+    const cleared = await cacheClear();
 
     return NextResponse.json({
         success: true,

@@ -8,6 +8,7 @@
  */
 
 import { supabase } from '@/core/database';
+import { logger } from '@/lib/services/helper/logger';
 
 // ═══════════════════════════════════════════════════════════════
 // TYPES
@@ -179,7 +180,7 @@ async function sendDiscordAlert(webhookUrl: string, embed: DiscordEmbed): Promis
         });
         return res.ok;
     } catch {
-        console.error('[AdminAlerts] Failed to send Discord alert');
+        logger.error('admin-alerts', 'Failed to send Discord alert');
         return false;
     }
 }

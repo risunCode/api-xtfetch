@@ -4,17 +4,17 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
-import { migrateUnencryptedCookies } from '@/lib/cookies';
+import { authVerifyAdminSession } from '@/core/security';
+import { cookiePoolMigrateUnencrypted } from '@/lib/cookies';
 
 export async function POST(req: NextRequest) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
     try {
-        const result = await migrateUnencryptedCookies();
+        const result = await cookiePoolMigrateUnencrypted();
         
         return NextResponse.json({ 
             success: true, 

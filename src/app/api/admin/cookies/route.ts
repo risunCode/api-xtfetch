@@ -4,19 +4,21 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 import { 
-    getAllAdminCookies, 
-    setAdminCookie, 
-    toggleAdminCookie, 
-    deleteAdminCookie 
-} from '@/lib/utils/admin-cookie';
-import { parseCookie, validateCookie, type CookiePlatform } from '@/lib/utils/cookie-parser';
+    adminCookieGetAll as getAllAdminCookies, 
+    adminCookieSet as setAdminCookie, 
+    adminCookieToggle as toggleAdminCookie, 
+    adminCookieDelete as deleteAdminCookie,
+    cookieParse, 
+    cookieValidate, 
+    type CookiePlatform 
+} from '@/lib/cookies';
 
 const VALID_PLATFORMS: CookiePlatform[] = ['facebook', 'instagram', 'weibo', 'twitter'];
 
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -48,12 +50,12 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Cookie is required' }, { status: 400 });
         }
         
-        const parsed = parseCookie(cookie, platform);
+        const parsed = cookieParse(cookie, platform);
         if (!parsed) {
             return NextResponse.json({ success: false, error: 'Invalid cookie format' }, { status: 400 });
         }
         
-        const validation = validateCookie(parsed, platform);
+        const validation = cookieValidate(parsed, platform);
         if (!validation.valid) {
             return NextResponse.json({ 
                 success: false, 
@@ -76,7 +78,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -106,7 +108,7 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }

@@ -8,15 +8,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
-import { loadConfigFromDB, getPlaygroundRateLimit } from '@/lib/services/helper/service-config';
+import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/lib/config';
 
 // GET method for browser testing
 export async function GET(request: NextRequest) {
     const startTime = Date.now();
     
     // Load config from DB (service_config table - synced with admin console)
-    await loadConfigFromDB();
-    const rateLimit = getPlaygroundRateLimit();
+    await serviceConfigLoad();
+    const rateLimit = serviceConfigGetPlaygroundRateLimit();
     
     try {
         const searchParams = request.nextUrl.searchParams;
@@ -95,8 +95,8 @@ export async function POST(request: NextRequest) {
     const startTime = Date.now();
     
     // Load config from DB (service_config table - synced with admin console)
-    await loadConfigFromDB();
-    const rateLimit = getPlaygroundRateLimit();
+    await serviceConfigLoad();
+    const rateLimit = serviceConfigGetPlaygroundRateLimit();
     
     try {
         const body = await request.json();

@@ -1,28 +1,25 @@
 /**
  * TikTok Scraper Service
  * Uses TikWM API
+ * 
+ * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
 import { MediaFormat } from '@/lib/types';
-import { addFormat } from '@/lib/http';
-import { httpGet, TIKTOK_HEADERS, type EngagementStats } from '@/lib/http';
-import { getCache, setCache } from './helper/cache';
+import { utilAddFormat } from '@/lib/utils';
+import { httpGet, TIKTOK_HEADERS } from '@/lib/http';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { matchesPlatform } from './helper/api-config';
+import { platformMatches, sysConfigScraperTimeout } from '@/lib/config';
 import { logger } from './helper/logger';
-import { getScraperTimeout } from './helper/system-config';
+
+type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
 
 export async function scrapeTikTok(url: string, options?: ScraperOptions): Promise<ScraperResult> {
-    const { hd = true, skipCache = false } = options || {};
-    const timeout = options?.timeout ?? getScraperTimeout('tiktok');
+    const { hd = true } = options || {};
+    const timeout = options?.timeout ?? sysConfigScraperTimeout('tiktok');
 
-    if (!matchesPlatform(url, 'tiktok')) {
+    if (!platformMatches(url, 'tiktok')) {
         return createError(ScraperErrorCode.INVALID_URL, 'Invalid TikTok URL');
-    }
-
-    if (!skipCache) {
-        const cached = await getCache<ScraperResult>('tiktok', url);
-        if (cached?.success) { logger.cache('tiktok', true); return { ...cached, cached: true }; }
     }
 
     try {
@@ -53,23 +50,23 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
 
         if (isSlideshow) {
             d.images.forEach((img: string, i: number) => {
-                addFormat(formats, `Image ${i + 1}`, 'image', img, { itemId: `img-${i}`, thumbnail: img });
+                utilAddFormat(formats, `Image ${i + 1}`, 'image', img, { itemId: `img-${i}`, thumbnail: img });
             });
         } else {
             const [hdSize, sdSize] = [d.hd_size || d.size || 0, d.wm_size || 0];
             if (d.hdplay && d.play && d.hdplay !== d.play) {
                 const [hdUrl, sdUrl] = hdSize >= sdSize ? [d.hdplay, d.play] : [d.play, d.hdplay];
-                addFormat(formats, 'HD (No Watermark)', 'video', hdUrl, { itemId: 'video-hd' });
-                addFormat(formats, 'SD (No Watermark)', 'video', sdUrl, { itemId: 'video-sd' });
+                utilAddFormat(formats, 'HD (No Watermark)', 'video', hdUrl, { itemId: 'video-hd' });
+                utilAddFormat(formats, 'SD (No Watermark)', 'video', sdUrl, { itemId: 'video-sd' });
             } else if (d.hdplay) {
-                addFormat(formats, 'HD (No Watermark)', 'video', d.hdplay, { itemId: 'video-hd' });
+                utilAddFormat(formats, 'HD (No Watermark)', 'video', d.hdplay, { itemId: 'video-hd' });
             } else if (d.play) {
-                addFormat(formats, 'Video (No Watermark)', 'video', d.play, { itemId: 'video-main' });
+                utilAddFormat(formats, 'Video (No Watermark)', 'video', d.play, { itemId: 'video-main' });
             }
         }
 
         if (d.music) {
-            addFormat(formats, 'Audio', 'audio', d.music, { itemId: 'audio' });
+            utilAddFormat(formats, 'Audio', 'audio', d.music, { itemId: 'audio' });
         }
 
         if (formats.length === 0) {
@@ -82,6 +79,7 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
                 title: d.title || 'TikTok Video',
                 author: d.author?.unique_id || '',
                 authorName: d.author?.nickname || '',
+                description: d.title || undefined, // TikTok caption is in title field
                 thumbnail: d.cover || d.origin_cover || '',
                 formats,
                 url,
@@ -96,7 +94,6 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
             audio: formats.filter(f => f.type === 'audio').length 
         });
 
-        setCache('tiktok', url, result);
         return result;
     } catch (e) {
         logger.error('tiktok', e);

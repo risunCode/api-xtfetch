@@ -1,19 +1,63 @@
 /**
  * AI Chat API (Public - Rate Limited)
- * POST: Send chat message to Gemini
+ * POST: Send chat message to Gemini or Magma API
  * GET: Get session history
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/redis';
 import { chat, getChatSession, type GeminiModel } from '@/lib/integrations/gemini';
-import { loadConfigFromDB, getGeminiRateLimit, getGeminiRateWindow } from '@/lib/services/helper/service-config';
+import { serviceConfigLoad, serviceConfigGetGeminiRateLimit, serviceConfigGetGeminiRateWindow } from '@/lib/config';
+import { logger } from '@/lib/services/helper/logger';
+
+// Magma API models (external)
+type MagmaModel = 'gpt5' | 'copilot-smart';
+type AIModel = GeminiModel | MagmaModel;
+
+const MAGMA_ENDPOINTS: Record<MagmaModel, string> = {
+    'gpt5': 'https://magma-api.biz.id/ai/gpt5',
+    'copilot-smart': 'https://magma-api.biz.id/ai/copilot-think',
+};
+
+async function chatWithMagma(model: MagmaModel, message: string): Promise<{ success: boolean; text?: string; model?: string; error?: string }> {
+    try {
+        const endpoint = MAGMA_ENDPOINTS[model];
+        const url = `${endpoint}?prompt=${encodeURIComponent(message)}`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Magma API error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (!data.status || !data.result?.response) {
+            throw new Error('Invalid response from Magma API');
+        }
+        
+        return {
+            success: true,
+            text: data.result.response,
+            model: model === 'gpt5' ? 'GPT-5' : 'Copilot Smart',
+        };
+    } catch (error) {
+        logger.error('chat', error);
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Magma API error',
+        };
+    }
+}
 
 export async function POST(request: NextRequest) {
     // Load config from DB
-    await loadConfigFromDB();
-    const RATE_LIMIT = getGeminiRateLimit();
-    const RATE_WINDOW = getGeminiRateWindow() * 60; // convert minutes to seconds
+    await serviceConfigLoad();
+    const RATE_LIMIT = serviceConfigGetGeminiRateLimit();
+    const RATE_WINDOW = serviceConfigGetGeminiRateWindow() * 60; // convert minutes to seconds
     
     // Rate limiting
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 
@@ -43,8 +87,19 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Message too long (max 4000 chars)' }, { status: 400 });
         }
         
-        // Validate model
-        const validModels: GeminiModel[] = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'];
+        // Check if using Magma API models
+        const magmaModels: MagmaModel[] = ['gpt5', 'copilot-smart'];
+        if (magmaModels.includes(model as MagmaModel)) {
+            // Magma API - text only, no session support
+            const result = await chatWithMagma(model as MagmaModel, message);
+            return NextResponse.json({
+                ...result,
+                rateLimit: { remaining, limit: RATE_LIMIT }
+            });
+        }
+        
+        // Gemini models
+        const validModels: GeminiModel[] = ['gemini-2.5-flash', 'gemini-flash-latest'];
         const selectedModel = validModels.includes(model) ? model : 'gemini-2.5-flash';
         
         // Validate image if provided
@@ -82,7 +137,7 @@ export async function POST(request: NextRequest) {
         });
         
     } catch (error) {
-        console.error('Chat API error:', error);
+        logger.error('chat', error);
         return NextResponse.json({
             success: false,
             error: error instanceof Error ? error.message : 'Internal error'

@@ -7,17 +7,17 @@ import { redis } from '@/lib/redis';
 
 // Security utilities
 export {
-    escapeHtml, sanitizeObject,
-    isValidSocialUrl, isValidCookie, sanitizeCookie,
-    encrypt, decrypt,
-    hashApiKey, generateSecureToken,
-    maskSensitiveData, maskCookie,
-    validateRequestBody, detectAttackPatterns,
-    getClientIP,
-} from '@/lib/utils/security';
+    securityEscapeHtml, securitySanitizeObject,
+    securityValidateSocialUrl, securityValidateCookie, securitySanitizeCookie,
+    securityEncrypt, securityDecrypt,
+    securityHashApiKey, securityGenerateToken,
+    securityMaskData, securityMaskCookie,
+    securityValidateRequestBody, securityDetectAttack,
+    securityGetClientIP,
+} from '@/lib/utils';
 
 // Admin auth
-export { verifySession, verifyAdminSession, verifyAdminToken } from '@/lib/utils/admin-auth';
+export { authVerifySession, authVerifyAdminSession, authVerifyAdminToken } from '@/lib/auth';
 
 // Rate limiting types & config
 export interface RateLimitConfig { maxRequests: number; windowMs: number; }

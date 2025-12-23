@@ -8,13 +8,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, supabaseAdmin } from '@/core/database';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 
 const db = supabaseAdmin || supabase;
 
 // GET - List all ads
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 
 // POST - Create new ad
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
 
 // PUT - Update ad
 export async function PUT(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -125,7 +125,7 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Delete ad
 export async function DELETE(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }

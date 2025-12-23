@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import webpush from 'web-push';
-import { verifyAdminToken } from '@/core/security';
+import { authVerifyAdminToken } from '@/core/security';
 
 // Configure web-push with VAPID keys
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const authResult = await verifyAdminToken(request);
+        const authResult = await authVerifyAdminToken(request);
         if (!authResult.valid) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
         }
@@ -134,7 +134,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const authResult = await verifyAdminToken(request);
+        const authResult = await authVerifyAdminToken(request);
         if (!authResult.valid) {
             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
         }

@@ -7,19 +7,19 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 import {
-    getCookiePoolStats,
-    getCookiesByPlatform,
-    addCookieToPool,
-    updatePooledCookie,
-    deleteCookieFromPool,
-    testCookieHealth,
+    cookiePoolGetStats,
+    cookiePoolGetByPlatform,
+    cookiePoolAdd,
+    cookiePoolUpdate,
+    cookiePoolDelete,
+    cookiePoolTestHealth,
     type CookiePoolStats
-} from '@/lib/utils/cookie-pool';
+} from '@/lib/cookies';
 
 export async function GET(req: NextRequest) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     try {
         if (stats === 'true') {
-            const poolStats = await getCookiePoolStats();
+            const poolStats = await cookiePoolGetStats();
             const platforms = ['facebook', 'instagram', 'twitter', 'weibo'];
             const result: CookiePoolStats[] = platforms.map(p => {
                 const existing = poolStats.find(s => s.platform === p);
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
         }
 
         if (platform) {
-            const cookies = await getCookiesByPlatform(platform);
+            const cookies = await cookiePoolGetByPlatform(platform);
             const masked = cookies.map(c => ({
                 ...c,
                 cookie: (c as { cookiePreview?: string }).cookiePreview || '[encrypted]',
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ success: false, error: 'Missing platform or cookie' }, { status: 400 });
         }
 
-        const result = await addCookieToPool(platform, cookie, { label, note, max_uses_per_hour });
+        const result = await cookiePoolAdd(platform, cookie, { label, note, max_uses_per_hour });
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: (e as Error).message }, { status: 500 });
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -94,11 +94,11 @@ export async function PATCH(req: NextRequest) {
         }
 
         if (action === 'test') {
-            const result = await testCookieHealth(id);
+            const result = await cookiePoolTestHealth(id);
             return NextResponse.json({ success: true, data: result });
         }
 
-        const result = await updatePooledCookie(id, updates);
+        const result = await cookiePoolUpdate(id, updates);
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: (e as Error).message }, { status: 500 });
@@ -106,7 +106,7 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -119,7 +119,7 @@ export async function DELETE(req: NextRequest) {
             return NextResponse.json({ success: false, error: 'Missing cookie id' }, { status: 400 });
         }
 
-        const success = await deleteCookieFromPool(id);
+        const success = await cookiePoolDelete(id);
         if (!success) {
             return NextResponse.json({ success: false, error: 'Failed to delete cookie' }, { status: 500 });
         }

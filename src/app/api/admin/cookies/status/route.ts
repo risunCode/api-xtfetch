@@ -4,13 +4,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
-import { getAdminCookie, type CookiePlatform } from '@/lib/cookies';
+import { authVerifyAdminSession } from '@/core/security';
+import { adminCookieGet, type CookiePlatform } from '@/lib/cookies';
 
 const PLATFORMS: CookiePlatform[] = ['facebook', 'instagram', 'twitter', 'weibo'];
 
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     
     await Promise.all(
         PLATFORMS.map(async (platform) => {
-            const cookie = await getAdminCookie(platform);
+            const cookie = await adminCookieGet(platform);
             status[platform] = !!cookie;
         })
     );

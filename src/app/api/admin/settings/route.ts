@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, supabaseAdmin } from '@/core/database';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 
 const getDb = () => supabaseAdmin || supabase;
 
@@ -26,7 +26,7 @@ export interface GlobalSettings {
 
 // GET - Get all settings
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
 
 // POST - Update settings
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }

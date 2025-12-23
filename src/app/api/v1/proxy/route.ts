@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { type PlatformId } from '@/core/config';
-import { getRotatingHeaders } from '@/lib/http/anti-ban';
+import { httpGetRotatingHeaders as getRotatingHeaders } from '@/lib/http';
 
 // Allowed CDN domains for proxy (SSRF prevention)
 // Subdomains are automatically allowed (e.g., *.googlevideo.com)

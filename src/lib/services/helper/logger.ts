@@ -3,7 +3,7 @@
  * Clean, consistent logging for API routes
  */
 
-import { PlatformId } from './api-config';
+import { PlatformId } from '@/lib/config';
 
 type LogLevel = 'info' | 'error' | 'debug';
 

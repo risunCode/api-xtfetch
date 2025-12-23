@@ -4,8 +4,9 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase';
+import { logger } from '@/lib/services/helper/logger';
 
-export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-2.0-flash-lite';
+export type GeminiModel = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-flash-latest';
 
 export interface GeminiApiKey {
     id: string;
@@ -60,7 +61,7 @@ export async function getGeminiApiKeys(): Promise<GeminiApiKey[]> {
         .order('created_at', { ascending: true });
     
     if (error) {
-        console.error('Failed to get Gemini API keys:', error);
+        logger.error('gemini', `Failed to get Gemini API keys: ${error}`);
         return [];
     }
     return data || [];
@@ -132,7 +133,7 @@ export async function updateKeyUsage(keyId: string, success: boolean, error?: st
     }
     
     if (updateError) {
-        console.error('Failed to update key usage:', updateError);
+        logger.error('gemini', `Failed to update key usage: ${updateError}`);
     }
 }
 

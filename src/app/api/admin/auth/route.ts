@@ -4,10 +4,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifySession, verifyAdminSession } from '@/core/security';
+import { authVerifySession, authVerifyAdminSession } from '@/core/security';
 
 export async function GET(request: NextRequest) {
-    const auth = await verifySession(request);
+    const auth = await authVerifySession(request);
     
     if (!auth.valid) {
         return NextResponse.json({ 
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     
     if (!auth.valid) {
         return NextResponse.json({ 

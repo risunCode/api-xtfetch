@@ -115,19 +115,25 @@ npm start
 
 ## 📡 API Endpoints
 
-### Public APIs
+### Public APIs (v1)
 
 ```http
-POST /api
+POST /api/v1/download
 # Main download API - auto-detects platform from URL
 # Body: { "url": "https://..." }
 
-POST /api/playground  
+POST /api/v1/playground  
 # Guest API for testing (rate limited: 5 req/2min)
 # Body: { "url": "https://..." }
 
-GET /api/status
+GET /api/v1/status
 # Service health check and platform status
+
+GET /api/v1/announcements
+# Get site-wide announcements
+
+POST /api/v1/push/subscribe
+# Subscribe to push notifications
 
 GET /api/proxy?url=...
 # Media proxy for CORS bypass

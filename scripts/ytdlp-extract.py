@@ -91,6 +91,7 @@ def extract(url: str) -> dict:
                 'data': {
                     'id': info.get('id'),
                     'title': info.get('title'),
+                    'description': info.get('description'),
                     'author': info.get('uploader') or info.get('channel'),
                     'duration': info.get('duration'),
                     'thumbnail': info.get('thumbnail'),

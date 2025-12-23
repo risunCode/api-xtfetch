@@ -4,13 +4,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getServiceConfigAsync, loadConfigFromDB } from '@/lib/services/helper/service-config';
+import { serviceConfigGetAsync, serviceConfigLoad } from '@/lib/config';
 import { supabase } from '@/lib/supabase';
 
 export async function GET() {
     try {
-        await loadConfigFromDB();
-        const config = await getServiceConfigAsync();
+        await serviceConfigLoad();
+        const config = await serviceConfigGetAsync();
         
         const platforms = Object.values(config.platforms);
         const maintenance = config.maintenanceType !== 'off' && config.maintenanceMode;
@@ -33,7 +33,7 @@ export async function GET() {
             }
         }
 
-        const status = platforms.map(p => ({
+        const status = platforms.map((p: { id: string; name: string; enabled: boolean }) => ({
             id: p.id,
             name: p.name,
             enabled: p.enabled,

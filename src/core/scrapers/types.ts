@@ -3,7 +3,7 @@
  * Central type definitions for all platform scrapers
  */
 
-import type { MediaFormat, UnifiedEngagement } from '@/lib/types';
+import type { MediaFormat, EngagementStats } from '@/lib/types';
 
 export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
 
@@ -66,7 +66,7 @@ export interface ScraperData {
     duration?: string;
     views?: string;
     postedAt?: string;
-    engagement?: UnifiedEngagement;
+    engagement?: EngagementStats;
     usedCookie?: boolean;
     type?: 'video' | 'image' | 'slideshow' | 'story' | 'mixed';
 }

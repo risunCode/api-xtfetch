@@ -1,28 +1,25 @@
 /**
  * Weibo Scraper Service
  * Supports regular posts, TV URLs, and video content
+ * 
+ * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
 import * as cheerio from 'cheerio';
 import { MediaFormat } from '@/lib/types';
-import { addFormat, httpGet, httpPost, DESKTOP_HEADERS, type EngagementStats } from '@/lib/http';
-import { matchesPlatform, getApiEndpoint } from './helper/api-config';
-import { getCache, setCache } from './helper/cache';
+import { utilAddFormat } from '@/lib/utils';
+import { httpGet, httpPost, DESKTOP_HEADERS } from '@/lib/http';
+import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/lib/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
-import { getScraperTimeout } from './helper/system-config';
+
+type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
 
 export async function scrapeWeibo(url: string, options?: ScraperOptions): Promise<ScraperResult> {
     const startTime = Date.now();
     const cookie = options?.cookie;
 
-    if (!matchesPlatform(url, 'weibo')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Weibo URL');
-
-    if (!options?.skipCache) {
-        const cached = await getCache<ScraperResult>('weibo', url);
-        if (cached?.success) { logger.cache('weibo', true); return { ...cached, cached: true }; }
-    }
-    logger.cache('weibo', false);
+    if (!platformMatches(url, 'weibo')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Weibo URL');
 
     const formats: MediaFormat[] = [];
     let title = 'Weibo Video', thumbnail = '', author = '';
@@ -48,7 +45,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
     if (!cookie) return createError(ScraperErrorCode.COOKIE_REQUIRED);
 
     const weiboHeaders = { ...DESKTOP_HEADERS, 'Cookie': cookie };
-    const timeout = getScraperTimeout('weibo');
+    const timeout = sysConfigScraperTimeout('weibo');
 
 
     try {
@@ -74,7 +71,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                         Object.entries(playInfo.urls).forEach(([quality, videoUrl]) => {
                             if (videoUrl && typeof videoUrl === 'string') {
                                 const vUrl = videoUrl.startsWith('//') ? 'https:' + videoUrl : videoUrl;
-                                addFormat(formats, quality.replace('mp4_', '').toUpperCase(), 'video', vUrl);
+                            utilAddFormat(formats, quality.replace('mp4_', '').toUpperCase(), 'video', vUrl);
                             }
                         });
                     }
@@ -89,7 +86,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                     videoMatches?.forEach((m: string) => {
                         const vUrl = 'https://' + m.replace(/&amp;/g, '&').replace(/\\u0026/g, '&');
                         const quality = vUrl.match(/label=mp4_(\d+p)/)?.[1]?.toUpperCase() || 'Video';
-                        addFormat(formats, quality, 'video', vUrl);
+                        utilAddFormat(formats, quality, 'video', vUrl);
                     });
                     const titleMatch = html.match(/<title>([^<]+)<\/title>/);
                     if (titleMatch) title = titleMatch[1].replace(/ - 微博视频号$/, '').trim();
@@ -102,7 +99,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         // Engagement for TV URLs
         if (isTvUrl && postId) {
             try {
-                const apiRes = await httpGet(`${getApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
+                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
                 if (apiRes.status === 200) {
                     const text = typeof apiRes.data === 'string' ? apiRes.data : JSON.stringify(apiRes.data);
                     if (text.startsWith('{')) {
@@ -123,8 +120,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             logger.media('weibo', { videos: unique.length });
             logger.complete('weibo', Date.now() - startTime);
             // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
-            const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video', usedCookie: true } };
-            setCache('weibo', url, result);
+            const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video', usedCookie: true } };
             return result;
         }
 
@@ -142,7 +138,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                 if (videoSrc) {
                     const vUrl = (videoSrc.startsWith('//') ? 'https:' + videoSrc : videoSrc).replace(/&amp;/g, '&');
                     const quality = vUrl.match(/label=mp4_(\d+p)/)?.[1]?.toUpperCase() || 'HD';
-                    addFormat(formats, quality, 'video', vUrl);
+                    utilAddFormat(formats, quality, 'video', vUrl);
                 }
 
                 const videoMatches = decoded.match(/https?:\/\/f\.video\.weibocdn\.com\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/g) || decoded.match(/\/\/f\.video\.weibocdn\.com\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/g);
@@ -150,7 +146,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                     let vUrl = m.startsWith('//') ? 'https:' + m : m;
                     vUrl = vUrl.replace(/&amp;/g, '&');
                     const quality = vUrl.match(/label=mp4_(\d+p)/)?.[1]?.toUpperCase() || 'Video';
-                    addFormat(formats, quality, 'video', vUrl);
+                    utilAddFormat(formats, quality, 'video', vUrl);
                 });
 
                 const streamMatches = decoded.match(/"stream_url(?:_hd)?"\s*:\s*"([^"]+)"/g);
@@ -159,7 +155,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                     if (urlMatch?.[1]) {
                         let vUrl = urlMatch[1].replace(/\\\//g, '/');
                         if (vUrl.startsWith('//')) vUrl = 'https:' + vUrl;
-                        addFormat(formats, m.includes('_hd') ? 'HD' : 'SD', 'video', vUrl);
+                        utilAddFormat(formats, m.includes('_hd') ? 'HD' : 'SD', 'video', vUrl);
                     }
                 });
 
@@ -170,7 +166,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                         if (!/avatar|icon|emoticon/i.test(large)) imgUrls.add(large);
                     });
                     [...imgUrls].forEach((u, i) => {
-                        addFormat(formats, `Image ${i + 1}`, 'image', u, { itemId: `img-${i}` });
+                        utilAddFormat(formats, `Image ${i + 1}`, 'image', u, { itemId: `img-${i}` });
                         if (!thumbnail) thumbnail = u.replace('/large/', '/mw690/');
                     });
                 }
@@ -190,7 +186,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         // Mobile API fallback
         if (!formats.length && postId && !isTvUrl) {
             try {
-                const apiRes = await httpGet(`${getApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
+                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
                 if (apiRes.status === 200) {
                     const text = typeof apiRes.data === 'string' ? apiRes.data : JSON.stringify(apiRes.data);
                     if (text.startsWith('{')) {
@@ -204,15 +200,15 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                             const media = post.page_info?.media_info;
                             if (media) {
                                 thumbnail = post.page_info.page_pic?.url || thumbnail;
-                                if (media.stream_url_hd) addFormat(formats, 'HD', 'video', media.stream_url_hd);
-                                if (media.stream_url) addFormat(formats, 'SD', 'video', media.stream_url);
-                                if (media.mp4_720p_mp4) addFormat(formats, '720P', 'video', media.mp4_720p_mp4);
-                                if (media.mp4_hd_url) addFormat(formats, 'HD (MP4)', 'video', media.mp4_hd_url);
-                                if (media.mp4_sd_url) addFormat(formats, 'SD (MP4)', 'video', media.mp4_sd_url);
+                                if (media.stream_url_hd) utilAddFormat(formats, 'HD', 'video', media.stream_url_hd);
+                                if (media.stream_url) utilAddFormat(formats, 'SD', 'video', media.stream_url);
+                                if (media.mp4_720p_mp4) utilAddFormat(formats, '720P', 'video', media.mp4_720p_mp4);
+                                if (media.mp4_hd_url) utilAddFormat(formats, 'HD (MP4)', 'video', media.mp4_hd_url);
+                                if (media.mp4_sd_url) utilAddFormat(formats, 'SD (MP4)', 'video', media.mp4_sd_url);
                             }
                             post.pics?.forEach((pic: { large?: { url: string }; url: string }, i: number) => {
                                 const u = pic.large?.url || pic.url;
-                                if (u) { thumbnail = thumbnail || u; addFormat(formats, `Image ${i + 1}`, 'image', u, { itemId: `img-${i}`, thumbnail: u }); }
+                                if (u) { thumbnail = thumbnail || u; utilAddFormat(formats, `Image ${i + 1}`, 'image', u, { itemId: `img-${i}`, thumbnail: u }); }
                             });
                         }
                     }
@@ -230,8 +226,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         logger.complete('weibo', Date.now() - startTime);
 
         // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
-        const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image'), usedCookie: true } };
-        setCache('weibo', url, result);
+        const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image'), usedCookie: true } };
         return result;
     } catch (e) {
         logger.error('weibo', e);

@@ -1,16 +1,19 @@
 /**
  * Facebook Scraper Service (Axios-based)
  * Supports: /share/p|r|v/, /posts/, /reel/, /videos/, /watch/, /stories/, /groups/, /photos/
+ * 
+ * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
 import { MediaFormat } from '@/lib/types';
-import { decodeHtml, extractMeta, decodeUrl, httpGet, getRotatingHeaders, trackRequest, type EngagementStats } from '@/lib/http';
-import { parseCookie } from '@/lib/cookies';
-import { matchesPlatform } from './helper/api-config';
-import { getCache, setCache } from './helper/cache';
+import { utilDecodeHtml, utilExtractMeta, utilDecodeUrl } from '@/lib/utils';
+import { httpGet, httpGetRotatingHeaders, httpTrackRequest } from '@/lib/http';
+import { cookieParse } from '@/lib/cookies';
+import { platformMatches, sysConfigScraperTimeout } from '@/lib/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
-import { getScraperTimeout } from './helper/system-config';
+
+type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
 
 const SKIP_SIDS = ['bd9a62', '23dd7b', '50ce42', '9a7156', '1d2534', 'e99d92', 'a6c039', '72b077', 'ba09c1', 'f4d7c3', '0f7a8c', '3c5e9a', 'd41d8c'];
 const isValidMedia = (url: string) => url?.length > 30 && /fbcdn|scontent/.test(url) && !/<|>/.test(url);
@@ -136,20 +139,20 @@ function extractVideos(html: string, seenUrls: Set<string>, targetId?: string | 
 
     const hdNative = area.match(/"browser_native_hd_url":"([^"]+)"/) || html.match(/"browser_native_hd_url":"([^"]+)"/);
     const sdNative = area.match(/"browser_native_sd_url":"([^"]+)"/) || html.match(/"browser_native_sd_url":"([^"]+)"/);
-    if (hdNative) add('HD', decodeUrl(hdNative[1]));
-    if (sdNative) add('SD', decodeUrl(sdNative[1]));
+    if (hdNative) add('HD', utilDecodeUrl(hdNative[1]));
+    if (sdNative) add('SD', utilDecodeUrl(sdNative[1]));
     if (found.size > 0) return formats;
 
     const hdPlay = area.match(/"playable_url_quality_hd":"([^"]+)"/);
     const sdPlay = area.match(/"playable_url":"([^"]+)"/);
-    if (hdPlay) add('HD', decodeUrl(hdPlay[1]));
-    if (sdPlay) add('SD', decodeUrl(sdPlay[1]));
+    if (hdPlay) add('HD', utilDecodeUrl(hdPlay[1]));
+    if (sdPlay) add('SD', utilDecodeUrl(sdPlay[1]));
     if (found.size > 0) return formats;
 
     const hdSrc = area.match(/"hd_src(?:_no_ratelimit)?":"([^"]+)"/);
     const sdSrc = area.match(/"sd_src(?:_no_ratelimit)?":"([^"]+)"/);
-    if (hdSrc) add('HD', decodeUrl(hdSrc[1]));
-    if (sdSrc) add('SD', decodeUrl(sdSrc[1]));
+    if (hdSrc) add('HD', utilDecodeUrl(hdSrc[1]));
+    if (sdSrc) add('SD', utilDecodeUrl(sdSrc[1]));
     if (found.size > 0) return formats;
 
     const dashRe = /"height":(\d+)[^}]*?"base_url":"(https:[^"]+\.mp4[^"]*)"/g;
@@ -157,7 +160,7 @@ function extractVideos(html: string, seenUrls: Set<string>, targetId?: string | 
     const dashVideos: { height: number; url: string }[] = [];
     while ((m = dashRe.exec(area)) !== null) {
         const height = parseInt(m[1]);
-        if (height >= 360) dashVideos.push({ height, url: decodeUrl(m[2]) });
+        if (height >= 360) dashVideos.push({ height, url: utilDecodeUrl(m[2]) });
     }
     if (dashVideos.length > 0) {
         dashVideos.sort((a, b) => b.height - a.height);
@@ -171,7 +174,7 @@ function extractVideos(html: string, seenUrls: Set<string>, targetId?: string | 
     const progRe = /"progressive_url":"(https:\/\/[^"]+)"/g;
     let progMatch;
     while ((progMatch = progRe.exec(area)) !== null && found.size < 2) {
-        const url = decodeUrl(progMatch[1]);
+        const url = utilDecodeUrl(progMatch[1]);
         if (/\.mp4|scontent.*\/v\/|fbcdn.*\/v\//.test(url)) {
             const quality = /720|1080|_hd/i.test(url) || found.size === 0 ? 'HD' : 'SD';
             add(quality, url);
@@ -189,14 +192,14 @@ function extractStories(html: string, seenUrls: Set<string>): MediaFormat[] {
     const storyRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)","failure_reason":null,"metadata":\{"quality":"(HD|SD)"\}/g;
     const videoPairs: { url: string; isHD: boolean }[] = [];
     while ((m = storyRe.exec(html)) !== null) {
-        const url = decodeUrl(m[1]);
+        const url = utilDecodeUrl(m[1]);
         if (!seenUrls.has(url)) { seenUrls.add(url); videoPairs.push({ url, isHD: m[2] === 'HD' }); }
     }
 
     if (videoPairs.length === 0) {
         const fallbackRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g;
         while ((m = fallbackRe.exec(html)) !== null) {
-            const url = decodeUrl(m[1]);
+            const url = utilDecodeUrl(m[1]);
             if (!seenUrls.has(url)) { seenUrls.add(url); videoPairs.push({ url, isHD: /720p|1080p|_hd/.test(url) }); }
         }
     }
@@ -229,7 +232,7 @@ function extractStories(html: string, seenUrls: Set<string>): MediaFormat[] {
     const imgRe = /https:\/\/scontent[^"'\s<>\\]+t51\.82787[^"'\s<>\\]+\.jpg[^"'\s<>\\]*/gi;
     const storyImages: string[] = [];
     while ((m = imgRe.exec(html)) !== null) {
-        const url = clean(decodeUrl(m[0]));
+        const url = clean(utilDecodeUrl(m[0]));
         if (/s(1080|1440|2048)x/.test(url) && !seenUrls.has(url) && !storyImages.includes(url)) storyImages.push(url);
     }
 
@@ -326,7 +329,7 @@ function extractImages(html: string, decoded: string, seenUrls: Set<string>, tar
         const t39Re = /https:\/\/scontent[^"'\s<>\\]+t39\.30808-6[^"'\s<>\\]+\.jpg/gi;
         let count = 0;
         while ((m = t39Re.exec(decoded)) !== null && count < 5) {
-            const url = decodeUrl(m[0]);
+            const url = utilDecodeUrl(m[0]);
             if (!/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\/|_s\d+x\d+|\/s\d{2,3}x\d{2,3}\//.test(url)) { if (add(url)) count++; }
         }
     }
@@ -372,15 +375,9 @@ function extractEngagement(html: string): EngagementStats {
 export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions): Promise<ScraperResult> {
     const startTime = Date.now();
 
-    if (!options?.skipCache) {
-        const cached = await getCache<ScraperResult>('facebook', inputUrl);
-        if (cached?.success) { logger.cache('facebook', true); return { ...cached, cached: true }; }
-    }
-    logger.cache('facebook', false);
+    if (!platformMatches(inputUrl, 'facebook')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Facebook URL');
 
-    if (!matchesPlatform(inputUrl, 'facebook')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Facebook URL');
-
-    const parsedCookie = parseCookie(options?.cookie, 'facebook') || undefined;
+    const parsedCookie = cookieParse(options?.cookie, 'facebook') || undefined;
     const hasCookie = !!parsedCookie;
 
     if (/\/stories\//.test(inputUrl) && !parsedCookie) {
@@ -389,10 +386,10 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
 
     const doScrape = async (useCookie: boolean): Promise<ScraperResult> => {
         try {
-            trackRequest('facebook');
-            const headers = getRotatingHeaders({ platform: 'facebook', cookie: useCookie && parsedCookie ? parsedCookie : undefined });
+            httpTrackRequest('facebook');
+            const headers = httpGetRotatingHeaders({ platform: 'facebook', cookie: useCookie && parsedCookie ? parsedCookie : undefined });
             logger.debug('facebook', `Fetching ${inputUrl.substring(0, 50)}... (cookie: ${useCookie})`);
-            const timeout = getScraperTimeout('facebook');
+            const timeout = sysConfigScraperTimeout('facebook');
             const res = await httpGet(inputUrl, { headers, timeout });
 
             if (res.finalUrl.includes('/checkpoint/')) throw new Error('CHECKPOINT_REQUIRED');
@@ -433,8 +430,8 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
 
             const hasUnavailableAttachment = html.includes('"UnavailableAttachment"') || html.includes('"unavailable_attachment_style"') || (html.includes("This content isn't available") && html.includes('attachment'));
 
-            const decoded = decodeHtml(html);
-            const meta = extractMeta(html);
+            const decoded = utilDecodeHtml(html);
+            const meta = utilExtractMeta(html);
             const seenUrls = new Set<string>();
             let formats: MediaFormat[] = [];
 
@@ -479,7 +476,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             formats = formats.filter(f => { if (seen.has(f.url)) return false; seen.add(f.url); return true; });
             formats.sort((a, b) => (a.type === 'video' ? 0 : 1) - (b.type === 'video' ? 0 : 1) || getResValue(b.quality) - getResValue(a.quality));
 
-            let title = decodeHtml(meta.title || 'Facebook Post').replace(/^[\d.]+K?\s*views.*?\|\s*/i, '').trim();
+            let title = utilDecodeHtml(meta.title || 'Facebook Post').replace(/^[\d.]+K?\s*views.*?\|\s*/i, '').trim();
             if (title.length > 100) title = title.substring(0, 100) + '...';
             const description = extractDescription(decoded);
             if ((title === 'Facebook' || title === 'Facebook Post') && description) title = description.length > 80 ? description.substring(0, 80) + '...' : description;
@@ -488,7 +485,6 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             logger.complete('facebook', Date.now() - startTime);
 
             const result: ScraperResult = { success: true, data: { title, thumbnail: meta.thumbnail || formats.find(f => f.thumbnail)?.thumbnail || '', author: extractAuthor(decoded, finalUrl), description, postedAt: extractPostDate(decoded), engagement: extractEngagement(decoded), formats, url: inputUrl, usedCookie: useCookie } };
-            setCache('facebook', inputUrl, result);
             return result;
 
         } catch (e) {

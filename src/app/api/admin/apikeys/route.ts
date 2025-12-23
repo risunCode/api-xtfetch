@@ -5,22 +5,22 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 import {
-    getAllApiKeys,
-    createApiKey,
-    updateApiKey,
-    deleteApiKey,
-} from '@/lib/services/helper/api-keys';
+    apiKeyGetAll,
+    apiKeyCreate,
+    apiKeyUpdate,
+    apiKeyDelete,
+} from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
     
     try {
-        const keys = await getAllApiKeys();
+        const keys = await apiKeyGetAll();
         return NextResponse.json({ success: true, data: keys });
     } catch (error) {
         return NextResponse.json({
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
                 if (!name) {
                     return NextResponse.json({ success: false, error: 'Name required' }, { status: 400 });
                 }
-                const result = await createApiKey(name, { 
+                const result = await apiKeyCreate(name, { 
                     rateLimit, 
                     expiresInDays: validityDays, 
                     isTest,
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
                 if (!id) {
                     return NextResponse.json({ success: false, error: 'ID required' }, { status: 400 });
                 }
-                const success = await updateApiKey(id, { name, enabled, rateLimit });
+                const success = await apiKeyUpdate(id, { name, enabled, rateLimit });
                 if (!success) {
                     return NextResponse.json({ success: false, error: 'Key not found' }, { status: 404 });
                 }
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
                 if (!id) {
                     return NextResponse.json({ success: false, error: 'ID required' }, { status: 400 });
                 }
-                const success = await deleteApiKey(id);
+                const success = await apiKeyDelete(id);
                 if (!success) {
                     return NextResponse.json({ success: false, error: 'Key not found' }, { status: 404 });
                 }

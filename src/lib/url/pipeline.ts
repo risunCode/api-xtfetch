@@ -3,8 +3,8 @@
  */
 
 import { logger } from '@/lib/services/helper/logger';
-import { type PlatformId, detectPlatform } from '@/lib/services/helper/api-config';
-import { resolveUrl as resolveUrlAxios, ResolveResult } from '@/lib/http/client';
+import { type PlatformId, platformDetect } from '@/lib/config';
+import { httpResolveUrl, ResolveResult } from '@/lib/http';
 
 export type ContentType = 'video' | 'reel' | 'story' | 'post' | 'image' | 'unknown';
 
@@ -185,18 +185,18 @@ export async function prepareUrl(rawUrl: string, options?: UrlPipelineOptions): 
   if (!inputUrl || !isValidUrl(inputUrl)) return createErrorResult(inputUrl, 'INVALID_URL', 'Invalid URL format');
 
   const normalizedUrl = normalizeUrl(inputUrl);
-  let platform = detectPlatform(normalizedUrl);
+  let platform = platformDetect(normalizedUrl);
   let resolvedUrl = normalizedUrl;
   let wasResolved = false;
   let redirectChain: string[] = [normalizedUrl];
 
   if (!skipResolve && (forceResolve || needsResolve(normalizedUrl, platform || undefined))) {
     logger.debug('url-pipeline', `Resolving: ${normalizedUrl}`);
-    const r: ResolveResult = await resolveUrlAxios(normalizedUrl, { timeout });
+    const r: ResolveResult = await httpResolveUrl(normalizedUrl, { timeout });
     if (!r.error) { resolvedUrl = r.resolved; wasResolved = r.changed; redirectChain = r.redirectChain; }
   }
 
-  if (wasResolved) { const np = detectPlatform(resolvedUrl); if (np) platform = np; }
+  if (wasResolved) { const np = platformDetect(resolvedUrl); if (np) platform = np; }
   if (!platform) return createErrorResult(inputUrl, 'UNSUPPORTED_PLATFORM', 'Platform not supported', { normalizedUrl, resolvedUrl, wasResolved, redirectChain });
 
   const contentId = extractContentId(platform, resolvedUrl);
@@ -210,7 +210,7 @@ export function prepareUrlSync(rawUrl: string): UrlPipelineResult {
   const inputUrl = rawUrl.trim();
   if (!inputUrl || !isValidUrl(inputUrl)) return { ...createErrorResult(inputUrl, 'INVALID_URL', 'Invalid URL format'), wasResolved: false, redirectChain: [] };
   const normalizedUrl = normalizeUrl(inputUrl);
-  const platform = detectPlatform(normalizedUrl);
+  const platform = platformDetect(normalizedUrl);
   if (!platform) return { ...createErrorResult(inputUrl, 'UNSUPPORTED_PLATFORM', 'Platform not supported', { normalizedUrl }), wasResolved: false, redirectChain: [normalizedUrl] };
   const contentId = extractContentId(platform, normalizedUrl);
   const cacheKey = generateCacheKeyFromUrl(platform, normalizedUrl);

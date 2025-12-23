@@ -6,19 +6,19 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
+import { authVerifyAdminSession } from '@/core/security';
 import {
-    updatePooledCookie,
-    deleteCookieFromPool,
-    testCookieHealth,
-} from '@/lib/utils/cookie-pool';
+    cookiePoolUpdate,
+    cookiePoolDelete,
+    cookiePoolTestHealth,
+} from '@/lib/cookies';
 
 interface RouteParams {
     params: Promise<{ id: string }>;
 }
 
 export async function GET(req: NextRequest, { params }: RouteParams) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 
     try {
         if (test === 'true') {
-            const result = await testCookieHealth(id);
+            const result = await cookiePoolTestHealth(id);
             return NextResponse.json({ success: true, data: result });
         }
 
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 }
 
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -49,7 +49,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 
     try {
         const body = await req.json();
-        const result = await updatePooledCookie(id, body);
+        const result = await cookiePoolUpdate(id, body);
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: (e as Error).message }, { status: 500 });
@@ -57,7 +57,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 }
 
 export async function DELETE(req: NextRequest, { params }: RouteParams) {
-    const auth = await verifyAdminSession(req);
+    const auth = await authVerifyAdminSession(req);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -65,7 +65,7 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
     const { id } = await params;
 
     try {
-        const success = await deleteCookieFromPool(id);
+        const success = await cookiePoolDelete(id);
         if (!success) {
             return NextResponse.json({ success: false, error: 'Failed to delete cookie' }, { status: 500 });
         }

@@ -1,15 +1,18 @@
 /**
  * Twitter/X Scraper Service
  * FLOW: Syndication API (no cookie) → GraphQL API with cookie (age-restricted)
+ * 
+ * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
 import { MediaFormat } from '@/lib/types';
-import { addFormat, httpGet, BROWSER_HEADERS, type EngagementStats } from '@/lib/http';
-import { matchesPlatform, getApiEndpoint } from './helper/api-config';
-import { getCache, setCache } from './helper/cache';
+import { utilAddFormat } from '@/lib/utils';
+import { httpGet, BROWSER_HEADERS } from '@/lib/http';
+import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/lib/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
-import { getScraperTimeout } from './helper/system-config';
+
+type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number; bookmarks?: number; replies?: number };
 
 const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
 
@@ -31,7 +34,7 @@ interface MediaDetail {
 
 async function fetchSyndication(tweetId: string): Promise<{ data: TweetData | null; error?: string }> {
     try {
-        const url = `${getApiEndpoint('twitter', 'syndication')}?id=${tweetId}&lang=en&token=x`;
+        const url = `${platformGetApiEndpoint('twitter', 'syndication')}?id=${tweetId}&lang=en&token=x`;
         const res = await httpGet(url, { platform: 'twitter', headers: { Referer: 'https://platform.twitter.com/' } });
         if (res.status !== 200) return { data: null, error: `HTTP ${res.status}` };
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
@@ -57,7 +60,7 @@ async function fetchWithGraphQL(tweetId: string, cookie: string): Promise<{ data
         
         const url = `https://x.com/i/api/graphql/xOhkmRac04YFZmOzU9PJHg/TweetDetail?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${encodeURIComponent(JSON.stringify(features))}`;
         
-        const timeout = getScraperTimeout('twitter');
+        const timeout = sysConfigScraperTimeout('twitter');
         const res = await httpGet(url, {
             timeout,
             headers: { ...BROWSER_HEADERS, 'Authorization': `Bearer ${BEARER_TOKEN}`, 'Cookie': cookie, 'X-Csrf-Token': ct0, 'X-Twitter-Auth-Type': 'OAuth2Session', 'X-Twitter-Active-User': 'yes', 'X-Twitter-Client-Language': 'en' },
@@ -113,17 +116,17 @@ function parseMedia(data: TweetData, username: string): { formats: MediaFormat[]
                 const m = v.url?.match(/\/(\d+)x(\d+)\//);
                 const h = m ? Math.max(+m[1], +m[2]) : 0;
                 const q = h >= 1080 ? 'FULLHD (1080p)' : h >= 720 ? 'HD (720p)' : h >= 480 ? 'SD (480p)' : v.bitrate && v.bitrate >= 2e6 ? 'HD (720p)' : 'SD (480p)';
-                addFormat(formats, q, 'video', v.url, { itemId, thumbnail: media.media_url_https, filename: `${username}_video_${idx + 1}` });
+                utilAddFormat(formats, q, 'video', v.url, { itemId, thumbnail: media.media_url_https, filename: `${username}_video_${idx + 1}` });
             });
         } else if (media.type === 'photo') {
             const base = media.media_url_https || '';
             thumbnail = thumbnail || base;
             const m = base.match(/^(.+)\.(\w+)$/);
             if (m) {
-                addFormat(formats, 'Original (4K)', 'image', `${m[1]}?format=${m[2]}&name=4096x4096`, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
-                addFormat(formats, 'Large', 'image', `${m[1]}?format=${m[2]}&name=large`, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
+                utilAddFormat(formats, 'Original (4K)', 'image', `${m[1]}?format=${m[2]}&name=4096x4096`, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
+                utilAddFormat(formats, 'Large', 'image', `${m[1]}?format=${m[2]}&name=large`, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
             } else {
-                addFormat(formats, 'Original', 'image', base, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
+                utilAddFormat(formats, 'Original', 'image', base, { itemId, thumbnail: base, filename: `${username}_image_${idx + 1}` });
             }
         }
     });
@@ -134,8 +137,8 @@ function parseMedia(data: TweetData, username: string): { formats: MediaFormat[]
             const m = base.match(/^(.+)\.(\w+)$/);
             thumbnail = thumbnail || base;
             if (m) {
-                addFormat(formats, 'Original (4K)', 'image', `${m[1]}?format=${m[2]}&name=4096x4096`, { itemId: `photo-${idx}`, filename: `${username}_image_${idx + 1}` });
-                addFormat(formats, 'Large', 'image', `${m[1]}?format=${m[2]}&name=large`, { itemId: `photo-${idx}`, filename: `${username}_image_${idx + 1}` });
+                utilAddFormat(formats, 'Original (4K)', 'image', `${m[1]}?format=${m[2]}&name=4096x4096`, { itemId: `photo-${idx}`, filename: `${username}_image_${idx + 1}` });
+                utilAddFormat(formats, 'Large', 'image', `${m[1]}?format=${m[2]}&name=large`, { itemId: `photo-${idx}`, filename: `${username}_image_${idx + 1}` });
             }
         });
     }
@@ -143,20 +146,15 @@ function parseMedia(data: TweetData, username: string): { formats: MediaFormat[]
 }
 
 export async function scrapeTwitter(url: string, options?: ScraperOptions): Promise<ScraperResult> {
-    const { cookie, skipCache = false } = options || {};
+    const { cookie } = options || {};
 
-    if (!matchesPlatform(url, 'twitter')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Twitter/X URL');
+    if (!platformMatches(url, 'twitter')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Twitter/X URL');
     
     const match = url.match(/\/(?:#!\/)?(\w+)\/status(?:es)?\/(\d+)/);
     if (!match) return createError(ScraperErrorCode.INVALID_URL, 'Could not extract tweet ID');
 
     const [, username, tweetId] = match;
     logger.type('twitter', 'tweet');
-    
-    if (!skipCache) {
-        const cached = await getCache<ScraperResult>('twitter', url);
-        if (cached?.success) { logger.cache('twitter', true); return { ...cached, cached: true }; }
-    }
 
     logger.debug('twitter', 'Trying Syndication API...');
     const { data: synData, error: synError } = await fetchSyndication(tweetId);
@@ -167,17 +165,18 @@ export async function scrapeTwitter(url: string, options?: ScraperOptions): Prom
             const seen = new Set<string>();
             const unique = formats.filter(f => { const k = `${f.quality}-${f.type}-${f.itemId || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
             const title = synData.text ? synData.text.substring(0, 100) + (synData.text.length > 100 ? '...' : '') : 'Twitter Post';
+            const description = synData.text || undefined; // Full tweet text as description
             const engagement: EngagementStats | undefined = synData.engagement ? { views: synData.engagement.views, likes: synData.engagement.likes, comments: synData.engagement.replies, shares: synData.engagement.retweets, bookmarks: synData.engagement.bookmarks, replies: synData.engagement.replies } : undefined;
             
-            const result: ScraperResult = { success: true, data: { title, thumbnail, author: synData.user?.screen_name || username, authorName: synData.user?.name, postedAt: synData.created_at, engagement, formats: unique, url, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
+            const result: ScraperResult = { success: true, data: { title, thumbnail, author: synData.user?.screen_name || username, authorName: synData.user?.name, description, postedAt: synData.created_at, engagement, formats: unique, url, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
             logger.media('twitter', { videos: unique.filter(f => f.type === 'video').length, images: unique.filter(f => f.type === 'image').length });
-            setCache('twitter', url, result);
             return result;
         }
     }
     
+    // Syndication failed or returned no media - try GraphQL with cookie
     if (cookie) {
-        logger.debug('twitter', 'Trying GraphQL API with cookie...');
+        logger.debug('twitter', 'Syndication returned no media, trying GraphQL API with cookie...');
         const { data: gqlData } = await fetchWithGraphQL(tweetId, cookie);
         if (gqlData) {
             const { formats, thumbnail } = parseMedia(gqlData, gqlData.user?.screen_name || username);
@@ -185,15 +184,16 @@ export async function scrapeTwitter(url: string, options?: ScraperOptions): Prom
                 const seen = new Set<string>();
                 const unique = formats.filter(f => { const k = `${f.quality}-${f.type}-${f.itemId || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
                 const title = gqlData.text ? gqlData.text.substring(0, 100) + (gqlData.text.length > 100 ? '...' : '') : 'Twitter Post';
+                const description = gqlData.text || undefined; // Full tweet text as description
                 const engagement: EngagementStats | undefined = gqlData.engagement ? { views: gqlData.engagement.views, likes: gqlData.engagement.likes, comments: gqlData.engagement.replies, shares: gqlData.engagement.retweets, bookmarks: gqlData.engagement.bookmarks, replies: gqlData.engagement.replies } : undefined;
                 
-                const result: ScraperResult = { success: true, data: { title, thumbnail, author: gqlData.user?.screen_name || username, authorName: gqlData.user?.name, postedAt: gqlData.created_at, engagement, formats: unique, url, usedCookie: true, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
-                setCache('twitter', url, result);
+                const result: ScraperResult = { success: true, data: { title, thumbnail, author: gqlData.user?.screen_name || username, authorName: gqlData.user?.name, description, postedAt: gqlData.created_at, engagement, formats: unique, url, usedCookie: true, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
                 return result;
             }
         }
     }
     
+    // No cookie available and content seems restricted
     if (!cookie && (synError?.includes('403') || !synData?.mediaDetails?.length)) {
         return createError(ScraperErrorCode.AGE_RESTRICTED, 'This tweet may be age-restricted. Please provide a cookie.');
     }

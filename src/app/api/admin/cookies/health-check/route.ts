@@ -4,14 +4,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminSession } from '@/core/security';
-import { getCookiesByPlatform, testCookieHealth } from '@/lib/cookies';
+import { authVerifyAdminSession } from '@/core/security';
+import { cookiePoolGetByPlatform, cookiePoolTestHealth } from '@/lib/cookies';
 import { checkCookiePoolHealth, updateLastHealthCheck } from '@/lib/integrations/admin-alerts';
 
 const PLATFORMS = ['facebook', 'instagram', 'twitter', 'weibo'] as const;
 
 export async function POST(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
         }> = {};
 
         for (const platform of PLATFORMS) {
-            const cookies = await getCookiesByPlatform(platform);
+            const cookies = await cookiePoolGetByPlatform(platform);
             const enabledCookies = cookies.filter(c => c.enabled);
             
             const platformResult = { 
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
                 }
 
                 // Test healthy cookies
-                const health = await testCookieHealth(cookie.id);
+                const health = await cookiePoolTestHealth(cookie.id);
                 platformResult.checked.push(label);
                 
                 if (health.healthy) {
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-    const auth = await verifyAdminSession(request);
+    const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
@@ -111,7 +111,7 @@ export async function GET(request: NextRequest) {
         const results: Record<string, { total: number; healthy: number; cooldown: number; expired: number }> = {};
 
         for (const platform of PLATFORMS) {
-            const cookies = await getCookiesByPlatform(platform);
+            const cookies = await cookiePoolGetByPlatform(platform);
             const enabledCookies = cookies.filter(c => c.enabled);
             
             results[platform] = {

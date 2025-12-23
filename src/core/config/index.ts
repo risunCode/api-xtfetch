@@ -5,20 +5,20 @@
 
 // Platform Configuration
 export {
-    matchesPlatform,
-    detectPlatform,
-    isPlatformUrl,
-    getPlatformRegex,
-    getPlatformAliases,
+    platformMatches,
+    platformDetect,
+    platformIsUrl,
+    platformGetRegex,
+    platformGetAliases,
     PLATFORM_CONFIGS,
-    getPlatformDomainConfig as getApiPlatformConfig,
-    getBaseUrl,
-    getReferer,
-    getOrigin,
-    getApiEndpoint,
+    platformGetDomainConfig,
+    platformGetBaseUrl,
+    platformGetReferer,
+    platformGetOrigin,
+    platformGetApiEndpoint,
     type PlatformId,
-    type PlatformDomainConfig as ApiPlatformConfig,
-} from '@/lib/services/helper/api-config';
+    type PlatformDomainConfig,
+} from '@/lib/config';
 
 // Environment Helpers
 export function getEnv(key: string, defaultValue?: string): string {
