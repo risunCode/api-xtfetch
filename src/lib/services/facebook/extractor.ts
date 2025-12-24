@@ -77,9 +77,15 @@ export const FB_PATTERNS = {
     views: /"video_view_count":(\d+)/,
     viewsAlt: /"play_count":(\d+)/,
     
-    // Content patterns
-    message: /"message":\{"text":"([^"]+)"/,
-    caption: /"caption":"([^"]+)"/,
+    // Content patterns - more specific to avoid UI text
+    // Primary: message in comet_sections (actual post content)
+    messageComet: /"comet_sections"[^}]*?"message":\{"text":"([^"]{3,})"/,
+    // Secondary: message near story/post context
+    messageStory: /"story"[^}]{0,200}"message":\{"text":"([^"]{3,})"/,
+    // Tertiary: generic message (may catch UI text)
+    message: /"message":\{"text":"([^"]{10,})"/,
+    // Caption fallback
+    caption: /"caption":"([^"]{10,})"/,
     creationTime: /"(?:creation|created|publish)_time":(\d{10})/,
     
     // Story video patterns
@@ -272,18 +278,89 @@ export function fbFindVideoBlock(html: string, videoId?: string): string {
  * @returns Substring of HTML containing post data
  */
 export function fbFindPostBlock(html: string, postId?: string): string {
-    const MAX_SEARCH = 100000;
+    const MAX_SEARCH = 150000;
+    const CONTEXT_BEFORE = 2000;
+    const CONTEXT_AFTER = 50000;
     
-    // Look for subattachments (multi-image posts)
+    // Strategy 1: If postId provided, find the block containing that ID
+    if (postId) {
+        const idPatterns = [
+            `"post_id":"${postId}"`,
+            `"id":"${postId}"`,
+            `story_fbid=${postId}`,
+            `/posts/${postId}`,
+            `"fbid":"${postId}"`,
+            `pfbid${postId.substring(0, 10)}`, // pfbid partial match
+        ];
+        
+        for (const pattern of idPatterns) {
+            const pos = html.indexOf(pattern);
+            if (pos > -1) {
+                const start = Math.max(0, pos - CONTEXT_BEFORE);
+                const end = Math.min(html.length, pos + CONTEXT_AFTER);
+                const block = html.substring(start, end);
+                
+                // Verify this block has media content
+                if (block.includes('all_subattachments') || block.includes('viewer_image') || block.includes('photo_image')) {
+                    return block;
+                }
+            }
+        }
+    }
+    
+    // Strategy 2: Find "comet_sections" which contains the main post content
+    // This is more reliable than just looking for subattachments
+    const cometKey = '"comet_sections"';
+    const cometPos = html.indexOf(cometKey);
+    if (cometPos > -1) {
+        // Look for subattachments or viewer_image near comet_sections
+        const searchArea = html.substring(cometPos, Math.min(html.length, cometPos + 80000));
+        
+        const subKey = '"all_subattachments":{"count":';
+        const subPos = searchArea.indexOf(subKey);
+        if (subPos > -1) {
+            const absolutePos = cometPos + subPos;
+            const nodesStart = html.indexOf('"nodes":[', absolutePos);
+            if (nodesStart > -1 && nodesStart - absolutePos < 100) {
+                let depth = 1, nodesEnd = nodesStart + 9;
+                for (let i = nodesStart + 9; i < html.length && i < nodesStart + 50000; i++) {
+                    if (html[i] === '[') depth++;
+                    if (html[i] === ']') { depth--; if (depth === 0) { nodesEnd = i + 1; break; } }
+                }
+                return html.substring(Math.max(0, absolutePos - 500), nodesEnd);
+            }
+        }
+        
+        // Look for viewer_image in comet_sections area
+        const viewerPos = searchArea.indexOf('"viewer_image":');
+        if (viewerPos > -1) {
+            const absolutePos = cometPos + viewerPos;
+            return html.substring(Math.max(0, absolutePos - 500), Math.min(html.length, absolutePos + 30000));
+        }
+    }
+    
+    // Strategy 3: Look for "story" object which contains post data
+    const storyKey = '"story":{"';
+    let storyPos = html.indexOf(storyKey);
+    // Skip if it's too early (likely header/nav data)
+    if (storyPos > -1 && storyPos < 50000) {
+        storyPos = html.indexOf(storyKey, 50000);
+    }
+    if (storyPos > -1) {
+        const searchArea = html.substring(storyPos, Math.min(html.length, storyPos + 80000));
+        if (searchArea.includes('all_subattachments') || searchArea.includes('viewer_image')) {
+            return searchArea;
+        }
+    }
+    
+    // Strategy 4: Fallback - look for subattachments anywhere (original logic)
     const subKey = '"all_subattachments":{"count":';
     const subPos = html.indexOf(subKey);
-    
     if (subPos > -1) {
-        // Find the nodes array within subattachments
         const nodesStart = html.indexOf('"nodes":[', subPos);
         if (nodesStart > -1 && nodesStart - subPos < 100) {
             let depth = 1, nodesEnd = nodesStart + 9;
-            for (let i = nodesStart + 9; i < html.length && i < nodesStart + 30000; i++) {
+            for (let i = nodesStart + 9; i < html.length && i < nodesStart + 50000; i++) {
                 if (html[i] === '[') depth++;
                 if (html[i] === ']') { depth--; if (depth === 0) { nodesEnd = i + 1; break; } }
             }
@@ -291,11 +368,11 @@ export function fbFindPostBlock(html: string, postId?: string): string {
         }
     }
     
-    // Look for viewer_image
+    // Strategy 5: Look for viewer_image
     const viewerKey = '"viewer_image":';
     const viewerPos = html.indexOf(viewerKey);
     if (viewerPos > -1) {
-        return html.substring(Math.max(0, viewerPos - 500), Math.min(html.length, viewerPos + 20000));
+        return html.substring(Math.max(0, viewerPos - 500), Math.min(html.length, viewerPos + 30000));
     }
     
     // Fallback
@@ -415,10 +492,51 @@ export function fbExtractMetadata(html: string): FbMetadata {
     const viewMatch = html.match(FB_PATTERNS.views) || html.match(FB_PATTERNS.viewsAlt);
     if (viewMatch) result.views = parseEngagement(viewMatch[1]);
     
-    // Extract description/message
-    const msgMatch = html.match(FB_PATTERNS.message) || html.match(FB_PATTERNS.caption);
-    if (msgMatch?.[1] && msgMatch[1].length > 2) {
-        result.description = decodeUnicode(msgMatch[1].replace(/\\n/g, '\n'));
+    // Extract description/message - prioritize more specific patterns
+    // to avoid catching UI text like "Upload photo and try image creation..."
+    let description: string | undefined;
+    
+    // Priority 1: comet_sections message (actual post content)
+    const cometMatch = html.match(FB_PATTERNS.messageComet);
+    if (cometMatch?.[1] && cometMatch[1].length >= 10) {
+        description = cometMatch[1];
+    }
+    
+    // Priority 2: story context message
+    if (!description) {
+        const storyMatch = html.match(FB_PATTERNS.messageStory);
+        if (storyMatch?.[1] && storyMatch[1].length >= 10) {
+            description = storyMatch[1];
+        }
+    }
+    
+    // Priority 3: generic message (filter out known UI text)
+    if (!description) {
+        const msgMatch = html.match(FB_PATTERNS.message);
+        if (msgMatch?.[1] && msgMatch[1].length >= 10) {
+            const text = msgMatch[1];
+            // Skip known Facebook UI text patterns
+            const isUIText = /^(Unggah foto|Upload photo|Try image|Coba pembuatan|Create with AI|Buat dengan)/i.test(text);
+            if (!isUIText) {
+                description = text;
+            }
+        }
+    }
+    
+    // Priority 4: caption fallback
+    if (!description) {
+        const captionMatch = html.match(FB_PATTERNS.caption);
+        if (captionMatch?.[1] && captionMatch[1].length >= 10) {
+            const text = captionMatch[1];
+            const isUIText = /^(Unggah foto|Upload photo|Try image|Coba pembuatan|Create with AI|Buat dengan)/i.test(text);
+            if (!isUIText) {
+                description = text;
+            }
+        }
+    }
+    
+    if (description) {
+        result.description = decodeUnicode(description.replace(/\\n/g, '\n'));
     }
     
     // Extract posted time
@@ -668,12 +786,12 @@ export function fbExtractImages(html: string, targetPostId?: string): MediaForma
         }
     }
     
-    // Strategy 3: Extract photo_image
+    // Strategy 3: Extract photo_image (use target block, not full HTML)
     if (idx === 0) {
         FB_PATTERNS.photoImage.lastIndex = 0;
         const photoUrls: string[] = [];
         
-        while ((m = FB_PATTERNS.photoImage.exec(decoded)) !== null && photoUrls.length < 5) {
+        while ((m = FB_PATTERNS.photoImage.exec(target)) !== null && photoUrls.length < 5) {
             const url = clean(m[1]);
             if (/scontent|fbcdn/.test(url) && /t39\.30808-6/.test(url) && !photoUrls.includes(url)) {
                 photoUrls.push(url);
@@ -683,17 +801,17 @@ export function fbExtractImages(html: string, targetPostId?: string): MediaForma
         for (const url of photoUrls) addImage(url);
     }
     
-    // Strategy 4: Extract from preload links
+    // Strategy 4: Extract from preload links (only if in target block context)
     if (idx === 0) {
         const preloadRe = /<link[^>]+rel="preload"[^>]+href="(https:\/\/scontent[^"]+_nc_sid=127cfc[^"]+)"/i;
-        const preloadMatch = html.match(preloadRe);
+        const preloadMatch = target.match(preloadRe);
         if (preloadMatch) addImage(clean(preloadMatch[1]));
     }
     
-    // Strategy 5: Extract image URIs
+    // Strategy 5: Extract image URIs (use target block)
     if (idx === 0) {
         FB_PATTERNS.imageUri.lastIndex = 0;
-        while ((m = FB_PATTERNS.imageUri.exec(decoded)) !== null && idx < 3) {
+        while ((m = FB_PATTERNS.imageUri.exec(target)) !== null && idx < 3) {
             const url = clean(m[1]);
             if (/scontent|fbcdn/.test(url) && !/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\//.test(url)) {
                 addImage(url);
@@ -701,11 +819,11 @@ export function fbExtractImages(html: string, targetPostId?: string): MediaForma
         }
     }
     
-    // Strategy 6: Fallback - raw t39.30808 URLs
+    // Strategy 6: Fallback - raw t39.30808 URLs (use target block to avoid ads/suggested)
     if (idx === 0) {
         const t39Re = /https:\/\/scontent[^"'\s<>\\]+t39\.30808-6[^"'\s<>\\]+\.jpg/gi;
         let count = 0;
-        while ((m = t39Re.exec(decoded)) !== null && count < 5) {
+        while ((m = t39Re.exec(target)) !== null && count < 5) {
             const url = utilDecodeUrl(m[0]);
             if (!/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\/|_s\d+x\d+|\/s\d{2,3}x\d{2,3}\//.test(url)) {
                 if (addImage(url)) count++;
