@@ -48,6 +48,11 @@ export interface PlatformConfig {
     disabledMessage: string;
     lastUpdated: string;
     stats: PlatformStats;
+    // Database-synced fields (from service_config table)
+    requireCookie?: boolean;
+    requireAuth?: boolean;
+    priority?: number;
+    healthStatus?: string;
 }
 
 
@@ -64,6 +69,30 @@ export interface ServiceConfig {
     maintenanceMessage: string;
     apiKeyRequired: boolean;
     lastUpdated: string;
+}
+
+/** Service config database table interface */
+export interface ServiceConfigDB {
+    id: string;
+    platform: string;
+    enabled: boolean;
+    rate_limit: number;
+    require_cookie: boolean;
+    require_auth: boolean;
+    priority: number;
+    last_check: string | null;
+    health_status: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** System config database table interface */
+export interface SystemConfigDB {
+    key: string;
+    value: unknown; // JSONB
+    description: string | null;
+    updated_at: string;
+    updated_by: string | null;
 }
 
 /** System-level configuration */
@@ -213,8 +242,9 @@ let sysConfigSupabase: SupabaseClient | null = null;
 // INTERNAL HELPERS
 // ============================================================================
 
+// ALWAYS use service role for config reads to bypass RLS
 const getWriteClient = () => supabaseAdmin || supabase;
-const getReadClient = () => supabase;
+const getReadClient = () => supabaseAdmin || supabase; // Changed: use admin for reads too!
 
 function getSysConfigSupabase(): SupabaseClient | null {
     if (sysConfigSupabase) return sysConfigSupabase;
@@ -299,41 +329,76 @@ export function platformGetApiEndpoint(platform: PlatformId, endpoint: string): 
 // ============================================================================
 
 /** Load service configuration from database */
-export async function serviceConfigLoad(): Promise<boolean> {
+export async function serviceConfigLoad(forceRefresh = false): Promise<boolean> {
     const cacheTTL = systemConfig.cacheTtlConfig || BOOTSTRAP_CACHE_TTL;
-    if (Date.now() - serviceConfigLastFetch < cacheTTL) return true;
+    if (!forceRefresh && Date.now() - serviceConfigLastFetch < cacheTTL) return true;
     
     const db = getReadClient();
-    if (!db) return false;
+    if (!db) {
+        console.error('[serviceConfigLoad] No database client available!');
+        return false;
+    }
+    
     try {
-        const { data, error } = await db.from('service_config').select('*');
-        if (error || !data) return false;
-        for (const row of data) {
-            if (row.id === 'global') {
-                serviceConfig.maintenanceMode = row.maintenance_mode ?? DEFAULT_SERVICE_CONFIG.maintenanceMode;
-                serviceConfig.maintenanceType = row.maintenance_type ?? DEFAULT_SERVICE_CONFIG.maintenanceType;
-                serviceConfig.maintenanceMessage = row.maintenance_message ?? DEFAULT_SERVICE_CONFIG.maintenanceMessage;
-                serviceConfig.apiKeyRequired = row.api_key_required ?? DEFAULT_SERVICE_CONFIG.apiKeyRequired;
-                serviceConfig.globalRateLimit = row.rate_limit ?? DEFAULT_SERVICE_CONFIG.globalRateLimit;
-                serviceConfig.playgroundRateLimit = row.playground_rate_limit ?? DEFAULT_SERVICE_CONFIG.playgroundRateLimit;
-                serviceConfig.playgroundEnabled = row.playground_enabled ?? DEFAULT_SERVICE_CONFIG.playgroundEnabled;
-                serviceConfig.geminiRateLimit = row.gemini_rate_limit ?? DEFAULT_SERVICE_CONFIG.geminiRateLimit;
-                serviceConfig.geminiRateWindow = row.gemini_rate_window ?? DEFAULT_SERVICE_CONFIG.geminiRateWindow;
-                serviceConfig.lastUpdated = row.updated_at;
-            } else if (row.id in serviceConfig.platforms) {
-                const pid = row.id as PlatformId;
-                serviceConfig.platforms[pid] = {
-                    id: pid, name: PLATFORM_NAMES[pid], enabled: row.enabled ?? true,
-                    method: row.method ?? serviceConfig.platforms[pid].method,
-                    rateLimit: row.rate_limit ?? 10, cacheTime: row.cache_time ?? 300,
-                    disabledMessage: row.disabled_message ?? `${PLATFORM_NAMES[pid]} service is temporarily unavailable.`,
-                    lastUpdated: row.updated_at, stats: row.stats ?? { totalRequests: 0, successCount: 0, errorCount: 0, avgResponseTime: 0 }
-                };
+        // Load global settings from system_config
+        const { data: globalData, error: globalError } = await db
+            .from('system_config')
+            .select('value')
+            .eq('key', 'service_global')
+            .single();
+        
+        if (globalError) {
+            console.error('[serviceConfigLoad] Error loading service_global:', globalError);
+        }
+        
+        if (globalData?.value) {
+            const global = globalData.value as Record<string, unknown>;
+            // Only log in development
+            if (process.env.NODE_ENV !== 'production') {
+                console.log('[serviceConfigLoad] Loaded from DB:', { 
+                    maintenanceMode: global.maintenanceMode, 
+                    maintenanceType: global.maintenanceType 
+                });
+            }
+            if (global.maintenanceMode !== undefined) serviceConfig.maintenanceMode = global.maintenanceMode as boolean;
+            if (global.maintenanceType !== undefined) serviceConfig.maintenanceType = global.maintenanceType as MaintenanceType;
+            if (global.maintenanceMessage !== undefined) serviceConfig.maintenanceMessage = global.maintenanceMessage as string;
+            if (global.globalRateLimit !== undefined) serviceConfig.globalRateLimit = global.globalRateLimit as number;
+            if (global.playgroundEnabled !== undefined) serviceConfig.playgroundEnabled = global.playgroundEnabled as boolean;
+            if (global.playgroundRateLimit !== undefined) serviceConfig.playgroundRateLimit = global.playgroundRateLimit as number;
+            if (global.geminiRateLimit !== undefined) serviceConfig.geminiRateLimit = global.geminiRateLimit as number;
+            if (global.geminiRateWindow !== undefined) serviceConfig.geminiRateWindow = global.geminiRateWindow as number;
+            if (global.apiKeyRequired !== undefined) serviceConfig.apiKeyRequired = global.apiKeyRequired as boolean;
+        } else {
+            console.warn('[serviceConfigLoad] No service_global found in DB, using defaults');
+        }
+        
+        // Load platform configs from service_config table
+        const { data: platformData } = await db
+            .from('service_config')
+            .select('*');
+        
+        if (platformData && platformData.length > 0) {
+            for (const dbConfig of platformData) {
+                const platformId = dbConfig.platform as PlatformId;
+                if (serviceConfig.platforms[platformId]) {
+                    serviceConfig.platforms[platformId].enabled = dbConfig.enabled;
+                    serviceConfig.platforms[platformId].rateLimit = dbConfig.rate_limit;
+                    serviceConfig.platforms[platformId].requireCookie = dbConfig.require_cookie;
+                    serviceConfig.platforms[platformId].requireAuth = dbConfig.require_auth;
+                    serviceConfig.platforms[platformId].priority = dbConfig.priority;
+                    serviceConfig.platforms[platformId].healthStatus = dbConfig.health_status;
+                }
             }
         }
-        serviceConfigLastFetch = Date.now();
-        return true;
-    } catch { return false; }
+    } catch (err) {
+        console.error('[serviceConfigLoad] Exception:', err);
+        return false;
+    }
+    
+    serviceConfigLastFetch = Date.now();
+    serviceConfig.lastUpdated = new Date().toISOString();
+    return true;
 }
 
 async function serviceConfigEnsureFresh() {
@@ -341,42 +406,91 @@ async function serviceConfigEnsureFresh() {
     if (Date.now() - serviceConfigLastFetch > cacheTTL) await serviceConfigLoad();
 }
 
-/** Save global service configuration to database */
+/** Save global service configuration to system_config table */
 export async function serviceConfigSaveGlobal(): Promise<boolean> {
     const db = getWriteClient();
-    if (!db) return false;
+    if (!db) {
+        // Fallback to in-memory only if no DB
+        serviceConfig.lastUpdated = new Date().toISOString();
+        return true;
+    }
+    
     try {
-        const { error } = await db.from('service_config').upsert({
-            id: 'global', enabled: true, rate_limit: serviceConfig.globalRateLimit,
-            playground_rate_limit: serviceConfig.playgroundRateLimit, playground_enabled: serviceConfig.playgroundEnabled,
-            gemini_rate_limit: serviceConfig.geminiRateLimit, gemini_rate_window: serviceConfig.geminiRateWindow,
-            maintenance_mode: serviceConfig.maintenanceMode, maintenance_type: serviceConfig.maintenanceType,
-            maintenance_message: serviceConfig.maintenanceMessage,
-            api_key_required: serviceConfig.apiKeyRequired, updated_at: new Date().toISOString()
-        });
-        return !error;
-    } catch { return false; }
+        // Save global settings to system_config table
+        const globalSettings = {
+            maintenanceMode: serviceConfig.maintenanceMode,
+            maintenanceType: serviceConfig.maintenanceType,
+            maintenanceMessage: serviceConfig.maintenanceMessage,
+            globalRateLimit: serviceConfig.globalRateLimit,
+            playgroundEnabled: serviceConfig.playgroundEnabled,
+            playgroundRateLimit: serviceConfig.playgroundRateLimit,
+            geminiRateLimit: serviceConfig.geminiRateLimit,
+            geminiRateWindow: serviceConfig.geminiRateWindow,
+            apiKeyRequired: serviceConfig.apiKeyRequired,
+            lastUpdated: new Date().toISOString()
+        };
+        
+        // Upsert to system_config
+        const { error } = await db
+            .from('system_config')
+            .upsert({
+                key: 'service_global',
+                value: globalSettings,
+                description: 'Global service configuration',
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'key' });
+        
+        if (error) {
+            console.error('Failed to save global config:', error);
+            return false;
+        }
+        
+        serviceConfig.lastUpdated = globalSettings.lastUpdated;
+        return true;
+    } catch (err) {
+        console.error('Error saving global config:', err);
+        return false;
+    }
 }
 
-/** Save platform-specific configuration to database */
+/** Save platform-specific configuration to service_config table */
 export async function serviceConfigSavePlatform(platformId: PlatformId): Promise<boolean> {
-    const db = getWriteClient();
-    if (!db) return false;
     const platform = serviceConfig.platforms[platformId];
     if (!platform) return false;
-    try {
-        const { error } = await db.from('service_config').upsert({ id: platformId, enabled: platform.enabled, rate_limit: platform.rateLimit, updated_at: new Date().toISOString() });
-        return !error;
-    } catch { return false; }
+    
+    platform.lastUpdated = new Date().toISOString();
+    serviceConfig.lastUpdated = new Date().toISOString();
+    
+    // Persist to database (no maintenance column - global maintenance is in system_config)
+    const success = await serviceConfigUpdateInDB(platformId, {
+        enabled: platform.enabled,
+        rate_limit: platform.rateLimit,
+        require_cookie: platform.requireCookie || false,
+        require_auth: platform.requireAuth || false,
+        priority: platform.priority || 5,
+        health_status: platform.healthStatus || 'unknown'
+    });
+    
+    return success;
 }
 
 
 // Service Config Getters
-/** Get full service configuration (sync) */
+/** Get full service configuration (sync) - Note: May return stale data, use serviceConfigGetAsync for fresh data */
 export function serviceConfigGet(): ServiceConfig { return { ...serviceConfig }; }
 
-/** Get full service configuration (async, ensures fresh data) */
-export async function serviceConfigGetAsync(): Promise<ServiceConfig> { await serviceConfigEnsureFresh(); return { ...serviceConfig }; }
+/** Get full service configuration (async, ensures fresh data with TTL check) */
+export async function serviceConfigGetAsync(): Promise<ServiceConfig> {
+    const cacheTTL = systemConfig.cacheTtlConfig || BOOTSTRAP_CACHE_TTL;
+    const now = Date.now();
+    
+    // Check if cache is stale
+    if (now - serviceConfigLastFetch > cacheTTL) {
+        await serviceConfigLoad();
+    }
+    
+    return { ...serviceConfig };
+}
 
 /** Get platform-specific configuration */
 export function serviceConfigGetPlatform(platformId: PlatformId): PlatformConfig | null { return serviceConfig.platforms[platformId] || null; }
@@ -671,6 +785,272 @@ export async function sysConfigReset(): Promise<boolean> {
     systemConfig = { ...DEFAULT_SYSTEM_CONFIG };
     systemConfigLastFetch = Date.now();
     return true;
+}
+
+// ============================================================================
+// SYSTEM CONFIG KEY-VALUE FUNCTIONS (New - for system_config JSONB table)
+// ============================================================================
+
+/** System config key-value cache */
+const systemConfigKVCache = new Map<string, { value: unknown; expires: number }>();
+const SYSTEM_CONFIG_KV_CACHE_TTL = 30000; // 30 seconds
+
+/**
+ * Get a single system config value by key (from JSONB system_config table)
+ */
+export async function systemConfigGet<T = unknown>(key: string): Promise<T | null> {
+    // Check cache first
+    const cached = systemConfigKVCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+        return cached.value as T;
+    }
+    
+    const db = getSysConfigSupabase();
+    if (!db) return null;
+    
+    try {
+        const { data, error } = await db
+            .from('system_config')
+            .select('value')
+            .eq('key', key)
+            .single();
+        
+        if (error || !data) return null;
+        
+        // Cache the result
+        systemConfigKVCache.set(key, {
+            value: data.value,
+            expires: Date.now() + SYSTEM_CONFIG_KV_CACHE_TTL
+        });
+        
+        return data.value as T;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Set a system config value by key (to JSONB system_config table)
+ */
+export async function systemConfigSet(
+    key: string, 
+    value: unknown, 
+    description?: string
+): Promise<boolean> {
+    const db = getSysConfigSupabase();
+    if (!db) return false;
+    
+    try {
+        const { error } = await db
+            .from('system_config')
+            .upsert({
+                key,
+                value,
+                description: description || null,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'key' });
+        
+        if (error) return false;
+        
+        // Update cache
+        systemConfigKVCache.set(key, {
+            value,
+            expires: Date.now() + SYSTEM_CONFIG_KV_CACHE_TTL
+        });
+        
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Get all system config key-value pairs (from JSONB system_config table)
+ */
+export async function systemConfigGetAll(): Promise<SystemConfigDB[]> {
+    const db = getSysConfigSupabase();
+    if (!db) return [];
+    
+    try {
+        const { data, error } = await db
+            .from('system_config')
+            .select('*')
+            .order('key');
+        
+        if (error || !data) return [];
+        
+        return data as SystemConfigDB[];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Delete a system config key (from JSONB system_config table)
+ */
+export async function systemConfigDelete(key: string): Promise<boolean> {
+    const db = getSysConfigSupabase();
+    if (!db) return false;
+    
+    try {
+        const { error } = await db
+            .from('system_config')
+            .delete()
+            .eq('key', key);
+        
+        if (error) return false;
+        
+        // Remove from cache
+        systemConfigKVCache.delete(key);
+        
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Clear system config key-value cache
+ */
+export function systemConfigClearCache(): void {
+    systemConfigKVCache.clear();
+}
+
+// ============================================================================
+// SERVICE CONFIG DATABASE FUNCTIONS (New - for service_config table)
+// ============================================================================
+
+/** Service config database cache */
+let serviceConfigDBCache: ServiceConfigDB[] = [];
+let serviceConfigDBLastFetch = 0;
+const SERVICE_CONFIG_DB_CACHE_TTL = 30000; // 30 seconds
+
+/**
+ * Load service configuration from database (service_config table)
+ */
+export async function serviceConfigLoadFromDB(): Promise<ServiceConfigDB[]> {
+    const cacheTTL = SERVICE_CONFIG_DB_CACHE_TTL;
+    if (Date.now() - serviceConfigDBLastFetch < cacheTTL && serviceConfigDBCache.length > 0) {
+        return serviceConfigDBCache;
+    }
+    
+    const db = getReadClient();
+    if (!db) return [];
+    
+    try {
+        const { data, error } = await db
+            .from('service_config')
+            .select('*')
+            .order('platform');
+        
+        if (error || !data) return [];
+        
+        serviceConfigDBCache = data as ServiceConfigDB[];
+        serviceConfigDBLastFetch = Date.now();
+        
+        return serviceConfigDBCache;
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Get service config for a specific platform from database
+ */
+export async function serviceConfigGetFromDB(platform: string): Promise<ServiceConfigDB | null> {
+    const configs = await serviceConfigLoadFromDB();
+    return configs.find(c => c.platform === platform) || null;
+}
+
+/**
+ * Update service config for a platform in database
+ */
+export async function serviceConfigUpdateInDB(
+    platform: string,
+    updates: Partial<Omit<ServiceConfigDB, 'id' | 'platform' | 'created_at' | 'updated_at'>>
+): Promise<boolean> {
+    const db = getWriteClient();
+    if (!db) return false;
+    
+    try {
+        const { error } = await db
+            .from('service_config')
+            .update({
+                ...updates,
+                updated_at: new Date().toISOString()
+            })
+            .eq('platform', platform);
+        
+        if (error) return false;
+        
+        // Invalidate cache
+        serviceConfigDBLastFetch = 0;
+        
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Create service config for a new platform in database
+ */
+export async function serviceConfigCreateInDB(
+    platform: string,
+    config?: Partial<Omit<ServiceConfigDB, 'id' | 'platform' | 'created_at' | 'updated_at'>>
+): Promise<ServiceConfigDB | null> {
+    const db = getWriteClient();
+    if (!db) return null;
+    
+    try {
+        // Note: No maintenance column - global maintenance is in system_config.service_global
+        const { data, error } = await db
+            .from('service_config')
+            .insert({
+                platform,
+                enabled: config?.enabled ?? true,
+                rate_limit: config?.rate_limit ?? 60,
+                require_cookie: config?.require_cookie ?? false,
+                require_auth: config?.require_auth ?? false,
+                priority: config?.priority ?? 5,
+                health_status: config?.health_status ?? 'unknown'
+            })
+            .select()
+            .single();
+        
+        if (error || !data) return null;
+        
+        // Invalidate cache
+        serviceConfigDBLastFetch = 0;
+        
+        return data as ServiceConfigDB;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Delete service config for a platform from database
+ */
+export async function serviceConfigDeleteFromDB(platform: string): Promise<boolean> {
+    const db = getWriteClient();
+    if (!db) return false;
+    
+    try {
+        const { error } = await db
+            .from('service_config')
+            .delete()
+            .eq('platform', platform);
+        
+        if (error) return false;
+        
+        // Invalidate cache
+        serviceConfigDBLastFetch = 0;
+        
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 // ============================================================================

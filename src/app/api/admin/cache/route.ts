@@ -17,7 +17,7 @@ import {
     cacheExtractContentId,
     cacheResetStats
 } from '@/lib/cache';
-import type { PlatformId } from '@/lib/config';
+import type { PlatformId } from '@/core/config';
 
 // GET - Get cache statistics
 export async function GET(request: NextRequest) {

@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
-import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/lib/config';
+import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
 

@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl } from '@/lib/url';
-import { platformDetect } from '@/lib/config';
+import { platformDetect } from '@/core/config';
 
 export async function GET(request: NextRequest) {
     // Block in production

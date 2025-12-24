@@ -1,6 +1,9 @@
 /**
  * Core Config Module
  * Centralized configuration and constants.
+ * 
+ * This is the CANONICAL import path for all config functions.
+ * Import from @/core/config, NOT from @/lib/config directly.
  */
 
 // Platform Configuration
@@ -18,6 +21,42 @@ export {
     platformGetApiEndpoint,
     type PlatformId,
     type PlatformDomainConfig,
+} from '@/lib/config';
+
+// Service Configuration
+export {
+    serviceConfigGet,
+    serviceConfigGetAsync,
+    serviceConfigLoad,
+    serviceConfigLoadFromDB,
+    serviceConfigUpdatePlatform,
+    serviceConfigUpdateInDB,
+    serviceConfigCreateInDB,
+    serviceConfigSetPlaygroundEnabled,
+    serviceConfigSetPlaygroundRateLimit,
+    serviceConfigGetPlaygroundRateLimit,
+    serviceConfigSetMaintenanceMode,
+    serviceConfigSetGlobalRateLimit,
+    serviceConfigSetGeminiRateLimit,
+    serviceConfigGetGeminiRateLimit,
+    serviceConfigGetGeminiRateWindow,
+    type ServiceConfig,
+    type PlatformConfig,
+    type PlatformStats,
+    type MaintenanceType,
+    type ServiceConfigDB,
+    type SystemConfigDB,
+} from '@/lib/config';
+
+// System Configuration
+export {
+    sysConfigScraperTimeout,
+    sysConfigScraperMaxRetries,
+    sysConfigScraperRetryDelay,
+    sysConfigCacheTtlConfig,
+    sysConfigCacheTtlApikeys,
+    sysConfigCacheTtlCookies,
+    sysConfigCacheTtlUseragents,
 } from '@/lib/config';
 
 // Environment Helpers

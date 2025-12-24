@@ -67,7 +67,7 @@ const ALLOWED_ORIGINS = [
 ].filter(Boolean) as string[];
 
 // Rate limits per service tier
-const RATE_LIMITS = {
+const RATE_LIMITS: Record<string, Record<string, { requests: number; window: number }>> = {
     premium: {
         '/api/v1': { requests: 100, window: 60000 }, // 100/min with API key
     },
@@ -88,6 +88,29 @@ const RATE_LIMITS = {
         '/api/proxy': { requests: 30, window: 60000 },
     }
 };
+
+// Get rate limit config for a given path and tier
+function getRateLimitConfig(pathname: string, tier: string): { requests: number; window: number } | null {
+    const tierLimits = RATE_LIMITS[tier];
+    if (!tierLimits) return null;
+    
+    // Check for exact match first
+    if (tierLimits[pathname]) {
+        return tierLimits[pathname];
+    }
+    
+    // Check for wildcard match (e.g., '/api/admin/*')
+    for (const [path, config] of Object.entries(tierLimits)) {
+        if (path.endsWith('/*')) {
+            const basePath = path.slice(0, -2);
+            if (pathname.startsWith(basePath)) {
+                return config;
+            }
+        }
+    }
+    
+    return null;
+}
 
 // Security headers
 const SECURITY_HEADERS = {
@@ -207,6 +230,15 @@ export function middleware(request: NextRequest) {
     // Add request ID for tracing
     const requestId = crypto.randomUUID();
     response.headers.set('X-Request-ID', requestId);
+
+    // Add rate limit headers based on service tier and path
+    const rateLimitConfig = getRateLimitConfig(pathname, serviceTier);
+    if (rateLimitConfig) {
+        const resetTime = Date.now() + rateLimitConfig.window;
+        response.headers.set('X-RateLimit-Limit', String(rateLimitConfig.requests));
+        response.headers.set('X-RateLimit-Remaining', String(rateLimitConfig.requests)); // Actual remaining calculated by rate limiter
+        response.headers.set('X-RateLimit-Reset', String(Math.ceil(resetTime / 1000))); // Unix timestamp in seconds
+    }
 
     return response;
 }

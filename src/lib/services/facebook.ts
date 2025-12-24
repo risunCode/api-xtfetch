@@ -9,7 +9,7 @@ import { MediaFormat } from '@/lib/types';
 import { utilDecodeHtml, utilExtractMeta, utilDecodeUrl } from '@/lib/utils';
 import { httpGet, httpGetRotatingHeaders, httpTrackRequest } from '@/lib/http';
 import { cookieParse } from '@/lib/cookies';
-import { platformMatches, sysConfigScraperTimeout } from '@/lib/config';
+import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
 

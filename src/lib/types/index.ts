@@ -1,6 +1,9 @@
 // Platform types
 export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
 
+// Alert type for monitoring
+export type AlertType = 'error_rate' | 'response_time' | 'cookie_health' | 'rate_limit' | 'platform_down';
+
 /**
  * Unified Engagement Stats
  * Normalized across all platforms for consistent display
@@ -41,6 +44,7 @@ export interface DownloadResponse {
     platform: PlatformId;
     data?: MediaData;
     error?: string;
+    errorCode?: string; // Scraper error code for frontend handling
     // Flattened structure support (used by some route handlers)
     title?: string;
     thumbnail?: string;

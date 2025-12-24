@@ -1,8 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { setupGracefulShutdown } from '@/lib/shutdown';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+// Initialize graceful shutdown handlers on module load
+setupGracefulShutdown();
 
 // Public client (for auth, public queries)
 let supabase: SupabaseClient | null = null;
@@ -185,6 +189,31 @@ export async function trackError(record: ErrorRecord) {
 // Get country from request headers (Vercel provides this)
 export function getCountryFromHeaders(headers: Headers): string {
     return headers.get('x-vercel-ip-country') || 'XX';
+}
+
+// Record download stat using RPC function (aggregated stats)
+export async function recordDownloadStat(
+    platform: string,
+    success: boolean,
+    responseTime?: number,
+    country?: string,
+    source: string = 'web'
+) {
+    const db = supabaseAdmin || supabase;
+    if (!db) return;
+    
+    try {
+        await db.rpc('record_download_stat', {
+            p_platform: platform,
+            p_country: country || 'XX',
+            p_source: source,
+            p_success: success,
+            p_response_time: responseTime || null
+        });
+    } catch (e) {
+        // Silent fail - don't break the main flow
+        console.error('[recordDownloadStat] Error:', e);
+    }
 }
 
 // Stats queries

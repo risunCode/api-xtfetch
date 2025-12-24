@@ -9,7 +9,7 @@ import { MediaFormat } from '@/lib/types';
 import { utilAddFormat, utilDecodeUrl } from '@/lib/utils';
 import { httpGet, INSTAGRAM_HEADERS } from '@/lib/http';
 import { cookieParse } from '@/lib/cookies';
-import { platformMatches } from '@/lib/config';
+import { platformMatches } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
 

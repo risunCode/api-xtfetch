@@ -17,7 +17,7 @@ import { DownloadResponse, MediaFormat, MediaData } from '@/lib/types';
 import { type PlatformId, platformGetReferer, platformGetDomainConfig } from '@/core/config';
 import { httpGetUserAgent, DESKTOP_USER_AGENT, httpRandomSleep } from '@/lib/http';
 import { ScraperErrorCode, ScraperResult, isRetryable, ERROR_MESSAGES } from '@/core/scrapers/types';
-import { sysConfigScraperMaxRetries, sysConfigScraperRetryDelay } from '@/lib/config';
+import { sysConfigScraperMaxRetries, sysConfigScraperRetryDelay } from '@/core/config';
 import { logger } from '@/lib/services/helper/logger';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -77,12 +77,32 @@ const ALLOWED_DOMAINS = [
 ];
 
 const BLOCKED_PATTERNS = [
+    // Private IPv4 ranges
     /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.)/,
+    // Special IPv4 addresses
+    /^255\.255\.255\.255$/,           // Broadcast
+    /^169\.254\./,                     // Link-local
+    /^224\./,                          // Multicast (224.0.0.0 - 239.255.255.255)
+    /^239\./,                          // Multicast
+    /^240\./,                          // Reserved
+    /^0\.0\.0\.0$/,                    // All interfaces
+    // Hostname patterns
     /localhost/i, /\.local$/i, /\.internal$/i,
-    /\[::1\]/i, /\[::\]/i, /\[fe80:/i, /\[fc00:/i, /\[fd00:/i,
+    // IPv6 patterns (bracketed)
+    /\[::1\]/i, /\[::\]/i, /\[fe80:/i, /\[fc00:/i, /\[fd00:/i, /\[ff00:/i,
+    // IPv6 patterns (unbracketed)
+    /^::1$/,                           // IPv6 localhost
+    /^fe80:/i,                         // IPv6 link-local
+    /^fc00:/i,                         // IPv6 unique local
+    /^fd00:/i,                         // IPv6 unique local
+    /^ff00:/i,                         // IPv6 multicast
+    // Cloud metadata endpoints
     /169\.254\.169\.254/, /metadata\.google\.internal/i, /metadata\.azure\.com/i,
+    // DNS rebinding protection
     /\.xip\.io$/i, /\.nip\.io$/i, /\.sslip\.io$/i,
+    // Dangerous protocols
     /^file:/i, /^ftp:/i, /^data:/i, /^gopher:/i, /^dict:/i,
+    // IP obfuscation patterns
     /0x[0-9a-f]+\./i, /\d+\.\d+\.\d+\.\d+\.\d+/,
 ];
 
@@ -1006,3 +1026,118 @@ export function errorShouldRetryWithCookie(code: ScraperErrorCode): boolean {
 }
 
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATA TRANSFORMATION UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Convert snake_case string to camelCase
+ * @param str - snake_case string
+ * @returns camelCase string
+ */
+export function transformSnakeToCamel(str: string): string {
+    return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+/**
+ * Convert camelCase string to snake_case
+ * @param str - camelCase string
+ * @returns snake_case string
+ */
+export function transformCamelToSnake(str: string): string {
+    return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Transform object keys from snake_case to camelCase
+ * @param obj - Object with snake_case keys
+ * @returns Object with camelCase keys
+ */
+export function transformObjectToCamel<T = Record<string, unknown>>(obj: Record<string, unknown>): T {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+        const camelKey = transformSnakeToCamel(key);
+        result[camelKey] = value;
+    }
+    return result as T;
+}
+
+/**
+ * Transform array of objects from snake_case to camelCase
+ * @param arr - Array of objects with snake_case keys
+ * @returns Array of objects with camelCase keys
+ */
+export function transformArrayToCamel<T = Record<string, unknown>>(arr: Record<string, unknown>[]): T[] {
+    return arr.map(obj => transformObjectToCamel<T>(obj));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER TRANSFORMATION (for Admin API)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** User type for frontend (camelCase) */
+export interface UserFrontend {
+    id: string;
+    email: string;
+    username: string | null;
+    displayName: string | null;
+    avatarUrl: string | null;
+    role: 'user' | 'admin';
+    status: 'active' | 'frozen' | 'banned';
+    referralCode: string;
+    referredBy: string | null;
+    totalReferrals: number;
+    lastSeen: string | null;
+    firstJoined: string;
+    updatedAt: string;
+}
+
+/** User type from database (snake_case) */
+export interface UserDatabase {
+    id: string;
+    email: string;
+    username: string | null;
+    display_name: string | null;
+    avatar_url: string | null;
+    role: 'user' | 'admin';
+    status: 'active' | 'frozen' | 'banned';
+    referral_code: string;
+    referred_by: string | null;
+    total_referrals: number;
+    last_seen: string | null;
+    first_joined: string;
+    updated_at: string;
+}
+
+/**
+ * Transform user from database format to frontend format
+ * @param dbUser - User from database (snake_case)
+ * @returns User for frontend (camelCase)
+ */
+export function transformUser(dbUser: UserDatabase): UserFrontend {
+    return {
+        id: dbUser.id,
+        email: dbUser.email,
+        username: dbUser.username,
+        displayName: dbUser.display_name,
+        avatarUrl: dbUser.avatar_url,
+        role: dbUser.role,
+        status: dbUser.status,
+        referralCode: dbUser.referral_code,
+        referredBy: dbUser.referred_by,
+        totalReferrals: dbUser.total_referrals,
+        lastSeen: dbUser.last_seen,
+        firstJoined: dbUser.first_joined,
+        updatedAt: dbUser.updated_at,
+    };
+}
+
+/**
+ * Transform array of users from database format to frontend format
+ * @param dbUsers - Array of users from database
+ * @returns Array of users for frontend
+ */
+export function transformUsers(dbUsers: UserDatabase[]): UserFrontend[] {
+    return dbUsers.map(transformUser);
+}

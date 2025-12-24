@@ -133,5 +133,4 @@ export function getCountryFromHeaders(headers: Headers): string {
     return headers.get('cf-ipcountry') || headers.get('x-vercel-ip-country') || 'unknown';
 }
 
-// Re-export config (cache should be imported directly from @/lib/cache)
-export * from '@/lib/config';
+// Config should be imported from @/core/config, not from here

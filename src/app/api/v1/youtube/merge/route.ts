@@ -130,6 +130,7 @@ const YOUTUBE_URL_PATTERNS = [
     /^https?:\/\/youtu\.be\/[\w-]+/,
     /^https?:\/\/(www\.)?youtube\.com\/shorts\/[\w-]+/,
     /^https?:\/\/m\.youtube\.com\/watch\?v=[\w-]+/,
+    /^https?:\/\/music\.youtube\.com\/watch\?v=[\w-]+/,
 ];
 
 function isValidYouTubeUrl(url: string): boolean {
@@ -168,31 +169,56 @@ async function downloadAndMergeWithYtdlp(
     url: string, 
     height: number, 
     outputDir: string,
-    ffmpegPath: string
+    ffmpegPath: string,
+    audioOnly: boolean = false,
+    audioFormat: 'mp3' | 'm4a' = 'mp3'
 ): Promise<YtdlpResult> {
     return new Promise((resolve) => {
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         const outputTemplate = path.join(outputDir, '%(title).100B.%(ext)s');
         
-        // Format selector: best video up to height + best audio, merged to mp4
-        // Falls back to best combined format if separate streams unavailable
-        const formatSelector = `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+        // Format selector based on audio-only or video
+        let ytdlpArgs: string[];
         
-        const ytdlpArgs = [
-            '-m', 'yt_dlp',
-            '-f', formatSelector,
-            '--merge-output-format', 'mp4',
-            '-o', outputTemplate,
-            '--no-playlist',
-            '--no-warnings',
-            '--no-progress',
-            '--ffmpeg-location', ffmpegPath,
-            '--restrict-filenames',
-            '--print', 'after_move:filepath',
-            url
-        ];
+        if (audioOnly) {
+            // Audio only: best audio, convert to requested format
+            ytdlpArgs = [
+                '-m', 'yt_dlp',
+                '-f', 'bestaudio/best',
+                '-x', // Extract audio
+                '--audio-format', audioFormat, // mp3 or m4a
+                '--audio-quality', '0', // Best quality
+                '-o', outputTemplate,
+                '--no-playlist',
+                '--no-warnings',
+                '--no-progress',
+                '--ffmpeg-location', ffmpegPath,
+                '--restrict-filenames',
+                '--print', 'after_move:filepath',
+                url
+            ];
+            
+            console.log(`[merge] Running yt-dlp (audio-only, format=${audioFormat})...`);
+        } else {
+            // Video: best video up to height + best audio, merged to mp4
+            const formatSelector = `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+            ytdlpArgs = [
+                '-m', 'yt_dlp',
+                '-f', formatSelector,
+                '--merge-output-format', 'mp4',
+                '-o', outputTemplate,
+                '--no-playlist',
+                '--no-warnings',
+                '--no-progress',
+                '--ffmpeg-location', ffmpegPath,
+                '--restrict-filenames',
+                '--print', 'after_move:filepath',
+                url
+            ];
+            
+            console.log(`[merge] Running yt-dlp (video height<=${height})...`);
+        }
         
-        console.log(`[merge] Running yt-dlp with height<=${height}...`);
         console.log(`[merge] Command: ${pythonCmd} ${ytdlpArgs.join(' ')}`);
         
         const proc = spawn(pythonCmd, ytdlpArgs, { 
@@ -224,7 +250,8 @@ async function downloadAndMergeWithYtdlp(
                 if (outputPath && existsSync(outputPath)) {
                     const stats = statSync(outputPath);
                     console.log(`[merge] Output: ${outputPath} (${stats.size} bytes)`);
-                    const basename = path.basename(outputPath, '.mp4');
+                    const ext = path.extname(outputPath);
+                    const basename = path.basename(outputPath, ext);
                     
                     resolve({
                         success: true,
@@ -233,17 +260,19 @@ async function downloadAndMergeWithYtdlp(
                     });
                 } else {
                     const files = readdirSync(outputDir);
-                    const mp4File = files.find((f: string) => f.endsWith('.mp4'));
+                    // Look for mp4 or mp3 output
+                    const outputFile = files.find((f: string) => f.endsWith('.mp4') || f.endsWith('.mp3'));
                     
-                    if (mp4File) {
-                        const fullPath = path.join(outputDir, mp4File);
+                    if (outputFile) {
+                        const fullPath = path.join(outputDir, outputFile);
                         const stats = statSync(fullPath);
                         console.log(`[merge] Found output: ${fullPath} (${stats.size} bytes)`);
+                        const ext = path.extname(outputFile);
                         
                         resolve({
                             success: true,
                             outputPath: fullPath,
-                            title: path.basename(mp4File, '.mp4')
+                            title: path.basename(outputFile, ext)
                         });
                     } else {
                         console.error(`[merge] No output file found. stdout: ${stdout}, stderr: ${stderr}`);
@@ -320,11 +349,28 @@ export async function POST(req: NextRequest) {
             }, { status: 400 });
         }
         
-        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}`);
+        // Check if audio-only request
+        const isAudioOnly = quality.toLowerCase().includes('audio') || 
+                           quality.toLowerCase().includes('kbps') ||
+                           quality.toLowerCase() === 'mp3' ||
+                           quality.toLowerCase() === 'm4a';
         
-        // Parse quality to height
-        const height = qualityToHeight(quality);
-        console.log(`[merge] Target height: ${height}p`);
+        // Determine output format for audio
+        const audioOutputFormat = quality.toLowerCase() === 'mp3' ? 'mp3' : 
+                                  quality.toLowerCase() === 'm4a' ? 'm4a' : 
+                                  quality.toLowerCase().includes('kbps') ? 'm4a' : // Original format = m4a
+                                  'mp3'; // Default to mp3
+        
+        // Parse quality - for video, extract height
+        let targetValue: number;
+        if (isAudioOnly) {
+            // For audio, we always get best quality then convert
+            targetValue = 320; // Placeholder, not used for audio
+        } else {
+            targetValue = qualityToHeight(quality);
+        }
+        
+        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}, AudioOnly: ${isAudioOnly}, AudioFormat: ${audioOutputFormat}, Target: ${targetValue}`);
         
         // Setup temp folder
         temp = getTempFolder(id);
@@ -333,8 +379,15 @@ export async function POST(req: NextRequest) {
         const ffmpegPath = await findFFmpegPath();
         console.log(`[merge] FFmpeg path: ${ffmpegPath}`);
         
-        // Download and merge using yt-dlp
-        const result = await downloadAndMergeWithYtdlp(youtubeUrl, height, temp, ffmpegPath);
+        // Download using yt-dlp
+        const result = await downloadAndMergeWithYtdlp(
+            youtubeUrl, 
+            targetValue, 
+            temp, 
+            ffmpegPath, 
+            isAudioOnly,
+            audioOutputFormat as 'mp3' | 'm4a'
+        );
         
         if (!result.success || !result.outputPath) {
             if (temp) cleanupFull(temp); // Error - cleanup immediately
@@ -350,11 +403,13 @@ export async function POST(req: NextRequest) {
         const stats = statSync(result.outputPath);
         console.log(`[merge] Final output: ${stats.size} bytes`);
         
-        // Prepare filename for download
+        // Prepare filename for download (use correct extension)
+        const ext = isAudioOnly ? `.${audioOutputFormat}` : '.mp4';
         const safeFilename = (filename || result.title || 'video')
             .replace(/[^\w\s.-]/g, '_')
             .replace(/\s+/g, '_')
-            .substring(0, 100) + '.mp4';
+            .replace(/\.(mp4|mp3|m4a|webm)$/i, '') // Remove existing extension
+            .substring(0, 100) + ext;
         
         // Stream the file to response
         const stream = createReadStream(result.outputPath);
@@ -381,9 +436,14 @@ export async function POST(req: NextRequest) {
         
         console.log(`[merge] Streaming response: ${safeFilename}`);
         
+        // Set correct Content-Type based on file type
+        const contentType = isAudioOnly 
+            ? (audioOutputFormat === 'mp3' ? 'audio/mpeg' : 'audio/mp4')
+            : 'video/mp4';
+        
         return new NextResponse(webStream, {
             headers: {
-                'Content-Type': 'video/mp4',
+                'Content-Type': contentType,
                 'Content-Length': String(stats.size),
                 'Content-Disposition': `attachment; filename="${safeFilename}"`,
                 'Access-Control-Allow-Origin': '*',

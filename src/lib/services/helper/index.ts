@@ -1,9 +1,6 @@
 /**
- * Services Helper Barrel Export
- * Note: Most helpers have been merged into @/lib/config, @/lib/auth, and @/lib/cache
+ * Services Helper - Logger Only
+ * Config functions should be imported from @/core/config
  */
 
-// Re-export from merged modules
-export * from '@/lib/config';
 export * from './logger';
-// Cache functions are now in @/lib/cache - import directly from there

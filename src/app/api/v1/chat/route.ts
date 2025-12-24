@@ -6,8 +6,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { rateLimit } from '@/lib/redis';
-import { chat, getChatSession, type GeminiModel } from '@/lib/integrations/gemini';
-import { serviceConfigLoad, serviceConfigGetGeminiRateLimit, serviceConfigGetGeminiRateWindow } from '@/lib/config';
+import { chat, getChatSession, type GeminiModel } from '@/lib/integrations/ai-provider';
+import { serviceConfigLoad, serviceConfigGetGeminiRateLimit, serviceConfigGetGeminiRateWindow } from '@/core/config';
 import { logger } from '@/lib/services/helper/logger';
 
 // Magma API models (external)

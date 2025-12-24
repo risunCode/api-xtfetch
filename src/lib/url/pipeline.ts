@@ -3,7 +3,7 @@
  */
 
 import { logger } from '@/lib/services/helper/logger';
-import { type PlatformId, platformDetect } from '@/lib/config';
+import { type PlatformId, platformDetect } from '@/core/config';
 import { httpResolveUrl, ResolveResult } from '@/lib/http';
 
 export type ContentType = 'video' | 'reel' | 'story' | 'post' | 'image' | 'unknown';
@@ -128,18 +128,12 @@ export function normalizeUrl(url: string): string {
   let n = url.trim();
   if (!/^https?:\/\//i.test(n)) n = 'https://' + n;
   
-  // Don't normalize web.facebook.com for stories - it breaks cookie auth
-  const isStory = /\/stories\//i.test(n);
-  
+  // Only normalize mobile subdomains, NOT web.facebook.com
+  // web.facebook.com is valid and should be kept as-is (resolver returns this)
   n = n.replace(/^(https?:\/\/)m\.(facebook\.com)/i, '$1www.$2')
        .replace(/^(https?:\/\/)mbasic\.(facebook\.com)/i, '$1www.$2')
        .replace(/^(https?:\/\/)mobile\.(twitter\.com)/i, '$1$2')
        .replace(/^(https?:\/\/)mobile\.(x\.com)/i, '$1$2');
-  
-  // Only normalize web.facebook.com if NOT a story
-  if (!isStory) {
-    n = n.replace(/^(https?:\/\/)web\.(facebook\.com)/i, '$1www.$2');
-  }
   
   return cleanTrackingParams(n);
 }

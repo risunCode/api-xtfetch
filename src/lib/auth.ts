@@ -49,11 +49,14 @@ export interface AuthResult {
     error?: string;
 }
 
+export type ApiKeyType = 'public' | 'private';
+
 export interface ApiKey {
     id: string;
     name: string;
     key: string;
     hashedKey: string;
+    keyType: ApiKeyType;
     enabled: boolean;
     rateLimit: number;
     created: string;
@@ -83,6 +86,8 @@ type KeyFormat = 'alphanumeric' | 'hex' | 'base64';
 
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_RATE_LIMIT_ENTRIES = 1000;
+const CLEANUP_INTERVAL = 60000; // 1 minute
+let lastCleanup = Date.now();
 let keysCache: ApiKey[] = [];
 let lastCacheTime = 0;
 
@@ -209,10 +214,33 @@ export async function authVerifyApiKey(apiKey: string): Promise<ApiKeyValidation
 // API KEY HELPERS (from api-keys.ts)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function cleanupRateLimits() {
+/**
+ * Cleanup expired rate limit entries with periodic sweep
+ * Prevents memory leaks by removing stale entries and enforcing max size
+ */
+function cleanupRateLimits(): void {
     const now = Date.now();
-    for (const [key, entry] of rateLimitMap.entries()) {
-        if (entry.resetAt < now) rateLimitMap.delete(key);
+
+    // Only cleanup every minute to avoid performance overhead
+    if (now - lastCleanup < CLEANUP_INTERVAL) {
+        return;
+    }
+    lastCleanup = now;
+
+    // Remove expired entries
+    for (const [key, value] of rateLimitMap.entries()) {
+        if (value.resetAt < now) {
+            rateLimitMap.delete(key);
+        }
+    }
+
+    // If still too many entries, remove oldest ones
+    if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
+        const entries = Array.from(rateLimitMap.entries())
+            .sort((a, b) => a[1].resetAt - b[1].resetAt);
+
+        const toRemove = entries.slice(0, rateLimitMap.size - MAX_RATE_LIMIT_ENTRIES);
+        toRemove.forEach(([key]) => rateLimitMap.delete(key));
     }
 }
 
@@ -262,6 +290,7 @@ async function loadKeysFromDB(): Promise<ApiKey[]> {
             name: row.name,
             key: row.key_preview,
             hashedKey: row.key_hash,
+            keyType: (row.key_type as ApiKeyType) || 'public',
             enabled: row.enabled,
             rateLimit: row.rate_limit,
             created: row.created_at,
@@ -289,7 +318,10 @@ async function ensureFreshCache(): Promise<void> {
 function checkKeyRateLimit(keyId: string, limit: number): { allowed: boolean; remaining: number; resetIn: number } {
     const now = Date.now();
     const windowMs = 60 * 1000;
-    if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) cleanupRateLimits();
+    
+    // Periodic cleanup (runs at most once per minute)
+    cleanupRateLimits();
+    
     const entry = rateLimitMap.get(keyId);
     if (!entry || entry.resetAt < now) {
         rateLimitMap.set(keyId, { count: 1, resetAt: now + windowMs });
@@ -318,6 +350,7 @@ export async function apiKeyCreate(
         keyLength?: number;
         keyFormat?: KeyFormat;
         prefix?: string;
+        keyType?: ApiKeyType;
     }
 ): Promise<{ key: ApiKey; plainKey: string }> {
     const db = getWriteClient();
@@ -331,6 +364,7 @@ export async function apiKeyCreate(
     const expiresAt = options?.expiresInDays
         ? new Date(Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000).toISOString()
         : null;
+    const keyType: ApiKeyType = options?.keyType || 'public';
 
     if (db) {
         const { error } = await db.from('api_keys').insert({
@@ -338,6 +372,7 @@ export async function apiKeyCreate(
             name,
             key_hash: hashedKey,
             key_preview: keyPreview,
+            key_type: keyType,
             enabled: true,
             rate_limit: options?.rateLimit || 60,
             expires_at: expiresAt,
@@ -354,6 +389,7 @@ export async function apiKeyCreate(
             name,
             key: keyPreview,
             hashedKey,
+            keyType,
             enabled: true,
             rateLimit: options?.rateLimit || 60,
             created: new Date().toISOString(),
@@ -448,6 +484,7 @@ export async function apiKeyValidate(plainKey: string): Promise<ApiKeyValidateRe
             name: data.name,
             key: data.key_preview,
             hashedKey: data.key_hash,
+            keyType: (data.key_type as ApiKeyType) || 'public',
             enabled: data.enabled,
             rateLimit: data.rate_limit,
             created: data.created_at,

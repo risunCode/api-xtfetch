@@ -4,12 +4,13 @@
  */
 
 import { NextResponse } from 'next/server';
-import { serviceConfigGetAsync, serviceConfigLoad } from '@/lib/config';
+import { serviceConfigGetAsync, serviceConfigLoad } from '@/core/config';
 import { supabase } from '@/lib/supabase';
 
 export async function GET() {
     try {
-        await serviceConfigLoad();
+        // ALWAYS force refresh from DB for status endpoint
+        await serviceConfigLoad(true);
         const config = await serviceConfigGetAsync();
         
         const platforms = Object.values(config.platforms);
@@ -44,6 +45,7 @@ export async function GET() {
             success: true,
             data: {
                 maintenance,
+                maintenanceType: config.maintenanceType, // 'off' | 'api' | 'full'
                 maintenanceMessage: maintenance ? maintenanceMessage : null,
                 maintenanceContent: maintenance ? maintenanceContent : null,
                 maintenanceLastUpdated: maintenance ? maintenanceLastUpdated : null,

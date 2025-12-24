@@ -3,7 +3,7 @@
  * Clean, consistent logging for API routes
  */
 
-import { PlatformId } from '@/lib/config';
+import { PlatformId } from '@/core/config';
 
 type LogLevel = 'info' | 'error' | 'debug';
 
@@ -38,6 +38,14 @@ function tag(platform: string, sub?: string): string {
 }
 
 export const logger = {
+    // Log incoming request (platform name only)
+    request: (platform: PlatformId | string, source: 'web' | 'api' | 'playground' = 'web') => {
+        if (shouldLog('info')) {
+            const sourceTag = source !== 'web' ? ` [${source}]` : '';
+            console.log(`${COLORS.info}${tag(platform)}${COLORS.reset} ← Request${sourceTag}`);
+        }
+    },
+
     url: (platform: PlatformId | string, url: string) => {
         if (shouldLog('info')) console.log(`${COLORS.info}${tag(platform)}${COLORS.reset} URL: ${url}`);
     },
@@ -99,9 +107,16 @@ export const logger = {
         if (shouldLog('info')) console.log(`${COLORS.success}${tag(platform)}${COLORS.reset} ✓ Found ${formatCount} format(s)`);
     },
 
-    error: (platform: PlatformId | string, error: unknown) => {
+    error: (platform: PlatformId | string, error: unknown, errorType?: string) => {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗ ${msg}`);
+        const typeTag = errorType ? ` [${errorType}]` : '';
+        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗${typeTag} ${msg}`);
+    },
+
+    // Specific error type logging
+    scrapeError: (platform: PlatformId | string, errorCode: string, message?: string) => {
+        const msg = message || errorCode;
+        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗ [SCRAPE] ${msg}`);
     },
 
     warn: (platform: PlatformId | string, message: string) => {

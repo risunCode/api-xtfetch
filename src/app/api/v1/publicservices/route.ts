@@ -18,8 +18,9 @@ import { runScraper } from '@/core/scrapers';
 import { prepareUrl, prepareUrlSync } from '@/lib/url';
 import { logger } from '@/lib/services/helper/logger';
 import { cookiePoolGetRotating } from '@/lib/cookies';
-import { platformDetect } from '@/lib/config';
+import { platformDetect } from '@/core/config';
 import { utilFetchFilesizes } from '@/lib/utils';
+import { recordDownloadStat, getCountryFromHeaders } from '@/lib/supabase';
 import { 
     cacheGetQuick, 
     cacheGet, 
@@ -49,12 +50,27 @@ export async function POST(request: NextRequest) {
         const quickParse = prepareUrlSync(url);
         const detectedPlatform = quickParse.platform || platformDetect(url);
         
+        // Log incoming request
+        if (detectedPlatform) {
+            logger.request(detectedPlatform, 'web');
+        }
+        
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)
         if (detectedPlatform) {
-            const quickCache = await cacheGetQuick<ScraperResult>(detectedPlatform, url);
+            let quickCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
+            try {
+                quickCache = await cacheGetQuick<ScraperResult>(detectedPlatform, url);
+            } catch (cacheError) {
+                logger.warn('cache', `Cache read failed, proceeding without cache: ${cacheError}`);
+            }
             if (quickCache.hit && quickCache.data?.success) {
                 logger.cache(detectedPlatform, true);
                 const responseTime = Date.now() - startTime;
+                
+                // Track cache hit as successful request
+                const country = getCountryFromHeaders(request.headers);
+                recordDownloadStat(detectedPlatform, true, responseTime, country, 'web').catch(() => {});
+                
                 return NextResponse.json({
                     success: true,
                     data: quickCache.data.data ? { ...quickCache.data.data, responseTime } : quickCache.data.data,
@@ -81,17 +97,31 @@ export async function POST(request: NextRequest) {
 
         // Step 4: Check cache with resolved URL (if URL was resolved)
         if (urlResult.wasResolved) {
-            const resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);
+            let resolvedCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
+            try {
+                resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);
+            } catch (cacheError) {
+                logger.warn('cache', `Cache read failed for resolved URL, proceeding without cache: ${cacheError}`);
+            }
             if (resolvedCache.hit && resolvedCache.data?.success) {
                 logger.cache(urlResult.platform, true);
                 
                 // Backfill alias for short URL → content ID mapping
                 const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
                 if (contentId && cacheIsShortUrl(url)) {
-                    await cacheSetAlias(url, urlResult.platform, contentId);
+                    try {
+                        await cacheSetAlias(url, urlResult.platform, contentId);
+                    } catch (cacheError) {
+                        logger.warn('cache', `Cache alias write failed: ${cacheError}`);
+                    }
                 }
                 
                 const responseTime = Date.now() - startTime;
+                
+                // Track cache hit as successful request
+                const country = getCountryFromHeaders(request.headers);
+                recordDownloadStat(urlResult.platform, true, responseTime, country, 'web').catch(() => {});
+                
                 return NextResponse.json({
                     success: true,
                     data: resolvedCache.data.data ? { ...resolvedCache.data.data, responseTime } : resolvedCache.data.data,
@@ -140,12 +170,20 @@ export async function POST(request: NextRequest) {
         // Step 8: Cache successful result
         if (result.success && result.data) {
             const contentType = (result.data.type as ContentType) || 'unknown';
-            await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);
+            try {
+                await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);
+            } catch (cacheError) {
+                logger.warn('cache', `Cache write failed: ${cacheError}`);
+            }
             
             // Set alias for short URLs
             const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
             if (contentId && cacheIsShortUrl(url)) {
-                await cacheSetAlias(url, urlResult.platform, contentId);
+                try {
+                    await cacheSetAlias(url, urlResult.platform, contentId);
+                } catch (cacheError) {
+                    logger.warn('cache', `Cache alias write failed: ${cacheError}`);
+                }
             }
         }
 
@@ -153,10 +191,14 @@ export async function POST(request: NextRequest) {
         if (result.success) {
             logger.complete(urlResult.platform, Date.now() - startTime);
         } else {
-            logger.error(urlResult.platform, result.error || 'Unknown error');
+            logger.scrapeError(urlResult.platform, result.errorCode || 'UNKNOWN', result.error);
         }
 
         const responseTime = Date.now() - startTime;
+        
+        // Track download stat (async, don't wait)
+        const country = getCountryFromHeaders(request.headers);
+        recordDownloadStat(urlResult.platform, result.success, responseTime, country, 'web').catch(() => {});
 
         return NextResponse.json({
             success: result.success,

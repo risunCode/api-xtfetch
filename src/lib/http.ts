@@ -9,13 +9,10 @@
 
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios';
 import { logger } from '@/core';
+import type { PlatformId } from '@/lib/types';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// LOCAL TYPE DEFINITIONS (avoid circular deps with @/core/config)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/** Platform identifiers for supported social media platforms */
-export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
+// Re-export PlatformId for backward compatibility
+export type { PlatformId } from '@/lib/types';
 
 // Platform URL mappings
 const PLATFORM_REFERERS: Record<PlatformId, string> = {

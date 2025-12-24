@@ -247,23 +247,44 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             }
         }
         
-        // 3. Add best audio format for audio-only download
-        if (bestAudio) {
-            // Estimate audio size: bitrate * duration / 8
-            const hasActualSize = bestAudio.filesize && bestAudio.filesize > 0;
-            const audioBitrate = bestAudio.abr || 128;
-            const audioFilesize = hasActualSize 
-                ? bestAudio.filesize! 
-                : (duration ? Math.round((audioBitrate * duration * 1000) / 8) : undefined);
+        // 3. Add audio formats for audio-only download
+        // Show M4A (best quality) + MP3 (compatible) options
+        if (audioOnlyFormats.length > 0) {
+            // Get best audio (highest bitrate)
+            const bestAudio = audioOnlyFormats
+                .filter(f => f.abr && f.abr > 0)
+                .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
             
-            finalFormats.push({
-                url: bestAudio.url,
-                quality: bestAudio.quality || `${Math.round(audioBitrate)}kbps`,
-                type: 'audio',
-                format: bestAudio.ext,
-                filesize: audioFilesize,
-                filesizeEstimated: !hasActualSize && !!audioFilesize,
-            });
+            if (bestAudio) {
+                const bitrate = Math.round(bestAudio.abr || 128);
+                const duration = data.duration || 0;
+                
+                // Estimate audio size: bitrate * duration / 8
+                const hasActualSize = bestAudio.filesize && bestAudio.filesize > 0;
+                const audioFilesize = hasActualSize 
+                    ? bestAudio.filesize! 
+                    : (duration ? Math.round((bitrate * duration * 1000) / 8) : undefined);
+                
+                // Option 1: M4A (AAC) - best quality, good compatibility
+                finalFormats.push({
+                    url: bestAudio.url,
+                    quality: 'M4A',
+                    type: 'audio',
+                    format: 'm4a',
+                    filesize: audioFilesize,
+                    filesizeEstimated: !hasActualSize && !!audioFilesize,
+                });
+                
+                // Option 2: MP3 - most compatible
+                finalFormats.push({
+                    url: bestAudio.url,
+                    quality: 'MP3',
+                    type: 'audio',
+                    format: 'mp3',
+                    filesize: audioFilesize ? Math.round(audioFilesize * 0.9) : undefined, // MP3 slightly smaller
+                    filesizeEstimated: true,
+                });
+            }
         }
         
         // Deduplicate by height - ALWAYS prefer needsMerge (has filesize from yt-dlp)

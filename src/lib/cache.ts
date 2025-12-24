@@ -11,7 +11,7 @@
  */
 
 import { redis, isRedisAvailable } from '@/lib/redis';
-import { type PlatformId } from '@/lib/config';
+import { type PlatformId } from '@/core/config';
 
 // ============================================================================
 // TYPES

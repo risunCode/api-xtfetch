@@ -9,7 +9,7 @@ import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
 import { httpGet, TIKTOK_HEADERS } from '@/lib/http';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { platformMatches, sysConfigScraperTimeout } from '@/lib/config';
+import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { logger } from './helper/logger';
 
 type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };

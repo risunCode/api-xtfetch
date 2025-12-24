@@ -2,6 +2,9 @@
  * Admin API Keys Management
  * GET: List all keys
  * POST: Create/update/delete keys
+ * 
+ * Schema (Dec 2024):
+ * - key_type: 'public' | 'private' (NEW)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -21,6 +24,7 @@ export async function GET(request: NextRequest) {
     
     try {
         const keys = await apiKeyGetAll();
+        // Include key_type in response
         return NextResponse.json({ success: true, data: keys });
     } catch (error) {
         return NextResponse.json({
@@ -38,7 +42,7 @@ export async function POST(request: NextRequest) {
     
     try {
         const body = await request.json();
-        const { action, id, name, enabled, rateLimit, isTest, keyLength, keyFormat, validityDays, prefix } = body;
+        const { action, id, name, enabled, rateLimit, isTest, keyLength, keyFormat, validityDays, prefix, keyType } = body;
 
         switch (action) {
             case 'create': {
@@ -51,7 +55,8 @@ export async function POST(request: NextRequest) {
                     isTest,
                     keyLength: keyLength || 32,
                     keyFormat: keyFormat || 'alphanumeric',
-                    prefix: prefix || undefined
+                    prefix: prefix || undefined,
+                    keyType: keyType || 'public' // NEW: default to 'public'
                 });
                 return NextResponse.json({ 
                     success: true, 

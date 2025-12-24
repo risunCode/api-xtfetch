@@ -9,7 +9,7 @@ import * as cheerio from 'cheerio';
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
 import { httpGet, httpPost, DESKTOP_HEADERS } from '@/lib/http';
-import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/lib/config';
+import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from './helper/logger';
 

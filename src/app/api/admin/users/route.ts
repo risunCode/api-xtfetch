@@ -1,13 +1,22 @@
 /**
  * Admin Users API
  * GET: List all users
- * POST: Update user
+ * POST: Update user (role, status, ban)
  * DELETE: Delete user
+ * 
+ * Schema (Dec 2024):
+ * - status: 'active' | 'frozen' | 'banned' (replaces is_active)
+ * - last_seen (replaces last_login)
+ * - first_joined (replaces created_at for user context)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, supabaseAdmin } from '@/lib/supabase';
 import { authVerifyAdminSession } from '@/core/security';
+import { transformUsers, type UserDatabase } from '@/lib/utils';
+
+// User status enum type
+type UserStatus = 'active' | 'frozen' | 'banned';
 
 export async function GET(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
@@ -25,27 +34,30 @@ export async function GET(request: NextRequest) {
         const limit = parseInt(searchParams.get('limit') || '20');
         const search = searchParams.get('search') || '';
         const role = searchParams.get('role') || '';
-        const status = searchParams.get('status') || '';
+        const status = searchParams.get('status') || ''; // 'active' | 'frozen' | 'banned'
 
         let query = supabase
             .from('users')
             .select('*', { count: 'exact' })
-            .order('created_at', { ascending: false })
+            .order('first_joined', { ascending: false })
             .range((page - 1) * limit, page * limit - 1);
 
         if (search) {
             query = query.or(`email.ilike.%${search}%,username.ilike.%${search}%,display_name.ilike.%${search}%`);
         }
         if (role) query = query.eq('role', role);
-        if (status === 'active') query = query.eq('is_active', true);
-        else if (status === 'inactive') query = query.eq('is_active', false);
+        // New status enum filter: 'active' | 'frozen' | 'banned'
+        if (status) query = query.eq('status', status);
 
         const { data, error, count } = await query;
         if (error) throw error;
 
+        // Transform snake_case to camelCase for frontend
+        const users = transformUsers((data || []) as UserDatabase[]);
+
         return NextResponse.json({
             success: true,
-            data: { users: data, total: count || 0, page, limit, totalPages: Math.ceil((count || 0) / limit) }
+            data: { users, total: count || 0, page, limit, totalPages: Math.ceil((count || 0) / limit) }
         });
     } catch (error) {
         return NextResponse.json({
@@ -71,15 +83,55 @@ export async function POST(request: NextRequest) {
 
         switch (action) {
             case 'updateRole': {
+                // PROTECTION: Cannot demote admin to user
+                if (data.role === 'user') {
+                    // Check if target user is admin
+                    const { data: targetUser } = await supabase
+                        .from('users')
+                        .select('role')
+                        .eq('id', userId)
+                        .single();
+                    
+                    if (targetUser?.role === 'admin') {
+                        return NextResponse.json({ 
+                            success: false, 
+                            error: 'Cannot demote admin to user. Admins can only be promoted, not demoted.' 
+                        }, { status: 403 });
+                    }
+                }
+                
                 const { error } = await supabase.from('users').update({ role: data.role }).eq('id', userId);
                 if (error) throw error;
                 return NextResponse.json({ success: true, message: 'Role updated' });
             }
 
             case 'toggleStatus': {
-                const { error } = await supabase.from('users').update({ is_active: data.isActive }).eq('id', userId);
+                // New: Set status enum value ('active' | 'frozen' | 'banned')
+                const newStatus: UserStatus = data.status || (data.isActive ? 'active' : 'frozen');
+                const { error } = await supabase.from('users').update({ status: newStatus }).eq('id', userId);
                 if (error) throw error;
-                return NextResponse.json({ success: true, message: `User ${data.isActive ? 'enabled' : 'disabled'}` });
+                return NextResponse.json({ success: true, message: `User status set to ${newStatus}` });
+            }
+
+            case 'banUser': {
+                // New action: Set status to 'banned'
+                const { error } = await supabase.from('users').update({ status: 'banned' as UserStatus }).eq('id', userId);
+                if (error) throw error;
+                return NextResponse.json({ success: true, message: 'User banned' });
+            }
+
+            case 'unbanUser': {
+                // New action: Set status back to 'active'
+                const { error } = await supabase.from('users').update({ status: 'active' as UserStatus }).eq('id', userId);
+                if (error) throw error;
+                return NextResponse.json({ success: true, message: 'User unbanned' });
+            }
+
+            case 'freezeUser': {
+                // New action: Set status to 'frozen'
+                const { error } = await supabase.from('users').update({ status: 'frozen' as UserStatus }).eq('id', userId);
+                if (error) throw error;
+                return NextResponse.json({ success: true, message: 'User frozen' });
             }
 
             case 'createUser': {
