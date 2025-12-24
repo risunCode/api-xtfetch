@@ -764,41 +764,60 @@ export interface ResolveResult {
 /** Resolve a short URL to its final destination */
 export async function httpResolveUrl(
   shortUrl: string,
-  options?: { timeout?: number; maxRedirects?: number }
+  options?: { timeout?: number; maxRedirects?: number; cookie?: string }
 ): Promise<ResolveResult> {
-  const { timeout = 5000, maxRedirects = 10 } = options || {};
+  const { timeout = 5000, maxRedirects = 10, cookie } = options || {};
   const chain: string[] = [shortUrl];
 
-  try {
-    const response = await axios.get(shortUrl, {
-      timeout,
-      maxRedirects,
-      headers: BROWSER_HEADERS,
-      validateStatus: () => true,
-      beforeRedirect: (config) => {
-        if (config.href) chain.push(config.href);
-      },
-    });
+  const doResolve = async (useCookie: boolean): Promise<ResolveResult> => {
+    const resolveChain: string[] = [shortUrl];
+    try {
+      const headers: Record<string, string> = { ...BROWSER_HEADERS };
+      if (useCookie && cookie) {
+        headers['Cookie'] = cookie;
+      }
 
-    const finalUrl = response.request?.res?.responseUrl || shortUrl;
-    if (finalUrl !== shortUrl && !chain.includes(finalUrl)) {
-      chain.push(finalUrl);
+      const response = await axios.get(shortUrl, {
+        timeout,
+        maxRedirects,
+        headers,
+        validateStatus: () => true,
+        beforeRedirect: (config) => {
+          if (config.href) resolveChain.push(config.href);
+        },
+      });
+
+      const finalUrl = response.request?.res?.responseUrl || shortUrl;
+      if (finalUrl !== shortUrl && !resolveChain.includes(finalUrl)) {
+        resolveChain.push(finalUrl);
+      }
+
+      return {
+        original: shortUrl,
+        resolved: finalUrl,
+        redirectChain: resolveChain,
+        changed: finalUrl !== shortUrl,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        original: shortUrl,
+        resolved: shortUrl,
+        redirectChain: resolveChain,
+        changed: false,
+        error: message,
+      };
     }
+  };
 
-    return {
-      original: shortUrl,
-      resolved: finalUrl,
-      redirectChain: chain,
-      changed: finalUrl !== shortUrl,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return {
-      original: shortUrl,
-      resolved: shortUrl,
-      redirectChain: chain,
-      changed: false,
-      error: message,
-    };
+  // First try: without cookie (guest mode - save cookies)
+  const firstResult = await doResolve(false);
+  
+  // Check if resolved to login page - retry with cookie
+  if (cookie && firstResult.resolved.includes('/login')) {
+    const retryResult = await doResolve(true);
+    return retryResult;
   }
+
+  return firstResult;
 }

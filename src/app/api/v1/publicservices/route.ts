@@ -86,8 +86,15 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 3: URL resolution (only if cache miss)
-        const urlResult = await prepareUrl(url);
+        // Step 3: Get cookie early for platforms that need it for URL resolution
+        const earlyPlatform = detectedPlatform || platformDetect(url);
+        let poolCookie: string | null = null;
+        if (earlyPlatform) {
+            poolCookie = bodyCookie || await cookiePoolGetRotating(earlyPlatform);
+        }
+
+        // Step 4: URL resolution (only if cache miss) - pass cookie for platforms that need auth
+        const urlResult = await prepareUrl(url, { cookie: poolCookie || undefined });
         if (!urlResult.assessment.isValid || !urlResult.platform) {
             return NextResponse.json(
                 { success: false, error: urlResult.assessment.errorMessage || 'Invalid URL or unsupported platform' },
@@ -95,7 +102,12 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Step 4: Check cache with resolved URL (if URL was resolved)
+        // Refresh cookie if platform changed after resolution
+        if (urlResult.platform !== earlyPlatform && !bodyCookie) {
+            poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        }
+
+        // Step 5: Check cache with resolved URL (if URL was resolved)
         if (urlResult.wasResolved) {
             let resolvedCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
@@ -137,9 +149,6 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 5: Get cookie from admin pool for this platform (body cookie overrides pool)
-        const poolCookie = bodyCookie || await cookiePoolGetRotating(urlResult.platform);
-        
         // Step 6: Run scraper (cache miss)
         logger.cache(urlResult.platform, false);
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {

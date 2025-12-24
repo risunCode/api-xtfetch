@@ -32,6 +32,7 @@ export interface UrlPipelineOptions {
   skipResolve?: boolean;
   timeout?: number;
   forceResolve?: boolean;
+  cookie?: string;
 }
 
 const SHORT_URL_PATTERNS: Record<string, RegExp> = {
@@ -183,7 +184,7 @@ export function isValidUrl(url: string): boolean {
 }
 
 export async function prepareUrl(rawUrl: string, options?: UrlPipelineOptions): Promise<UrlPipelineResult> {
-  const { skipResolve = false, timeout = 5000, forceResolve = false } = options || {};
+  const { skipResolve = false, timeout = 5000, forceResolve = false, cookie } = options || {};
   const inputUrl = rawUrl.trim();
   if (!inputUrl || !isValidUrl(inputUrl)) return createErrorResult(inputUrl, 'INVALID_URL', 'Invalid URL format');
 
@@ -195,7 +196,7 @@ export async function prepareUrl(rawUrl: string, options?: UrlPipelineOptions): 
 
   if (!skipResolve && (forceResolve || needsResolve(normalizedUrl, platform || undefined))) {
     logger.debug('url-pipeline', `Resolving: ${normalizedUrl}`);
-    const r: ResolveResult = await httpResolveUrl(normalizedUrl, { timeout });
+    const r: ResolveResult = await httpResolveUrl(normalizedUrl, { timeout, cookie });
     if (!r.error) { resolvedUrl = r.resolved; wasResolved = r.changed; redirectChain = r.redirectChain; }
   }
 
