@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
         let poolCookie: string | null = null;
         if (earlyPlatform) {
             poolCookie = bodyCookie || await cookiePoolGetRotating(earlyPlatform);
+            console.log(`[publicservices] Early cookie fetch for ${earlyPlatform}: ${poolCookie ? 'found' : 'NOT FOUND'}`);
         }
 
         // Step 4: URL resolution (only if cache miss) - pass cookie for platforms that need auth

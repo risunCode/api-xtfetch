@@ -815,7 +815,9 @@ export async function httpResolveUrl(
   
   // Check if resolved to login page - retry with cookie
   if (cookie && firstResult.resolved.includes('/login')) {
+    console.log(`[httpResolveUrl] Detected login redirect, retrying with cookie...`);
     const retryResult = await doResolve(true);
+    console.log(`[httpResolveUrl] Retry result: ${retryResult.resolved}`);
     return retryResult;
   }
 
