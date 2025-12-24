@@ -186,9 +186,17 @@ export async function trackError(record: ErrorRecord) {
     } catch { /* ignore */ }
 }
 
-// Get country from request headers (Vercel provides this)
+// Get country from request headers (supports multiple providers)
 export function getCountryFromHeaders(headers: Headers): string {
-    return headers.get('x-vercel-ip-country') || 'XX';
+    // Railway uses cf-ipcountry (Cloudflare)
+    // Vercel uses x-vercel-ip-country
+    // Cloudflare uses cf-ipcountry
+    // Some proxies use x-country-code
+    return headers.get('cf-ipcountry') 
+        || headers.get('x-vercel-ip-country') 
+        || headers.get('x-country-code')
+        || headers.get('x-real-country')
+        || 'XX';
 }
 
 // Record download stat using RPC function (aggregated stats)

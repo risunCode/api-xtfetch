@@ -109,7 +109,8 @@ export async function POST(request: NextRequest) {
         }
         
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)
-        if (detectedPlatform) {
+        // Skip cache if skipCache flag is set
+        if (detectedPlatform && !skipCache) {
             let quickCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
                 quickCache = await cacheGetQuick<ScraperResult>(detectedPlatform, url);
@@ -161,8 +162,8 @@ export async function POST(request: NextRequest) {
             poolCookie = await cookiePoolGetRotating(urlResult.platform);
         }
 
-        // Step 5: Check cache with resolved URL (if URL was resolved)
-        if (urlResult.wasResolved) {
+        // Step 5: Check cache with resolved URL (if URL was resolved and skipCache not set)
+        if (urlResult.wasResolved && !skipCache) {
             let resolvedCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
                 resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);
@@ -207,7 +208,6 @@ export async function POST(request: NextRequest) {
         logger.cache(urlResult.platform, false);
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
             cookie: poolCookie || undefined,
-            skipCache: skipCache || true // Scrapers no longer handle cache
         });
 
         // Step 7: Fetch file sizes for formats (all platforms - YouTube already has estimated sizes)

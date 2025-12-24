@@ -109,6 +109,15 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                 throw new Error('CHECKPOINT_REQUIRED');
             }
 
+            // Check for login redirect - cookie might be expired or invalid
+            if (res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?')) {
+                logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
+                if (useCookie) {
+                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired atau tidak valid. Silakan update cookie di admin panel.');
+                }
+                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
+            }
+
             const html = res.data;
             const finalUrl = res.finalUrl;
             const decoded = utilDecodeHtml(html);

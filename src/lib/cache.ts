@@ -40,69 +40,69 @@ export interface CacheStats {
 
 const SMART_TTL: Record<PlatformId, Record<ContentType, number>> = {
     twitter: {
-        post: 7 * 24 * 3600,      // 7 days (tweets rarely change)
-        video: 7 * 24 * 3600,
-        reel: 7 * 24 * 3600,
+        post: 3 * 3600,           // 3 hours
+        video: 3 * 3600,
+        reel: 3 * 3600,
         story: 1 * 3600,          // 1 hour (fleets - deprecated but just in case)
-        image: 7 * 24 * 3600,
-        slideshow: 7 * 24 * 3600,
-        mixed: 7 * 24 * 3600,
-        unknown: 3 * 24 * 3600,
+        image: 3 * 3600,
+        slideshow: 3 * 3600,
+        mixed: 3 * 3600,
+        unknown: 3 * 3600,
     },
     instagram: {
-        post: 3 * 24 * 3600,      // 3 days
-        video: 3 * 24 * 3600,
-        reel: 3 * 24 * 3600,
-        story: 1 * 3600,          // 1 hour (stories expire in 24h)
-        image: 3 * 24 * 3600,
-        slideshow: 3 * 24 * 3600,
-        mixed: 3 * 24 * 3600,
-        unknown: 3 * 24 * 3600,
+        post: 3 * 3600,           // 3 hours
+        video: 3 * 3600,
+        reel: 3 * 3600,
+        story: 30 * 60,           // 30 minutes (stories expire in 24h, URLs may change)
+        image: 3 * 3600,
+        slideshow: 3 * 3600,
+        mixed: 3 * 3600,
+        unknown: 3 * 3600,
     },
     tiktok: {
-        post: 7 * 24 * 3600,
-        video: 7 * 24 * 3600,     // 7 days
-        reel: 7 * 24 * 3600,
+        post: 3 * 3600,           // 3 hours
+        video: 3 * 3600,
+        reel: 3 * 3600,
         story: 1 * 3600,
-        image: 7 * 24 * 3600,
-        slideshow: 7 * 24 * 3600, // TikTok slideshows
-        mixed: 7 * 24 * 3600,
-        unknown: 3 * 24 * 3600,
+        image: 3 * 3600,
+        slideshow: 3 * 3600,      // TikTok slideshows
+        mixed: 3 * 3600,
+        unknown: 3 * 3600,
     },
     youtube: {
-        post: 24 * 3600,
-        video: 24 * 3600,         // 1 day (can be taken down)
-        reel: 24 * 3600,          // Shorts
-        story: 1 * 3600,
-        image: 24 * 3600,
-        slideshow: 24 * 3600,
-        mixed: 24 * 3600,
-        unknown: 24 * 3600,
+        post: 10 * 60,            // 10 minutes - YouTube URLs expire quickly (~6h)
+        video: 10 * 60,           // 10 minutes
+        reel: 10 * 60,            // Shorts - 10 minutes
+        story: 10 * 60,
+        image: 10 * 60,
+        slideshow: 10 * 60,
+        mixed: 10 * 60,
+        unknown: 10 * 60,
     },
     facebook: {
-        post: 3 * 24 * 3600,
-        video: 3 * 24 * 3600,
-        reel: 3 * 24 * 3600,
-        story: 1 * 3600,          // 1 hour (stories expire)
-        image: 3 * 24 * 3600,
-        slideshow: 3 * 24 * 3600,
-        mixed: 3 * 24 * 3600,
-        unknown: 3 * 24 * 3600,
+        post: 3 * 3600,           // 3 hours
+        video: 3 * 3600,
+        reel: 3 * 3600,
+        story: 30 * 60,           // 30 minutes (stories expire)
+        image: 3 * 3600,
+        slideshow: 3 * 3600,
+        mixed: 3 * 3600,
+        unknown: 3 * 3600,
     },
     weibo: {
-        post: 3 * 24 * 3600,
-        video: 3 * 24 * 3600,
-        reel: 3 * 24 * 3600,
+        post: 3 * 3600,           // 3 hours
+        video: 3 * 3600,
+        reel: 3 * 3600,
         story: 1 * 3600,
-        image: 3 * 24 * 3600,
-        slideshow: 3 * 24 * 3600,
-        mixed: 3 * 24 * 3600,
-        unknown: 3 * 24 * 3600,
+        image: 3 * 3600,
+        slideshow: 3 * 3600,
+        mixed: 3 * 3600,
+        unknown: 3 * 3600,
     },
 };
 
-// Default TTL fallback (3 days)
-const DEFAULT_TTL = 3 * 24 * 3600;
+// Default TTL fallback (3 hours)
+const DEFAULT_TTL = 3 * 3600;
 
 // Alias TTL (30 days - short URL mappings)
 const ALIAS_TTL = 30 * 24 * 3600;
