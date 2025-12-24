@@ -2,6 +2,28 @@
 
 All notable changes to the XTFetch Backend API will be documented in this file.
 
+## [December 25, 2025] - API Bridge & Security
+
+### Added
+- **Bridge Secret Key Validation** - `x-bridge-secret` header for server-to-server auth
+- **Origin Whitelist** - `ALLOWED_ORIGINS` env for blocking unauthorized access
+- **YouTube Merge Queue** - Concurrency control with semaphore (max 2 concurrent)
+  - Per-IP rate limiting (5 requests per 10 minutes)
+  - Queue system (max 20 pending requests)
+  - Disk space check (min 100MB free)
+  - Request timeout (5 minutes)
+
+### Changed
+- **URL Resolution** - Stories/Groups URLs now use cookie from first try
+- **YouTube Filesize** - Uses accurate `filesize` from yt-dlp instead of estimation
+- **Error Codes** - Proper `errorCode` field in responses for frontend handling
+
+### Fixed
+- Facebook Stories redirect to login even with valid cookie in pool
+- URL resolver not passing cookie for auth-required content types
+
+---
+
 ## [December 23, 2025] - AI Chat Multi-Model Support
 
 ### Added
