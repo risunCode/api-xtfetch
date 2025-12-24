@@ -11,7 +11,7 @@ import { utilAddFormat } from '@/lib/utils';
 import { httpGet, httpPost, DESKTOP_HEADERS } from '@/lib/http';
 import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { logger } from './helper/logger';
+import { logger } from '../shared/logger';
 
 type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
 
@@ -95,6 +95,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
 
             if (!formats.length) return createError(ScraperErrorCode.COOKIE_EXPIRED);
         }
+
 
         // Engagement for TV URLs
         if (isTvUrl && postId) {
@@ -182,6 +183,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                 if (repostsMatch) engagement.shares = parseInt(repostsMatch[1]);
             }
         }
+
 
         // Mobile API fallback
         if (!formats.length && postId && !isTvUrl) {

@@ -10,7 +10,7 @@
  * - Graceful degradation when Redis unavailable
  */
 
-import { redis, isRedisAvailable } from '@/lib/redis';
+import { redis, isRedisAvailable } from '@/lib/database';
 import { type PlatformId } from '@/core/config';
 
 // ============================================================================

@@ -39,4 +39,4 @@ export {
 } from './config';
 
 // Logger
-export { logger } from '@/lib/services/helper/logger';
+export { logger } from '@/lib/services/shared/logger';

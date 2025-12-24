@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { isRedisAvailable, redis } from '@/lib/redis';
+import { isRedisAvailable, redis } from '@/lib/database';
 import { 
     cacheGetStats, 
     cacheClear, 

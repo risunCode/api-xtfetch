@@ -9,7 +9,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { logger } from './helper/logger';
+import { logger } from '../shared/logger';
 
 const execAsync = promisify(exec);
 
@@ -44,6 +44,7 @@ const VIDEO_BITRATES: Record<number, number> = {
 };
 
 const AUDIO_BITRATE = 128; // kbps for audio track
+
 
 /**
  * Estimate filesize based on resolution and duration
@@ -107,7 +108,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         
         logger.debug('youtube', `Extracting with yt-dlp: ${cleanUrl}`);
         const startTime = Date.now();
-        
+
         const { stdout, stderr } = await execAsync(
             `${pythonCmd} "${scriptPath}" "${escapedUrl}"`,
             { 
@@ -153,7 +154,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         // Get best audio for merging (highest bitrate)
         const bestAudio = audioOnlyFormats
             .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-        
+
         // Build final formats list - ONLY playable formats for users
         const finalFormats: Array<{
             url: string;
@@ -179,7 +180,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             if (seenQualities.has(qualityKey)) continue;
             seenQualities.add(qualityKey);
             
-            // Use actual filesize or estimate
+            // Use yt-dlp filesize (accurate) or estimate as fallback
             const hasActualSize = f.filesize && f.filesize > 0;
             const filesize = hasActualSize 
                 ? f.filesize! 
@@ -196,7 +197,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 height: f.height || undefined,
             });
         }
-        
+
         // 2. Add video-only formats that need merge (ALL resolutions)
         // Only add if we have audio to merge with
         // Deduplicate by height, prefer mp4 over webm
@@ -229,8 +230,26 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 if (seenQualities.has(qualityKey)) continue;
                 seenQualities.add(qualityKey);
                 
-                // Always estimate filesize - yt-dlp filesize for video-only streams is unreliable
-                const filesize = f.height && duration ? estimateFilesize(f.height, duration, true) : undefined;
+                // Use yt-dlp filesize (accurate) - add video + audio size for merged output
+                const videoSize = f.filesize && f.filesize > 0 ? f.filesize : undefined;
+                const audioSize = bestAudio.filesize && bestAudio.filesize > 0 ? bestAudio.filesize : undefined;
+                
+                let filesize: number | undefined;
+                let isEstimated = false;
+                
+                if (videoSize && audioSize) {
+                    // Both sizes from yt-dlp - exact total
+                    filesize = videoSize + audioSize;
+                } else if (videoSize) {
+                    // Only video size - estimate audio
+                    const estimatedAudio = duration ? Math.round((AUDIO_BITRATE * duration * 1000) / 8) : Math.round(videoSize * 0.1);
+                    filesize = videoSize + estimatedAudio;
+                    isEstimated = true;
+                } else {
+                    // Fallback to full estimate
+                    filesize = f.height && duration ? estimateFilesize(f.height, duration, true) : undefined;
+                    isEstimated = true;
+                }
                 
                 finalFormats.push({
                     url: f.url,
@@ -238,7 +257,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                     type: 'video',
                     format: 'mp4', // Always output as mp4 after merge
                     filesize,
-                    filesizeEstimated: !!filesize,
+                    filesizeEstimated: isEstimated,
                     width: f.width || undefined,
                     height: f.height || undefined,
                     needsMerge: true,
@@ -246,28 +265,26 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 });
             }
         }
-        
+
         // 3. Add audio formats for audio-only download
         // Show M4A (best quality) + MP3 (compatible) options
         if (audioOnlyFormats.length > 0) {
             // Get best audio (highest bitrate)
-            const bestAudio = audioOnlyFormats
+            const bestAudioFormat = audioOnlyFormats
                 .filter(f => f.abr && f.abr > 0)
                 .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
             
-            if (bestAudio) {
-                const bitrate = Math.round(bestAudio.abr || 128);
-                const duration = data.duration || 0;
-                
-                // Estimate audio size: bitrate * duration / 8
-                const hasActualSize = bestAudio.filesize && bestAudio.filesize > 0;
+            if (bestAudioFormat) {
+                // Use yt-dlp filesize (accurate)
+                const hasActualSize = bestAudioFormat.filesize && bestAudioFormat.filesize > 0;
+                const bitrate = Math.round(bestAudioFormat.abr || 128);
                 const audioFilesize = hasActualSize 
-                    ? bestAudio.filesize! 
+                    ? bestAudioFormat.filesize! 
                     : (duration ? Math.round((bitrate * duration * 1000) / 8) : undefined);
                 
                 // Option 1: M4A (AAC) - best quality, good compatibility
                 finalFormats.push({
-                    url: bestAudio.url,
+                    url: bestAudioFormat.url,
                     quality: 'M4A',
                     type: 'audio',
                     format: 'm4a',
@@ -275,18 +292,18 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                     filesizeEstimated: !hasActualSize && !!audioFilesize,
                 });
                 
-                // Option 2: MP3 - most compatible
+                // Option 2: MP3 - most compatible (converted, so always estimated)
                 finalFormats.push({
-                    url: bestAudio.url,
+                    url: bestAudioFormat.url,
                     quality: 'MP3',
                     type: 'audio',
                     format: 'mp3',
-                    filesize: audioFilesize ? Math.round(audioFilesize * 0.9) : undefined, // MP3 slightly smaller
-                    filesizeEstimated: true,
+                    filesize: audioFilesize ? Math.round(audioFilesize * 0.9) : undefined,
+                    filesizeEstimated: true, // Always estimated because it's converted
                 });
             }
         }
-        
+
         // Deduplicate by height - ALWAYS prefer needsMerge (has filesize from yt-dlp)
         // Combined formats rarely have filesize, needsMerge formats always do
         const heightMap = new Map<number, typeof finalFormats[0]>();
@@ -340,12 +357,14 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                     views: data.view_count,
                     likes: data.like_count,
                 },
+                usedCookie: false, // YouTube doesn't use cookies for public videos
             },
         };
 
         logger.complete('youtube', Date.now());
         
         return result;
+
     } catch (error: unknown) {
         const err = error as { code?: string; killed?: boolean; message?: string };
         // Handle specific errors
@@ -405,6 +424,7 @@ function cleanYouTubeUrl(url: string): string {
         return url;
     }
 }
+
 
 /**
  * Check if URL is YouTube

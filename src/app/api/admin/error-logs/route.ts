@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/database';
 
 export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
 

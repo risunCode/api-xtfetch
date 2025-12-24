@@ -16,11 +16,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl, prepareUrlSync } from '@/lib/url';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { platformDetect } from '@/core/config';
 import { utilFetchFilesizes } from '@/lib/utils';
-import { recordDownloadStat, getCountryFromHeaders } from '@/lib/supabase';
+import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
 import { 
     cacheGetQuick, 
     cacheGet, 
@@ -32,7 +32,43 @@ import {
 } from '@/lib/cache';
 import type { ScraperResult } from '@/core/scrapers/types';
 
+// Origin whitelist - comma separated in env
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(o => o.trim().toLowerCase())
+    .filter(Boolean);
+
+function isOriginAllowed(request: NextRequest): boolean {
+    // If no whitelist configured, allow all (dev mode)
+    if (ALLOWED_ORIGINS.length === 0) return true;
+    
+    const origin = request.headers.get('origin')?.toLowerCase();
+    const referer = request.headers.get('referer')?.toLowerCase();
+    
+    // Check origin header
+    if (origin) {
+        return ALLOWED_ORIGINS.some(allowed => 
+            origin === allowed || origin.endsWith(`.${allowed.replace(/^https?:\/\//, '')}`)
+        );
+    }
+    
+    // Fallback to referer
+    if (referer) {
+        return ALLOWED_ORIGINS.some(allowed => referer.startsWith(allowed));
+    }
+    
+    // No origin/referer = direct API call (block in production)
+    return false;
+}
+
 export async function POST(request: NextRequest) {
+    // Origin whitelist check
+    if (!isOriginAllowed(request)) {
+        return NextResponse.json(
+            { success: false, error: 'Unauthorized origin' },
+            { status: 403 }
+        );
+    }
     const startTime = Date.now();
     try {
         const body = await request.json();

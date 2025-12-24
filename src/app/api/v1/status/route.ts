@@ -5,7 +5,7 @@
 
 import { NextResponse } from 'next/server';
 import { serviceConfigGetAsync, serviceConfigLoad } from '@/core/config';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/database';
 
 export async function GET() {
     try {

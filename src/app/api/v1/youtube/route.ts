@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, statSync, rmSync, writeFileSync, readFileSync } 
 import { homedir, tmpdir } from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 
 // ============================================================================
 // Config

@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/database';
 import {
     serviceConfigGetAsync,
     serviceConfigUpdatePlatform,

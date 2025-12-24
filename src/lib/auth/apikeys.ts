@@ -1,35 +1,22 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * AUTH - Unified Authentication & API Key Management
+ * API KEYS - API Key Management
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * Merged from:
- * - utils/admin-auth.ts → Session verification, admin auth
- * - services/helper/api-keys.ts → API key CRUD, validation, rate limiting
+ * Handles API key CRUD operations, validation, and rate limiting.
  * 
  * Naming Convention:
- * - auth* → Session/token verification
  * - apiKey* → API key management
  * 
- * @module lib/auth
+ * @module lib/auth/apikeys
  */
 
 import crypto from 'crypto';
-import { NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
-import { logger } from '@/lib/services/helper/logger';
+import { supabase, supabaseAdmin } from '@/lib/database/supabase';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SUPABASE CLIENT SETUP
+// SUPABASE CLIENT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-const authClient = supabaseUrl && supabaseServiceKey 
-    ? createClient(supabaseUrl, supabaseServiceKey)
-    : null;
 
 const getWriteClient = () => supabaseAdmin || supabase;
 const getReadClient = () => supabase;
@@ -37,17 +24,6 @@ const getReadClient = () => supabase;
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
-
-export type UserRole = 'user' | 'admin';
-
-export interface AuthResult {
-    valid: boolean;
-    userId?: string;
-    email?: string;
-    username?: string;
-    role?: UserRole;
-    error?: string;
-}
 
 export type ApiKeyType = 'public' | 'private';
 
@@ -92,126 +68,7 @@ let keysCache: ApiKey[] = [];
 let lastCacheTime = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SESSION VERIFICATION (from admin-auth.ts)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Verify user session from JWT token
- */
-export async function authVerifySession(request: NextRequest): Promise<AuthResult> {
-    if (!authClient) {
-        logger.error('auth', 'Supabase not configured');
-        return { valid: false, error: 'Auth service not configured' };
-    }
-    
-    const authHeader = request.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-        return { valid: false, error: 'No authorization token' };
-    }
-    
-    const token = authHeader.slice(7);
-    
-    try {
-        const { data: { user }, error } = await authClient.auth.getUser(token);
-        
-        if (error || !user) {
-            return { valid: false, error: error?.message || 'Invalid token' };
-        }
-        
-        const { data: profile } = await authClient
-            .from('users')
-            .select('username, role')
-            .eq('id', user.id)
-            .single();
-        
-        const role = (profile?.role as UserRole) || 'user';
-        
-        return {
-            valid: true,
-            userId: user.id,
-            email: user.email,
-            username: profile?.username,
-            role
-        };
-    } catch (error) {
-        logger.error('auth', `Session verification error: ${error}`);
-        return { valid: false, error: 'Session verification failed' };
-    }
-}
-
-/**
- * Verify admin session (requires admin role)
- */
-export async function authVerifyAdminSession(request: NextRequest): Promise<AuthResult> {
-    const result = await authVerifySession(request);
-    
-    if (!result.valid) return result;
-    
-    if (result.role !== 'admin') {
-        return { 
-            valid: false, 
-            error: 'Admin access required',
-            userId: result.userId,
-            email: result.email,
-            role: result.role
-        };
-    }
-    
-    return result;
-}
-
-/**
- * Verify admin token (simplified response)
- */
-export async function authVerifyAdminToken(request: NextRequest): Promise<{ valid: boolean; username?: string; error?: string }> {
-    const result = await authVerifyAdminSession(request);
-    return {
-        valid: result.valid,
-        username: result.username || result.email || 'admin',
-        error: result.error
-    };
-}
-
-/**
- * Verify API key from database (simple validation)
- */
-export async function authVerifyApiKey(apiKey: string): Promise<ApiKeyValidation> {
-    if (!authClient) {
-        logger.error('auth', 'Supabase not configured');
-        return { valid: false, error: 'Auth service not configured' };
-    }
-
-    try {
-        const { data: keyData, error } = await authClient
-            .from('api_keys')
-            .select('id, rate_limit, is_active, expires_at')
-            .eq('key_hash', apiKey)
-            .single();
-
-        if (error || !keyData) {
-            return { valid: false, error: 'Invalid API key' };
-        }
-
-        if (!keyData.is_active) {
-            return { valid: false, error: 'API key is disabled' };
-        }
-
-        if (keyData.expires_at && new Date(keyData.expires_at) < new Date()) {
-            return { valid: false, error: 'API key has expired' };
-        }
-
-        return {
-            valid: true,
-            rateLimit: keyData.rate_limit || 100,
-        };
-    } catch (error) {
-        logger.error('auth', `API key verification error: ${error}`);
-        return { valid: false, error: 'API key verification failed' };
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// API KEY HELPERS (from api-keys.ts)
+// INTERNAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
@@ -285,21 +142,21 @@ async function loadKeysFromDB(): Promise<ApiKey[]> {
     try {
         const { data, error } = await db.from('api_keys').select('*').order('created_at', { ascending: false });
         if (error || !data) return [];
-        return data.map(row => ({
-            id: row.id,
-            name: row.name,
-            key: row.key_preview,
-            hashedKey: row.key_hash,
+        return data.map((row: Record<string, unknown>) => ({
+            id: row.id as string,
+            name: row.name as string,
+            key: row.key_preview as string,
+            hashedKey: row.key_hash as string,
             keyType: (row.key_type as ApiKeyType) || 'public',
-            enabled: row.enabled,
-            rateLimit: row.rate_limit,
-            created: row.created_at,
-            lastUsed: row.last_used,
-            expiresAt: row.expires_at,
+            enabled: row.enabled as boolean,
+            rateLimit: row.rate_limit as number,
+            created: row.created_at as string,
+            lastUsed: row.last_used as string | null,
+            expiresAt: row.expires_at as string | null,
             stats: {
-                totalRequests: row.total_requests || 0,
-                successCount: row.success_count || 0,
-                errorCount: row.error_count || 0
+                totalRequests: (row.total_requests as number) || 0,
+                successCount: (row.success_count as number) || 0,
+                errorCount: (row.error_count as number) || 0
             }
         }));
     } catch {

@@ -51,7 +51,7 @@ export function setupGracefulShutdown(): void {
             // Note: Upstash Redis REST client doesn't require explicit close,
             // but we log for visibility
             try {
-                const { redis } = await import('@/lib/redis');
+                const { redis } = await import('@/lib/database');
                 if (redis) {
                     console.log('\x1b[36m[Shutdown]\x1b[0m Redis connection will be released');
                 }

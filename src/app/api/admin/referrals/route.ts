@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin, supabase } from '@/lib/supabase';
+import { supabaseAdmin, supabase } from '@/lib/database';
 import { authVerifyAdminSession } from '@/core/security';
 
 // Get database client (prefer admin for write operations)

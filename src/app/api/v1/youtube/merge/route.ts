@@ -2,15 +2,17 @@
  * YouTube Video + Audio Merge API
  * POST /api/v1/youtube/merge
  * 
- * NEW APPROACH (Dec 2024):
- * Uses yt-dlp directly for download+merge in one command.
- * This avoids the CDN URL IP-binding issue since yt-dlp handles everything.
+ * Production-ready with:
+ * - Concurrency control (max 3 simultaneous merges)
+ * - Per-IP rate limiting (5 requests per 10 minutes)
+ * - Queue system for overflow requests
+ * - Disk space monitoring
  * 
  * Flow:
- * 1. Receive YouTube URL + desired quality
+ * 1. Check rate limit & acquire queue slot
  * 2. Run yt-dlp with format selector to download+merge
  * 3. Stream the output file to client
- * 4. Cleanup temp files
+ * 4. Release slot & cleanup temp files
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,6 +21,7 @@ import { existsSync, mkdirSync, createReadStream, rmSync, statSync, readdirSync 
 import { homedir, tmpdir } from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { mergeQueueAcquire, mergeQueueRelease, mergeQueueStatus } from '@/lib/services/youtube/merge-queue';
 
 // ============================================================================
 // FFmpeg Path Detection (kept as fallback, yt-dlp uses it internally)
@@ -326,8 +329,14 @@ async function downloadAndMergeWithYtdlp(
 export async function POST(req: NextRequest) {
     const id = randomUUID();
     let temp: string | null = null;
+    let slotAcquired = false;
     
-    console.log(`[merge] Request ${id} started`);
+    // Get client IP
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() 
+        || req.headers.get('x-real-ip') 
+        || 'unknown';
+    
+    console.log(`[merge] Request ${id} from ${ip}`);
     
     try {
         const body = await req.json();
@@ -349,6 +358,23 @@ export async function POST(req: NextRequest) {
             }, { status: 400 });
         }
         
+        // ========================================
+        // Acquire queue slot (rate limit + concurrency)
+        // ========================================
+        const queueResult = await mergeQueueAcquire(id, ip);
+        
+        if (!queueResult.allowed) {
+            console.log(`[merge] Request ${id} rejected: ${queueResult.error}`);
+            return NextResponse.json({ 
+                error: queueResult.error,
+                rateLimitRemaining: queueResult.rateLimitRemaining,
+                rateLimitResetIn: queueResult.rateLimitResetIn
+            }, { status: 429 });
+        }
+        
+        slotAcquired = true;
+        console.log(`[merge] Request ${id} acquired slot (remaining: ${queueResult.rateLimitRemaining})`);
+        
         // Check if audio-only request
         const isAudioOnly = quality.toLowerCase().includes('audio') || 
                            quality.toLowerCase().includes('kbps') ||
@@ -358,26 +384,24 @@ export async function POST(req: NextRequest) {
         // Determine output format for audio
         const audioOutputFormat = quality.toLowerCase() === 'mp3' ? 'mp3' : 
                                   quality.toLowerCase() === 'm4a' ? 'm4a' : 
-                                  quality.toLowerCase().includes('kbps') ? 'm4a' : // Original format = m4a
-                                  'mp3'; // Default to mp3
+                                  quality.toLowerCase().includes('kbps') ? 'm4a' :
+                                  'mp3';
         
         // Parse quality - for video, extract height
         let targetValue: number;
         if (isAudioOnly) {
-            // For audio, we always get best quality then convert
             targetValue = 320; // Placeholder, not used for audio
         } else {
             targetValue = qualityToHeight(quality);
         }
         
-        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}, AudioOnly: ${isAudioOnly}, AudioFormat: ${audioOutputFormat}, Target: ${targetValue}`);
+        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}, AudioOnly: ${isAudioOnly}`);
         
         // Setup temp folder
         temp = getTempFolder(id);
         
         // Find FFmpeg path for yt-dlp to use
         const ffmpegPath = await findFFmpegPath();
-        console.log(`[merge] FFmpeg path: ${ffmpegPath}`);
         
         // Download using yt-dlp
         const result = await downloadAndMergeWithYtdlp(
@@ -390,53 +414,56 @@ export async function POST(req: NextRequest) {
         );
         
         if (!result.success || !result.outputPath) {
-            if (temp) cleanupFull(temp); // Error - cleanup immediately
+            if (temp) cleanupFull(temp);
+            mergeQueueRelease(id);
             return NextResponse.json({ 
                 error: result.error || 'Download failed' 
             }, { status: 500 });
         }
         
-        // Cleanup artifacts (temp video/audio) but keep output
+        // Cleanup artifacts but keep output
         cleanupArtifacts(temp, result.outputPath);
         
         // Get file stats
         const stats = statSync(result.outputPath);
-        console.log(`[merge] Final output: ${stats.size} bytes`);
+        console.log(`[merge] Output: ${stats.size} bytes`);
         
-        // Prepare filename for download (use correct extension)
+        // Prepare filename
         const ext = isAudioOnly ? `.${audioOutputFormat}` : '.mp4';
         const safeFilename = (filename || result.title || 'video')
             .replace(/[^\w\s.-]/g, '_')
             .replace(/\s+/g, '_')
-            .replace(/\.(mp4|mp3|m4a|webm)$/i, '') // Remove existing extension
+            .replace(/\.(mp4|mp3|m4a|webm)$/i, '')
             .substring(0, 100) + ext;
         
         // Stream the file to response
         const stream = createReadStream(result.outputPath);
         const folder = temp;
+        const requestId = id;
         
         const webStream = new ReadableStream({
             start(ctrl) {
                 stream.on('data', (chunk) => ctrl.enqueue(chunk));
                 stream.on('end', () => { 
                     ctrl.close(); 
-                    // Schedule full cleanup after 10 minutes
+                    mergeQueueRelease(requestId);
                     scheduleCleanup(folder);
                 });
                 stream.on('error', (e) => { 
                     ctrl.error(e); 
+                    mergeQueueRelease(requestId);
                     cleanupFull(folder); 
                 });
             },
             cancel() { 
                 stream.destroy(); 
+                mergeQueueRelease(requestId);
                 cleanupFull(folder); 
             }
         });
         
-        console.log(`[merge] Streaming response: ${safeFilename}`);
+        console.log(`[merge] Streaming: ${safeFilename}`);
         
-        // Set correct Content-Type based on file type
         const contentType = isAudioOnly 
             ? (audioOutputFormat === 'mp3' ? 'audio/mpeg' : 'audio/mp4')
             : 'video/mp4';
@@ -447,13 +474,15 @@ export async function POST(req: NextRequest) {
                 'Content-Length': String(stats.size),
                 'Content-Disposition': `attachment; filename="${safeFilename}"`,
                 'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'no-cache'
+                'Cache-Control': 'no-cache',
+                'X-RateLimit-Remaining': String(queueResult.rateLimitRemaining || 0)
             }
         });
         
     } catch (e) {
         console.error(`[merge] Error:`, e);
-        if (temp) cleanupFull(temp); // Error - cleanup immediately
+        if (slotAcquired) mergeQueueRelease(id);
+        if (temp) cleanupFull(temp);
         
         return NextResponse.json({ 
             error: e instanceof Error ? e.message : 'Merge failed' 
@@ -469,8 +498,20 @@ export async function OPTIONS() {
     return new NextResponse(null, {
         headers: {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type'
         }
+    });
+}
+
+// ============================================================================
+// Queue Status Endpoint
+// ============================================================================
+
+export async function GET() {
+    const status = mergeQueueStatus();
+    return NextResponse.json({
+        success: true,
+        queue: status
     });
 }

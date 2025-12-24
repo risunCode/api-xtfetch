@@ -9,9 +9,9 @@ import { MediaFormat } from '@/lib/types';
 import { utilAddFormat, utilDecodeUrl } from '@/lib/utils';
 import { httpGet, INSTAGRAM_HEADERS } from '@/lib/http';
 import { cookieParse } from '@/lib/cookies';
-import { platformMatches } from '@/core/config';
+import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { logger } from './helper/logger';
+import { logger } from '../shared/logger';
 
 type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
 
@@ -53,9 +53,13 @@ interface GraphQLMediaNode {
 async function fetchGraphQL(shortcode: string, cookie?: string): Promise<{ media: GraphQLMedia | null; error?: string }> {
     const variables = JSON.stringify({ shortcode, fetch_tagged_user_count: null, hoisted_comment_id: null, hoisted_reply_id: null });
     const url = `https://www.instagram.com/graphql/query/?doc_id=${GRAPHQL_DOC_ID}&variables=${encodeURIComponent(variables)}`;
+    const timeout = sysConfigScraperTimeout('instagram');
     
     try {
-        const res = await httpGet(url, { headers: cookie ? { ...INSTAGRAM_HEADERS, Cookie: cookie } : INSTAGRAM_HEADERS });
+        const res = await httpGet(url, { 
+            headers: cookie ? { ...INSTAGRAM_HEADERS, Cookie: cookie } : INSTAGRAM_HEADERS,
+            timeout 
+        });
         if (res.status !== 200) return { media: null, error: `HTTP ${res.status}` };
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
         return { media: data.data?.xdt_shortcode_media || null };
@@ -100,7 +104,7 @@ function parseGraphQLMedia(media: GraphQLMedia, shortcode: string): ScraperResul
     const isCarousel = formats.length > 1;
     const type = isCarousel ? 'mixed' : (hasVideo ? 'video' : 'image');
     
-    return { success: true, data: { title, thumbnail, author: author ? `@${author}` : '', authorName, description: caption, postedAt, engagement: (engagement.likes || engagement.comments || engagement.views) ? engagement : undefined, formats, url: `https://www.instagram.com/p/${shortcode}/`, type } };
+    return { success: true, data: { title, thumbnail, author: author ? `@${author}` : '', authorName, description: caption, postedAt, engagement: (engagement.likes || engagement.comments || engagement.views) ? engagement : undefined, formats, url: `https://www.instagram.com/p/${shortcode}/`, type, usedCookie: false } };
 }
 
 async function fetchEmbed(shortcode: string): Promise<ScraperResult> {
@@ -127,8 +131,9 @@ async function fetchEmbed(shortcode: string): Promise<ScraperResult> {
 
 async function getUserId(username: string, cookie: string): Promise<string | null> {
     const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
+    const timeout = sysConfigScraperTimeout('instagram');
     try {
-        const res = await httpGet(url, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie } });
+        const res = await httpGet(url, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie }, timeout });
         if (res.status !== 200) return null;
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
         return data?.data?.user?.id || null;
@@ -149,7 +154,8 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
         if (!userId) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie may be expired or user not found. Please update your cookie.');
         
         const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
-        const res = await httpGet(apiUrl, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie } });
+        const timeout = sysConfigScraperTimeout('instagram');
+        const res = await httpGet(apiUrl, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie }, timeout });
         if (res.status === 401 || res.status === 403) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired. Please update your cookie.');
         if (res.status !== 200) return createError(ScraperErrorCode.API_ERROR, `Story API error: ${res.status}`);
         

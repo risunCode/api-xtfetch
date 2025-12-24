@@ -5,10 +5,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { rateLimit } from '@/lib/redis';
+import { rateLimit } from '@/lib/database';
 import { chat, getChatSession, type GeminiModel } from '@/lib/integrations/ai-provider';
 import { serviceConfigLoad, serviceConfigGetGeminiRateLimit, serviceConfigGetGeminiRateWindow } from '@/core/config';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 
 // Magma API models (external)
 type MagmaModel = 'gpt5' | 'copilot-smart';

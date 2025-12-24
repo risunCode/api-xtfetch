@@ -13,12 +13,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runScraper } from '@/core/scrapers';
 import { prepareUrl, prepareUrlSync } from '@/lib/url';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 import { authVerifyApiKey } from '@/lib/auth';
 import { platformDetect } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
-import { recordDownloadStat, getCountryFromHeaders } from '@/lib/supabase';
+import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
 import { 
     cacheGetQuick, 
     cacheGet, 

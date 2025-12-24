@@ -3,7 +3,7 @@
  * Centralized security: validation, encryption, auth, rate limiting
  */
 
-import { redis } from '@/lib/redis';
+import { redis } from '@/lib/database';
 
 // Security utilities
 export {

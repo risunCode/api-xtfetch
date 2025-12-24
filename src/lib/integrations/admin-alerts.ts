@@ -6,8 +6,8 @@
  * functionality can be added later.
  */
 
-import { supabaseAdmin } from '@/lib/supabase';
-import { logger } from '@/lib/services/helper/logger';
+import { supabaseAdmin } from '@/lib/database';
+import { logger } from '@/lib/services/shared/logger';
 
 type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
 

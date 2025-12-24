@@ -4,8 +4,8 @@
  * Handles API key rotation and chat functionality
  */
 
-import { supabaseAdmin } from '@/lib/supabase';
-import { logger } from '@/lib/services/helper/logger';
+import { supabaseAdmin } from '@/lib/database';
+import { logger } from '@/lib/services/shared/logger';
 
 // ============================================================================
 // Types

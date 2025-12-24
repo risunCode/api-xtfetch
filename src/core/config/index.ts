@@ -21,7 +21,7 @@ export {
     platformGetApiEndpoint,
     type PlatformId,
     type PlatformDomainConfig,
-} from '@/lib/config';
+} from '@/lib/config/platform';
 
 // Service Configuration
 export {
@@ -41,12 +41,8 @@ export {
     serviceConfigGetGeminiRateLimit,
     serviceConfigGetGeminiRateWindow,
     type ServiceConfig,
-    type PlatformConfig,
-    type PlatformStats,
-    type MaintenanceType,
     type ServiceConfigDB,
-    type SystemConfigDB,
-} from '@/lib/config';
+} from '@/lib/config/service';
 
 // System Configuration
 export {
@@ -57,7 +53,11 @@ export {
     sysConfigCacheTtlApikeys,
     sysConfigCacheTtlCookies,
     sysConfigCacheTtlUseragents,
-} from '@/lib/config';
+    type PlatformConfig,
+    type PlatformStats,
+    type MaintenanceType,
+    type SystemConfigDB,
+} from '@/lib/config/system';
 
 // Environment Helpers
 export function getEnv(key: string, defaultValue?: string): string {

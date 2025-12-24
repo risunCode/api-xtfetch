@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/database';
 
 interface DownloadStat {
     id: string;

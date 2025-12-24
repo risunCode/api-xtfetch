@@ -11,7 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, supabaseAdmin } from '@/lib/supabase';
+import { supabase, supabaseAdmin } from '@/lib/database';
 import { authVerifyAdminSession } from '@/core/security';
 import { transformUsers, type UserDatabase } from '@/lib/utils';
 

@@ -18,7 +18,7 @@ import { type PlatformId, platformGetReferer, platformGetDomainConfig } from '@/
 import { httpGetUserAgent, DESKTOP_USER_AGENT, httpRandomSleep } from '@/lib/http';
 import { ScraperErrorCode, ScraperResult, isRetryable, ERROR_MESSAGES } from '@/core/scrapers/types';
 import { sysConfigScraperMaxRetries, sysConfigScraperRetryDelay } from '@/core/config';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -694,9 +694,14 @@ export async function utilFetchFilesize(url: string, platform: PlatformId, timeo
  * Batch fetch file sizes for multiple formats
  * @param formats - Array of media formats
  * @param platform - Platform identifier
+ * @param durationSec - Optional duration for bitrate estimation
  * @returns Formats array with filesize populated where available
  */
-export async function utilFetchFilesizes(formats: MediaFormat[], platform: PlatformId): Promise<MediaFormat[]> {
+export async function utilFetchFilesizes(
+    formats: MediaFormat[], 
+    platform: PlatformId,
+    durationSec?: number
+): Promise<MediaFormat[]> {
     // Fetch sizes in parallel with concurrency limit
     const BATCH_SIZE = 5;
     const results = [...formats];
@@ -704,7 +709,7 @@ export async function utilFetchFilesizes(formats: MediaFormat[], platform: Platf
     for (let i = 0; i < results.length; i += BATCH_SIZE) {
         const batch = results.slice(i, i + BATCH_SIZE);
         const sizes = await Promise.all(
-            batch.map(f => utilFetchFilesize(f.url, platform))
+            batch.map(f => utilFetchFilesize(f.url, platform, 5000))
         );
         
         sizes.forEach((size, idx) => {

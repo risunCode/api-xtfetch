@@ -2,7 +2,32 @@
 
 ## Overview
 
-Sistem resolver kita adalah **unified pipeline** yang handle semua platform (Facebook, Instagram, YouTube, TikTok, Weibo) dengan satu flow yang konsisten. Ini memungkinkan:
+Sistem resolver kita adalah **unified pipeline** yang handle semua platform (Facebook, Instagram, YouTube, TikTok, Weibo) dengan satu flow yang konsisten. 
+
+### 🎯 UNIFIED = GLOBAL (No Per-Scraper Logic!)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  UNIFIED SYSTEMS (Global - Shared by ALL scrapers)                           │
+│  ─────────────────────────────────────────────────                           │
+│                                                                              │
+│  1. BrowserProfiles    → Rotating User-Agent, Sec-Ch-Ua headers              │
+│  2. Cookie Pool        → Rotating cookies per platform                       │
+│  3. URL Pipeline       → Normalize, resolve, extract content ID              │
+│  4. Rate Limiting      → Per-platform throttling                             │
+│  5. Cache System       → Redis + Supabase hybrid cache                       │
+│                                                                              │
+│  ❌ NO hardcoded logic per scraper!                                          │
+│  ❌ NO subdomain conversion in code!                                         │
+│  ❌ NO platform-specific User-Agent strings!                                 │
+│                                                                              │
+│  ✅ Server redirects based on our User-Agent (from BrowserProfiles)          │
+│  ✅ All scrapers call same unified functions                                 │
+│  ✅ Anti-ban logic is centralized in lib/http.ts                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Ini memungkinkan:
 
 1. **Normalisasi URL** - Bersihkan tracking params, normalize subdomain
 2. **Platform Detection** - Auto-detect platform dari URL
@@ -35,14 +60,20 @@ api-xtfetch/src/lib/
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  STEP 1: NORMALIZE URL                                                       │
-│  ─────────────────────                                                       │
+│  STEP 1: NORMALIZE URL (Local - No HTTP)                                     │
+│  ───────────────────────────────────────                                     │
 │  • Add https:// if missing                                                   │
-│  • Convert m.facebook.com → www.facebook.com                                 │
-│  • Convert mbasic.facebook.com → www.facebook.com                            │
-│  • Convert mobile.twitter.com → twitter.com                                  │
-│  • Keep web.facebook.com as-is (valid subdomain)                             │
 │  • Remove tracking params (fbclid, igshid, utm_*, __cft__, dll)              │
+│                                                                              │
+│  NOTE: Subdomain conversion (m.facebook.com → web.facebook.com) happens      │
+│  during URL RESOLUTION, NOT here! Facebook server redirects based on our     │
+│  User-Agent (desktop browser profile from BrowserProfiles table).            │
+│                                                                              │
+│  Example flow:                                                               │
+│  1. Input: m.facebook.com/stories/123                                        │
+│  2. We send request with Desktop User-Agent (Chrome 143)                     │
+│  3. Facebook server sees desktop UA → redirects to web.facebook.com          │
+│  4. Resolved: web.facebook.com/stories/123                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -228,7 +259,49 @@ api-xtfetch/src/lib/
 
 ---
 
-## 🍪 Cookie Retry Logic (Guest-First Strategy)
+## 🛡️ Anti-Ban System (UNIFIED - GLOBAL)
+
+### BrowserProfiles Table
+Semua request HTTP pakai rotating browser profiles dari database:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  browser_profiles table (Supabase)                                           │
+│  ─────────────────────────────────                                           │
+│  • user_agent: "Mozilla/5.0 (Windows NT 10.0...) Chrome/143.0.0.0..."        │
+│  • sec_ch_ua: '"Google Chrome";v="143", "Chromium";v="143"...'               │
+│  • sec_ch_ua_platform: '"Windows"' | '"macOS"'                               │
+│  • sec_ch_ua_mobile: '?0' (desktop) | '?1' (mobile)                          │
+│  • accept_language: 'en-US,en;q=0.9'                                         │
+│  • browser: 'chrome' | 'firefox' | 'safari'                                  │
+│  • device_type: 'desktop' | 'mobile'                                         │
+│  • platform: 'all' | 'facebook' | 'instagram' | etc                          │
+│  • priority: weighted random selection                                       │
+│  • enabled: true/false                                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works (GLOBAL - No Per-Scraper Logic!)
+```typescript
+// httpGetRotatingHeadersAsync() - UNIFIED for ALL platforms
+const headers = await httpGetRotatingHeadersAsync({ platform: 'facebook' });
+// Returns headers with rotated User-Agent, Sec-Ch-Ua, etc from DB
+
+// httpResolveUrl() uses these headers automatically
+// Server sees desktop Chrome UA → redirects m.facebook.com to web.facebook.com
+```
+
+### Why This Matters
+1. **m.facebook.com/stories/123** → Request with Desktop UA
+2. **Facebook server** sees Chrome 143 Windows → Redirects to **web.facebook.com**
+3. **No hardcoded subdomain conversion** in our code!
+4. Server decides based on User-Agent = More natural, less detectable
+
+---
+
+## 🍪 Cookie Pool System (UNIFIED - GLOBAL)
+
+### Cookie Rotation (Guest-First Strategy)
 
 ### Why Guest-First?
 

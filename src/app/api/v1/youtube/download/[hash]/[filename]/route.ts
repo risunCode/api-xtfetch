@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createReadStream, existsSync, statSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 
 const DOWNLOAD_BASE = path.join(tmpdir(), 'xtfetch-yt-api');
 

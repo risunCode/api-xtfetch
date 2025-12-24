@@ -2,7 +2,7 @@
  * Central URL Pipeline
  */
 
-import { logger } from '@/lib/services/helper/logger';
+import { logger } from '@/lib/services/shared/logger';
 import { type PlatformId, platformDetect } from '@/core/config';
 import { httpResolveUrl, ResolveResult } from '@/lib/http';
 
@@ -129,12 +129,9 @@ export function normalizeUrl(url: string): string {
   let n = url.trim();
   if (!/^https?:\/\//i.test(n)) n = 'https://' + n;
   
-  // Only normalize mobile subdomains, NOT web.facebook.com
-  // web.facebook.com is valid and should be kept as-is (resolver returns this)
-  n = n.replace(/^(https?:\/\/)m\.(facebook\.com)/i, '$1www.$2')
-       .replace(/^(https?:\/\/)mbasic\.(facebook\.com)/i, '$1www.$2')
-       .replace(/^(https?:\/\/)mobile\.(twitter\.com)/i, '$1$2')
-       .replace(/^(https?:\/\/)mobile\.(x\.com)/i, '$1$2');
+  // NO subdomain conversion here!
+  // Server handles redirect based on User-Agent from BrowserProfiles (UNIFIED)
+  // m.facebook.com → request with desktop UA → Facebook redirects to web.facebook.com
   
   return cleanTrackingParams(n);
 }
