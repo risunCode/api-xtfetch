@@ -20,8 +20,10 @@ import { logger } from '@/lib/services/shared/logger';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
+// IMPORTANT: Auth MUST use service role key, NOT anon key
+// Anon key cannot verify JWT tokens properly
 const authClient = supabaseUrl && supabaseServiceKey 
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null;
@@ -50,8 +52,8 @@ export interface AuthResult {
  */
 export async function authVerifySession(request: NextRequest): Promise<AuthResult> {
     if (!authClient) {
-        logger.error('auth', 'Supabase not configured');
-        return { valid: false, error: 'Auth service not configured' };
+        logger.error('auth', 'Supabase not configured - SUPABASE_SERVICE_ROLE_KEY missing!');
+        return { valid: false, error: 'Auth service not configured (missing service key)' };
     }
     
     const authHeader = request.headers.get('Authorization');
