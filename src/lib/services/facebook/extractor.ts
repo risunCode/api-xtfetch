@@ -153,37 +153,70 @@ const decodeUnicode = (s: string): string =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Extract video URLs from HTML in a single regex pass
+ * Video URL patterns with priority (higher = better, usually has audio)
+ * 
+ * Priority order:
+ * 1. playable_url_quality_hd - HD muxed (video+audio)
+ * 2. playable_url - SD muxed (video+audio)  
+ * 3. browser_native_hd_url - HD but often video-only
+ * 4. browser_native_sd_url - SD but often video-only
+ * 5. hd_src / sd_src - legacy, varies
+ */
+const VIDEO_URL_PATTERNS = [
+    // Priority 1: playable_url (usually muxed with audio)
+    { pattern: /"playable_url_quality_hd":"(https:[^"]+)"/, quality: 'hd', priority: 10 },
+    { pattern: /"playable_url":"(https:[^"]+)"/, quality: 'sd', priority: 9 },
+    // Priority 2: browser_native (often video-only, no audio)
+    { pattern: /"browser_native_hd_url":"(https:[^"]+)"/, quality: 'hd', priority: 5 },
+    { pattern: /"browser_native_sd_url":"(https:[^"]+)"/, quality: 'sd', priority: 4 },
+    // Priority 3: legacy src patterns
+    { pattern: /"hd_src(?:_no_ratelimit)?":"(https:[^"]+)"/, quality: 'hd', priority: 3 },
+    { pattern: /"sd_src(?:_no_ratelimit)?":"(https:[^"]+)"/, quality: 'sd', priority: 2 },
+];
+
+/**
+ * Extract video URLs from HTML with audio priority
+ * 
+ * Prioritizes playable_url (muxed video+audio) over browser_native_* 
+ * which often contains video-only streams without audio.
  * 
  * @param html - HTML content to search
  * @returns Object with HD and SD video URLs if found
- * 
- * @example
- * ```typescript
- * const { hd, sd, thumbnail } = fbExtractVideos(html);
- * if (hd) console.log('Found HD video:', hd);
- * ```
  */
 export function fbExtractVideos(html: string): FbVideoResult {
     const result: FbVideoResult = {};
-    let match;
     
-    // Reset lastIndex for global regex
-    FB_VIDEO_PATTERN.lastIndex = 0;
+    // Collect all found URLs with their priority
+    const hdCandidates: { url: string; priority: number }[] = [];
+    const sdCandidates: { url: string; priority: number }[] = [];
     
-    while ((match = FB_VIDEO_PATTERN.exec(html)) !== null) {
-        const url = utilDecodeUrl(match[1]);
-        const key = match[0];
-        
-        // Prioritize HD URLs
-        if (!result.hd && (key.includes('hd') || key.includes('quality_hd'))) {
-            result.hd = url;
-        } else if (!result.sd && !key.includes('hd')) {
-            result.sd = url;
+    for (const { pattern, quality, priority } of VIDEO_URL_PATTERNS) {
+        const match = html.match(pattern);
+        if (match?.[1]) {
+            const url = utilDecodeUrl(match[1]);
+            if (quality === 'hd') {
+                hdCandidates.push({ url, priority });
+            } else {
+                sdCandidates.push({ url, priority });
+            }
         }
-        
-        // Early exit if we have both
-        if (result.hd && result.sd) break;
+    }
+    
+    // Sort by priority (highest first) and pick best
+    hdCandidates.sort((a, b) => b.priority - a.priority);
+    sdCandidates.sort((a, b) => b.priority - a.priority);
+    
+    if (hdCandidates.length > 0) {
+        result.hd = hdCandidates[0].url;
+    }
+    if (sdCandidates.length > 0 && sdCandidates[0].url !== result.hd) {
+        result.sd = sdCandidates[0].url;
+    }
+    
+    // If only SD found but it's high quality, use as HD
+    if (!result.hd && result.sd) {
+        result.hd = result.sd;
+        result.sd = undefined;
     }
     
     // Extract thumbnail
