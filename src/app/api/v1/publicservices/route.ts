@@ -38,14 +38,23 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
     .map(o => o.trim().toLowerCase())
     .filter(Boolean);
 
-function isOriginAllowed(request: NextRequest): boolean {
+// Bridge secret key
+const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
+
+function isRequestAllowed(request: NextRequest): boolean {
+    // Check bridge secret first (server-to-server)
+    const bridgeSecret = request.headers.get('x-bridge-secret');
+    if (BRIDGE_SECRET && bridgeSecret === BRIDGE_SECRET) {
+        return true;
+    }
+    
     // If no whitelist configured, allow all (dev mode)
     if (ALLOWED_ORIGINS.length === 0) return true;
     
     const origin = request.headers.get('origin')?.toLowerCase();
     const referer = request.headers.get('referer')?.toLowerCase();
     
-    // Check origin header
+    // Check origin header (browser requests)
     if (origin) {
         return ALLOWED_ORIGINS.some(allowed => 
             origin === allowed || origin.endsWith(`.${allowed.replace(/^https?:\/\//, '')}`)
@@ -62,8 +71,8 @@ function isOriginAllowed(request: NextRequest): boolean {
 }
 
 export async function POST(request: NextRequest) {
-    // Origin whitelist check
-    if (!isOriginAllowed(request)) {
+    // Origin/Bridge secret check
+    if (!isRequestAllowed(request)) {
         return NextResponse.json(
             { success: false, error: 'Unauthorized origin' },
             { status: 403 }
