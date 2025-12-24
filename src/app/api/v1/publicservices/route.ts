@@ -44,6 +44,14 @@ const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
 function isRequestAllowed(request: NextRequest): boolean {
     // Check bridge secret first (server-to-server)
     const bridgeSecret = request.headers.get('x-bridge-secret');
+    
+    // Debug log
+    console.log('[publicservices] Bridge secret check:', {
+        hasEnvSecret: !!BRIDGE_SECRET,
+        hasHeaderSecret: !!bridgeSecret,
+        match: BRIDGE_SECRET && bridgeSecret === BRIDGE_SECRET
+    });
+    
     if (BRIDGE_SECRET && bridgeSecret === BRIDGE_SECRET) {
         return true;
     }
