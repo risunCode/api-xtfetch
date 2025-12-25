@@ -3,6 +3,9 @@
 
 FROM node:20-slim
 
+# Cache buster - change this value to force rebuild
+ARG CACHE_BUST=20241226v2
+
 WORKDIR /app
 
 # Install Python, pip, and ffmpeg
@@ -25,7 +28,7 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build Next.js
+# Build Next.js (no cache)
 RUN npm run build
 
 # Remove devDependencies after build
