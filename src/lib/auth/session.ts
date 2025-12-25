@@ -61,50 +61,48 @@ export interface AuthResult {
 
 /**
  * Verify user session from JWT token
+ * Uses Supabase Auth API directly for token verification
  */
 export async function authVerifySession(request: NextRequest): Promise<AuthResult> {
-    if (!authClient) {
-        console.error('[Auth] Supabase not configured - SUPABASE_SERVICE_ROLE_KEY missing!');
-        return { valid: false, error: 'Auth service not configured (missing service key)' };
-    }
-    
     const authHeader = request.headers.get('Authorization');
     
-    // Always log auth attempts for debugging
     console.log(`[Auth] Header present: ${!!authHeader}, starts with Bearer: ${authHeader?.startsWith('Bearer ')}`);
     
     if (!authHeader?.startsWith('Bearer ')) {
-        console.log(`[Auth] Rejected: No Bearer prefix. Header value: ${authHeader?.substring(0, 50) || 'null'}`);
         return { valid: false, error: 'No authorization token' };
     }
     
     const token = authHeader.slice(7);
-    console.log(`[Auth] Token length: ${token.length}, first 20 chars: ${token.substring(0, 20)}...`);
+    console.log(`[Auth] Token length: ${token.length}`);
     
     try {
-        const { data: { user }, error } = await authClient.auth.getUser(token);
+        // Call Supabase Auth API directly to verify token
+        const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'apikey': supabaseServiceKey,
+            },
+        });
         
-        // Always log Supabase response
-        console.log(`[Auth] Supabase response - user: ${user?.id || 'null'}, error: ${error?.message || 'none'}`);
-        
-        if (error || !user) {
-            console.error(`[Auth] Token verification failed: ${error?.message || 'No user returned'}`);
-            return { valid: false, error: error?.message || 'Invalid token' };
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[Auth] Supabase API error: ${response.status} - ${errorText}`);
+            return { valid: false, error: 'Invalid or expired token' };
         }
         
-        if (DEBUG_AUTH) {
-            console.log(`[Auth] User verified: ${user.id}`);
+        const user = await response.json();
+        console.log(`[Auth] User verified: ${user.id}`);
+        
+        // Get user profile with role
+        if (!authClient) {
+            return { valid: true, userId: user.id, email: user.email, role: 'user' };
         }
         
-        const { data: profile, error: profileError } = await authClient
+        const { data: profile } = await authClient
             .from('users')
             .select('username, role')
             .eq('id', user.id)
             .single();
-        
-        if (profileError && DEBUG_AUTH) {
-            console.error(`[Auth] Profile fetch error: ${profileError.message}`);
-        }
         
         const role = (profile?.role as UserRole) || 'user';
         
