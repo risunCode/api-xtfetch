@@ -15,3 +15,5 @@ export { statusComposer } from './status';
 export { historyComposer, botDownloadGetHistory } from './history';
 export { premiumComposer, botUserLinkApiKey, botUserHasPremium } from './premium';
 export { mystatusComposer, botUserGetPremiumStatus, botUserGetTotalDownloads } from './mystatus';
+export { menuComposer } from './menu';
+export { privacyComposer } from './privacy';

@@ -42,6 +42,15 @@ export interface SessionData {
     pendingRetryUrl?: string;
     /** Last platform detected */
     lastPlatform?: PlatformId;
+    /** Store scraper result for callback (quality selection) */
+    pendingDownload?: {
+        url: string;
+        visitorId: string;
+        platform: PlatformId;
+        result: DownloadResult;
+        userMsgId: number;
+        timestamp: number;
+    };
 }
 
 // ============================================================================
@@ -60,6 +69,38 @@ export interface BotContext extends Context, SessionFlavor<SessionData> {
         resetAt?: Date;
         cooldownSeconds?: number;
     };
+}
+
+// ============================================================================
+// CONTENT TYPE
+// ============================================================================
+
+/** Content type for smart media handling */
+export type ContentType = 'video' | 'youtube' | 'photo_single' | 'photo_album';
+
+/**
+ * Detect content type from scraper result
+ */
+export function detectContentType(result: DownloadResult): ContentType {
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    const images = result.formats?.filter(f => f.type === 'image') || [];
+    
+    // YouTube always needs preview (conversion required)
+    if (result.platform === 'youtube') {
+        return 'youtube';
+    }
+    
+    // Has video → send video directly
+    if (videos.length > 0) {
+        return 'video';
+    }
+    
+    // Photos
+    if (images.length > 1) {
+        return 'photo_album';
+    }
+    
+    return 'photo_single';
 }
 
 // ============================================================================

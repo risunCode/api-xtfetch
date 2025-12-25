@@ -1,16 +1,16 @@
 /**
  * Telegram Bot URL Handler
- * Auto-detects social media URLs and processes downloads
+ * Auto-detects social media URLs and processes downloads with smart content detection
  * 
- * Flow:
- * 1. Detect social media URL in message
- * 2. Send "⏳ Processing..." message (save message_id)
- * 3. Call internal scraper
- * 4. On success: DELETE processing message, send media file, delete user message
- * 5. On fail: EDIT processing message to error with retry button
+ * Flow by content type:
+ * - Video (non-YouTube): Send video directly with quality buttons
+ * - YouTube: Send thumbnail preview with quality buttons (user must select)
+ * - Photo (single): Send photo directly with Original URL button
+ * - Photo (album): Send all photos as media group with Original URL button
  */
 
 import { Bot, InputFile, InlineKeyboard } from 'grammy';
+import type { InputMediaPhoto } from 'grammy/types';
 
 import { platformDetect, type PlatformId } from '@/core/config';
 import { runScraper } from '@/core/scrapers';
@@ -19,20 +19,17 @@ import { cookiePoolGetRotating } from '@/lib/cookies';
 import { logger } from '@/lib/services/shared/logger';
 import { recordDownloadStat } from '@/lib/database';
 
-import type { BotContext, DownloadResult } from '../types';
-import { BOT_MESSAGES } from '../types';
+import type { BotContext, DownloadResult, ContentType } from '../types';
+import { BOT_MESSAGES, detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { errorKeyboard } from '../keyboards';
-import { downloadQueue, isQueueAvailable, QUEUE_CONFIG, type DownloadJobData } from '../queue';
+import { errorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectQualities } from '../keyboards';
 
 // ============================================================================
 // URL DETECTION
 // ============================================================================
 
-/** Regex to extract URLs from message text */
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
 
-/** Supported platform domains for quick check */
 const SUPPORTED_DOMAINS = [
     'youtube.com', 'youtu.be',
     'instagram.com', 'instagr.am',
@@ -42,14 +39,10 @@ const SUPPORTED_DOMAINS = [
     'weibo.com', 'weibo.cn',
 ];
 
-/**
- * Extract first social media URL from message text
- */
 function botUrlExtract(text: string): string | null {
     const matches = text.match(URL_REGEX);
     if (!matches) return null;
 
-    // Find first URL that matches a supported platform
     for (const url of matches) {
         try {
             const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
@@ -61,28 +54,9 @@ function botUrlExtract(text: string): string | null {
             continue;
         }
     }
-
     return null;
 }
 
-/**
- * Get platform emoji for display
- */
-function botUrlGetPlatformEmoji(platform: PlatformId): string {
-    const emojis: Record<PlatformId, string> = {
-        youtube: '▶️',
-        instagram: '📸',
-        tiktok: '🎵',
-        twitter: '𝕏',
-        facebook: '📘',
-        weibo: '🔴',
-    };
-    return emojis[platform] || '📥';
-}
-
-/**
- * Get platform display name
- */
 function botUrlGetPlatformName(platform: PlatformId): string {
     const names: Record<PlatformId, string> = {
         youtube: 'YouTube',
@@ -96,24 +70,19 @@ function botUrlGetPlatformName(platform: PlatformId): string {
 }
 
 // ============================================================================
-// INTERNAL SCRAPER CALL
+// SCRAPER
 // ============================================================================
 
-/**
- * Call internal scraper (same logic as /api/v1/publicservices)
- * Uses private cookie tier for premium users, public for free users
- */
 async function botUrlCallScraper(url: string, isPremium: boolean = false): Promise<DownloadResult> {
     const startTime = Date.now();
 
     try {
-        // Prepare URL (resolve short URLs, detect platform)
         const urlResult = await prepareUrl(url);
         
         if (!urlResult.assessment.isValid || !urlResult.platform) {
             return {
                 success: false,
-                error: urlResult.assessment.errorMessage || 'Invalid URL or unsupported platform',
+                error: urlResult.assessment.errorMessage || 'Invalid URL',
                 errorCode: 'INVALID_URL',
             };
         }
@@ -121,18 +90,14 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
         const platform = urlResult.platform;
         logger.request(platform, 'telegram' as 'web');
 
-        // Get cookie from pool - premium users get private tier with fallback to public
         const tier = isPremium ? 'private' : 'public';
         const poolCookie = await cookiePoolGetRotating(platform, tier);
 
-        // Run scraper
         const result = await runScraper(platform, urlResult.resolvedUrl, {
             cookie: poolCookie || undefined,
         });
 
         const responseTime = Date.now() - startTime;
-
-        // Record stats (async, don't wait)
         recordDownloadStat(platform, result.success, responseTime, undefined, 'telegram').catch(() => {});
 
         if (result.success && result.data) {
@@ -166,219 +131,74 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
 }
 
 // ============================================================================
-// MESSAGE HANDLERS
+// CAPTION BUILDER
 // ============================================================================
 
 /**
- * Send processing message
+ * Build caption with bold platform name and full title (no truncation)
  */
-async function botUrlSendProcessing(ctx: BotContext, platform: PlatformId): Promise<number | null> {
-    try {
-        const emoji = botUrlGetPlatformEmoji(platform);
-        const name = botUrlGetPlatformName(platform);
-        
-        const message = await ctx.reply(`${emoji} Processing ${name} link...`, {
-            reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
-        });
-        
-        return message.message_id;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Delete processing message
- */
-async function botUrlDeleteProcessing(ctx: BotContext, messageId: number): Promise<void> {
-    try {
-        await ctx.api.deleteMessage(ctx.chat!.id, messageId);
-    } catch {
-        // Ignore deletion errors
-    }
-}
-
-/**
- * Delete user's original message (clean chat feature)
- * Called after successfully sending media
- */
-async function deleteUserMessage(ctx: BotContext): Promise<void> {
-    try {
-        if (ctx.message?.message_id && ctx.chat?.id) {
-            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
-        }
-    } catch {
-        // Ignore - message may already be deleted or bot lacks permission
-    }
-}
-
-// ============================================================================
-// CAPTION & KEYBOARD BUILDERS
-// ============================================================================
-
-/**
- * Build minimal caption for media
- * Format: Author (first line) + Title truncated to 20 chars (second line)
- */
-function buildMinimalCaption(result: DownloadResult): string {
-    let caption = '';
+function buildCaption(result: DownloadResult): string {
+    const platformName = botUrlGetPlatformName(result.platform!);
     
-    // Author first
-    if (result.author) {
-        caption = result.author;
-    }
+    let caption = `*${platformName}*\n\n`;
     
-    // Title second (max 20 chars)
+    // Full title - NO TRUNCATION
     if (result.title) {
-        const shortTitle = result.title.substring(0, 20);
-        caption += caption ? `\n${shortTitle}${result.title.length > 20 ? '...' : ''}` : shortTitle;
+        caption += `${result.title}\n`;
     }
     
-    return caption;
-}
-
-/**
- * Build inline keyboard for media with Origin URL and optional HD button
- */
-function buildMediaKeyboard(originalUrl: string, hdUrl?: string): InlineKeyboard {
-    const keyboard = new InlineKeyboard();
-    
-    // HD Quality - only if file >40MB (hdUrl is passed when SD was sent instead)
-    if (hdUrl) {
-        keyboard.url('🎬 HD Quality', hdUrl);
+    // Author
+    if (result.author) {
+        caption += `${result.author}`;
     }
     
-    // Origin URL - always show
-    keyboard.url('🔗 Origin URL', originalUrl);
-    
-    return keyboard;
+    return caption.trim();
 }
 
+// ============================================================================
+// SEND FUNCTIONS BY CONTENT TYPE
+// ============================================================================
+
 /**
- * Edit processing message to show error
+ * Send video directly (non-YouTube)
+ * Video is sent immediately with quality buttons for re-download options
  */
-async function botUrlEditToError(
-    ctx: BotContext, 
-    messageId: number, 
-    error: string,
-    url: string
-): Promise<void> {
+async function sendVideoDirectly(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string,
+    visitorId: string
+): Promise<boolean> {
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    if (videos.length === 0) return false;
+
+    // Get best quality video (prefer HD)
+    const hdVideo = videos.find(f => 
+        f.quality.includes('1080') || f.quality.includes('720') || f.quality.toLowerCase().includes('hd')
+    );
+    const videoToSend = hdVideo || videos[0];
+
+    const caption = buildCaption(result);
+    const qualities = detectQualities(result);
+    const keyboard = buildVideoKeyboard(originalUrl, visitorId, qualities);
+
     try {
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            messageId,
-            `❌ ${error}`,
-            {
-                reply_markup: errorKeyboard(url),
-            }
-        );
-    } catch {
-        // If edit fails, try sending new message
-        await ctx.reply(`❌ ${error}`, {
-            reply_markup: errorKeyboard(url),
+        await ctx.replyWithVideo(new InputFile({ url: videoToSend.url }), {
+            caption,
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
         });
-    }
-}
-
-/**
- * Send media result to user
- * Features:
- * - Minimal caption (author + truncated title)
- * - Origin URL button (always)
- * - HD button (if video >40MB and SD available)
- * - Large file handling (>40MB sends SD or direct link)
- */
-async function botUrlSendMedia(ctx: BotContext, result: DownloadResult, originalUrl: string): Promise<boolean> {
-    if (!result.success || !result.formats || result.formats.length === 0) {
-        return false;
-    }
-
-    const MAX_FILE_SIZE = 40 * 1024 * 1024; // 40MB Telegram limit
-    
-    // Build minimal caption
-    const caption = buildMinimalCaption(result);
-
-    // Find video and image formats
-    const videoFormats = result.formats.filter(f => f.type === 'video');
-    const imageFormats = result.formats.filter(f => f.type === 'image');
-    
-    // Sort video formats by quality (HD first, then SD)
-    const hdVideo = videoFormats.find(f => 
-        f.quality.toLowerCase().includes('hd') || 
-        f.quality.includes('1080') || 
-        f.quality.includes('720')
-    ) || videoFormats[0];
-    
-    const sdVideo = videoFormats.find(f => 
-        f.quality.toLowerCase().includes('sd') || 
-        f.quality.includes('480') || 
-        f.quality.includes('360')
-    ) || (videoFormats.length > 1 ? videoFormats[videoFormats.length - 1] : null);
-
-    const imageFormat = imageFormats[0];
-
-    // Determine which format to send
-    let formatToSend = hdVideo || imageFormat;
-    let hdUrl: string | undefined;
-
-    // Check if video is too large (>40MB)
-    if (formatToSend?.type === 'video' && formatToSend.filesize && formatToSend.filesize > MAX_FILE_SIZE) {
-        // Try to find SD format
-        if (sdVideo && sdVideo !== hdVideo && (!sdVideo.filesize || sdVideo.filesize <= MAX_FILE_SIZE)) {
-            // Send SD, provide HD link
-            hdUrl = formatToSend.url;
-            formatToSend = sdVideo;
-        } else {
-            // No suitable SD, send direct link instead
-            const keyboard = buildMediaKeyboard(originalUrl, formatToSend.url);
-            try {
-                await ctx.reply(
-                    `📥 *Video too large for Telegram*\n\n${caption}\n\nUse the buttons below to download:`,
-                    {
-                        parse_mode: 'Markdown',
-                        reply_markup: keyboard,
-                        link_preview_options: { is_disabled: true },
-                    }
-                );
-                return true;
-            } catch {
-                return false;
-            }
-        }
-    }
-
-    if (!formatToSend) {
-        return false;
-    }
-
-    // Build keyboard with Origin URL (and HD if we're sending SD)
-    const keyboard = buildMediaKeyboard(originalUrl, hdUrl);
-
-    try {
-        if (formatToSend.type === 'video') {
-            await ctx.replyWithVideo(new InputFile({ url: formatToSend.url }), {
-                caption,
-                reply_markup: keyboard,
-            });
-        } else {
-            await ctx.replyWithPhoto(new InputFile({ url: formatToSend.url }), {
-                caption,
-                reply_markup: keyboard,
-            });
-        }
         return true;
     } catch (error) {
-        logger.error('telegram', error, 'SEND_MEDIA');
+        logger.error('telegram', error, 'SEND_VIDEO');
         
-        // Fallback: send URL as text with keyboard
+        // Fallback: send as link
         try {
-            await ctx.reply(
-                `📥 Download link:\n\n${caption}\n\n${formatToSend.url}`,
-                {
-                    reply_markup: keyboard,
-                    link_preview_options: { is_disabled: true },
-                }
-            );
+            await ctx.reply(`📥 Download:\n\n${caption}\n\n${videoToSend.url}`, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+                link_preview_options: { is_disabled: true },
+            });
             return true;
         } catch {
             return false;
@@ -386,77 +206,234 @@ async function botUrlSendMedia(ctx: BotContext, result: DownloadResult, original
     }
 }
 
+/**
+ * Send YouTube preview with thumbnail
+ * User must select quality before download (needs conversion)
+ */
+async function sendYouTubePreview(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string,
+    visitorId: string
+): Promise<boolean> {
+    const caption = buildCaption(result);
+    const qualities = detectQualities(result);
+    const keyboard = buildYouTubeKeyboard(originalUrl, visitorId, qualities);
+
+    try {
+        if (result.thumbnail) {
+            // Send thumbnail with quality selection
+            await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+                caption: `${caption}\n\n📥 Select quality:`,
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        } else {
+            // No thumbnail - send text message
+            await ctx.reply(`${caption}\n\n📥 Select quality:`, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        }
+        return true;
+    } catch (error) {
+        logger.error('telegram', error, 'SEND_YT_PREVIEW');
+        return false;
+    }
+}
+
+/**
+ * Send single photo directly
+ */
+async function sendSinglePhoto(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string
+): Promise<boolean> {
+    const images = result.formats?.filter(f => f.type === 'image') || [];
+    if (images.length === 0) return false;
+
+    const caption = buildCaption(result);
+    const keyboard = buildPhotoKeyboard(originalUrl);
+
+    try {
+        await ctx.replyWithPhoto(new InputFile({ url: images[0].url }), {
+            caption,
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
+        });
+        return true;
+    } catch (error) {
+        logger.error('telegram', error, 'SEND_PHOTO');
+        return false;
+    }
+}
+
+/**
+ * Send multiple photos as album (media group)
+ * All photos sent at once, not as slider
+ */
+async function sendPhotoAlbum(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string
+): Promise<boolean> {
+    const images = result.formats?.filter(f => f.type === 'image') || [];
+    if (images.length === 0) return false;
+
+    const caption = buildCaption(result);
+
+    // Build media group (max 10 photos)
+    const mediaGroup: InputMediaPhoto[] = images.slice(0, 10).map((img, index) => ({
+        type: 'photo' as const,
+        media: img.url,
+        caption: index === 0 ? caption : undefined,
+        parse_mode: index === 0 ? 'Markdown' as const : undefined,
+    }));
+
+    try {
+        // Send album
+        await ctx.replyWithMediaGroup(mediaGroup);
+        
+        // Send keyboard separately (can't attach to media group)
+        const keyboard = buildPhotoKeyboard(originalUrl);
+        await ctx.reply('📥 Download complete!', { reply_markup: keyboard });
+        
+        return true;
+    } catch (error) {
+        logger.error('telegram', error, 'SEND_ALBUM');
+        
+        // Fallback: send first photo only
+        return await sendSinglePhoto(ctx, result, originalUrl);
+    }
+}
+
+// ============================================================================
+// MAIN SEND FUNCTION
+// ============================================================================
+
+/**
+ * Send media based on content type
+ */
+async function sendMediaByType(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string,
+    visitorId: string
+): Promise<boolean> {
+    const contentType = detectContentType(result);
+    
+    switch (contentType) {
+        case 'youtube':
+            // Store result for callback (user needs to select quality)
+            ctx.session.pendingDownload = {
+                url: originalUrl,
+                visitorId,
+                platform: result.platform!,
+                result,
+                userMsgId: ctx.message?.message_id || 0,
+                timestamp: Date.now(),
+            };
+            return await sendYouTubePreview(ctx, result, originalUrl, visitorId);
+            
+        case 'video':
+            return await sendVideoDirectly(ctx, result, originalUrl, visitorId);
+            
+        case 'photo_album':
+            return await sendPhotoAlbum(ctx, result, originalUrl);
+            
+        case 'photo_single':
+        default:
+            return await sendSinglePhoto(ctx, result, originalUrl);
+    }
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+async function sendProcessingMessage(ctx: BotContext, platform: PlatformId): Promise<number | null> {
+    try {
+        const name = botUrlGetPlatformName(platform);
+        const msg = await ctx.reply(`⏳ Processing ${name}...`, {
+            reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
+        });
+        return msg.message_id;
+    } catch {
+        return null;
+    }
+}
+
+async function deleteMessage(ctx: BotContext, messageId: number): Promise<void> {
+    try {
+        await ctx.api.deleteMessage(ctx.chat!.id, messageId);
+    } catch {
+        // Ignore
+    }
+}
+
+async function editToError(ctx: BotContext, messageId: number, error: string, url: string): Promise<void> {
+    try {
+        await ctx.api.editMessageText(ctx.chat!.id, messageId, `❌ ${error}`, {
+            reply_markup: errorKeyboard(url),
+        });
+    } catch {
+        await ctx.reply(`❌ ${error}`, { reply_markup: errorKeyboard(url) });
+    }
+}
+
+function generateVisitorId(): string {
+    return Math.random().toString(36).substring(2, 10);
+}
+
 // ============================================================================
 // MAIN HANDLER
 // ============================================================================
 
-/**
- * URL handler - processes social media URLs in messages
- * 
- * Usage:
- * ```typescript
- * import { registerUrlHandler } from '@/bot/handlers/url';
- * registerUrlHandler(bot);
- * ```
- */
 export function registerUrlHandler(bot: Bot<BotContext>): void {
-    // Listen for text messages
     bot.on('message:text', async (ctx) => {
         const text = ctx.message.text;
         
-        // Extract URL from message
+        // Skip commands
+        if (text.startsWith('/')) return;
+        
         const url = botUrlExtract(text);
-        if (!url) {
-            // No social media URL found - ignore silently
-            return;
-        }
+        if (!url) return;
 
-        // Detect platform
         const platform = platformDetect(url);
         if (!platform) {
-            // Unsupported platform
             await ctx.reply(BOT_MESSAGES.ERROR_UNSUPPORTED, {
                 reply_parameters: { message_id: ctx.message.message_id },
             });
             return;
         }
 
-        // Store URL in session for retry
+        // Store for retry
         ctx.session.pendingRetryUrl = url;
         ctx.session.lastPlatform = platform;
 
-        // Send processing message
-        const processingMsgId = await botUrlSendProcessing(ctx, platform);
-        if (!processingMsgId) {
-            return;
-        }
+        const processingMsgId = await sendProcessingMessage(ctx, platform);
+        if (!processingMsgId) return;
 
-        // Inline processing (queue disabled)
         const result = await botUrlCallScraper(url, ctx.isPremium || false);
 
         if (result.success) {
-            // Delete processing message
-            await botUrlDeleteProcessing(ctx, processingMsgId);
-
-            // Send media with minimal caption and Origin URL button
-            const sent = await botUrlSendMedia(ctx, result, url);
+            await deleteMessage(ctx, processingMsgId);
+            
+            const visitorId = generateVisitorId();
+            const sent = await sendMediaByType(ctx, result, url, visitorId);
             
             if (sent) {
-                // Delete user's original message (clean chat)
-                await deleteUserMessage(ctx);
-                
-                // Record successful download for rate limiting
+                // Delete user message (clean chat)
+                await deleteMessage(ctx, ctx.message.message_id);
                 await botRateLimitRecordDownload(ctx);
             } else {
-                // Failed to send media
                 await ctx.reply(BOT_MESSAGES.ERROR_GENERIC, {
-                    reply_parameters: { message_id: ctx.message.message_id },
                     reply_markup: errorKeyboard(url),
                 });
             }
         } else {
-            // Edit processing message to show error
-            await botUrlEditToError(ctx, processingMsgId, result.error || BOT_MESSAGES.ERROR_GENERIC, url);
+            await editToError(ctx, processingMsgId, result.error || BOT_MESSAGES.ERROR_GENERIC, url);
         }
     });
 }
@@ -468,6 +445,10 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
 export {
     botUrlExtract,
     botUrlCallScraper,
-    botUrlGetPlatformEmoji,
     botUrlGetPlatformName,
+    sendVideoDirectly,
+    sendYouTubePreview,
+    sendSinglePhoto,
+    sendPhotoAlbum,
+    buildCaption,
 };

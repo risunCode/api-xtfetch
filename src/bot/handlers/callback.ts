@@ -9,14 +9,28 @@
  * - retry_download: Retry last failed download
  * - cancel: Cancel current operation
  * - back_to_menu: Return to main menu
+ * 
+ * Download quality callbacks:
+ * - dl:hd:{visitorId} - Download HD quality
+ * - dl:sd:{visitorId} - Download SD quality
+ * - dl:audio:{visitorId} - Download audio only
+ * - dl:cancel:{visitorId} - Cancel and delete preview message
+ * 
+ * Menu command callbacks:
+ * - cmd:mystatus - Trigger /mystatus
+ * - cmd:history - Trigger /history
+ * - cmd:premium - Trigger /premium
+ * - cmd:privacy - Trigger /privacy
+ * - cmd:help - Trigger /help
+ * - cmd:menu - Trigger /menu
  */
 
 import { Bot, InputFile } from 'grammy';
 
 import { logger } from '@/lib/services/shared/logger';
 
-import type { BotContext, CallbackAction } from '../types';
-import { botUrlCallScraper, botUrlGetPlatformEmoji } from './url';
+import type { BotContext, CallbackAction, DownloadResult } from '../types';
+import { botUrlCallScraper, botUrlGetPlatformName } from './url';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
 import { 
     startKeyboard, 
@@ -161,25 +175,29 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
         }
 
         // Build caption
-        const emoji = result.platform ? botUrlGetPlatformEmoji(result.platform) : '📥';
-        let caption = '';
+        const platformName = result.platform ? botUrlGetPlatformName(result.platform) : 'Download';
+        let caption = `*${platformName}*\n\n`;
         if (result.title) {
-            caption = result.title.substring(0, 200);
+            caption += result.title.substring(0, 200);
             if (result.title.length > 200) caption += '...';
         }
         if (result.author) {
-            caption += `\n\n👤 ${result.author}`;
+            caption += `\n${result.author}`;
         }
-        caption += `\n\n${emoji} via @DownAriaBot`;
 
         // Send media
-        const format = result.formats.find(f => f.type === 'video') || result.formats[0];
+        const format = result.formats?.find(f => f.type === 'video') || result.formats?.[0];
+        
+        if (!format) {
+            await ctx.reply('❌ No media found');
+            return;
+        }
         
         try {
             if (format.type === 'video') {
-                await ctx.replyWithVideo(new InputFile({ url: format.url }), { caption });
+                await ctx.replyWithVideo(new InputFile({ url: format.url }), { caption, parse_mode: 'Markdown' });
             } else {
-                await ctx.replyWithPhoto(new InputFile({ url: format.url }), { caption });
+                await ctx.replyWithPhoto(new InputFile({ url: format.url }), { caption, parse_mode: 'Markdown' });
             }
             
             // Record successful download
@@ -188,7 +206,7 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
             logger.error('telegram', error, 'RETRY_SEND_MEDIA');
             
             // Fallback: send URL
-            await ctx.reply(`${emoji} Download link:\n\n${format.url}\n\n${caption}`, {
+            await ctx.reply(`📥 Download link:\n\n${format.url}\n\n${caption}`, {
                 link_preview_options: { is_disabled: true },
             });
         }
@@ -236,6 +254,191 @@ Send me any social media link and I'll download it for you.
 }
 
 // ============================================================================
+// DOWNLOAD QUALITY CALLBACKS
+// ============================================================================
+
+/**
+ * Find format by quality preference
+ */
+function findFormatByQuality(
+    formats: DownloadResult['formats'],
+    quality: 'hd' | 'sd' | 'audio'
+): { quality: string; type: 'video' | 'audio' | 'image'; url: string; filesize?: number } | undefined {
+    if (!formats || formats.length === 0) return undefined;
+
+    if (quality === 'audio') {
+        return formats.find(f => f.type === 'audio') || formats[0];
+    }
+
+    if (quality === 'hd') {
+        return formats.find(f => 
+            f.type === 'video' && (
+                f.quality.includes('1080') || 
+                f.quality.includes('720') || 
+                f.quality.toLowerCase().includes('hd')
+            )
+        ) || formats.find(f => f.type === 'video');
+    }
+
+    // SD quality
+    return formats.find(f => 
+        f.type === 'video' && (
+            f.quality.includes('480') || 
+            f.quality.includes('360') || 
+            f.quality.toLowerCase().includes('sd')
+        )
+    ) || formats.find(f => f.type === 'video');
+}
+
+/**
+ * Handle download quality callback
+ * Pattern: dl:(hd|sd|audio|cancel):{visitorId}
+ */
+async function botCallbackDownloadQuality(
+    ctx: BotContext,
+    quality: 'hd' | 'sd' | 'audio' | 'cancel',
+    visitorId: string
+): Promise<void> {
+    // Cancel - just delete the message
+    if (quality === 'cancel') {
+        await ctx.deleteMessage();
+        await ctx.answerCallbackQuery('Cancelled');
+        // Clean up session
+        ctx.session.pendingDownload = undefined;
+        return;
+    }
+
+    // Get pending download from session
+    const pending = ctx.session.pendingDownload;
+    if (!pending || pending.visitorId !== visitorId) {
+        await ctx.answerCallbackQuery({ 
+            text: '⏰ Session expired. Please send the URL again.',
+            show_alert: true 
+        });
+        return;
+    }
+
+    // Answer callback immediately
+    const qualityLabel = quality === 'audio' ? 'audio' : quality.toUpperCase();
+    await ctx.answerCallbackQuery(`⏳ Downloading ${qualityLabel}...`);
+
+    // Edit message to show downloading status
+    try {
+        await ctx.editMessageCaption({
+            caption: `⏳ Downloading ${qualityLabel} quality...`,
+        });
+    } catch {
+        // Message might not have caption (e.g., text message)
+        try {
+            await ctx.editMessageText(`⏳ Downloading ${qualityLabel} quality...`);
+        } catch {
+            // Ignore edit errors
+        }
+    }
+
+    // Find the right format
+    const formats = pending.result.formats || [];
+    const formatToSend = findFormatByQuality(formats, quality);
+
+    if (!formatToSend) {
+        try {
+            await ctx.editMessageCaption({ caption: '❌ Format not available' });
+        } catch {
+            try {
+                await ctx.editMessageText('❌ Format not available');
+            } catch {
+                await ctx.reply('❌ Format not available');
+            }
+        }
+        return;
+    }
+
+    try {
+        // Delete preview message
+        await ctx.deleteMessage();
+
+        // Build caption
+        let caption = '';
+        if (pending.result.title) {
+            caption = pending.result.title.substring(0, 200);
+            if (pending.result.title.length > 200) caption += '...';
+        }
+        if (pending.result.author) {
+            caption += `\n\n👤 ${pending.result.author}`;
+        }
+        caption += '\n\n📥 via @DownAriaBot';
+
+        // Send the media
+        if (quality === 'audio') {
+            await ctx.replyWithAudio(new InputFile({ url: formatToSend.url }), {
+                caption,
+                title: pending.result.title?.substring(0, 64),
+            });
+        } else {
+            await ctx.replyWithVideo(new InputFile({ url: formatToSend.url }), {
+                caption,
+            });
+        }
+
+        // Record successful download
+        await botRateLimitRecordDownload(ctx);
+
+        // Clean up session
+        ctx.session.pendingDownload = undefined;
+
+        logger.debug('telegram', `Download sent: ${quality} quality for ${pending.platform}`);
+    } catch (error) {
+        logger.error('telegram', error, 'DOWNLOAD_QUALITY_SEND');
+        
+        // Try to send URL as fallback
+        try {
+            await ctx.reply(
+                `❌ Failed to send media directly.\n\n🔗 Download link:\n${formatToSend.url}`,
+                { link_preview_options: { is_disabled: true } }
+            );
+        } catch {
+            await ctx.reply('❌ Failed to download. Please try again.');
+        }
+    }
+}
+
+// ============================================================================
+// MENU COMMAND CALLBACKS
+// ============================================================================
+
+/**
+ * Handle menu command callback
+ * Pattern: cmd:(mystatus|history|premium|privacy|help|menu)
+ */
+async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise<void> {
+    await ctx.answerCallbackQuery();
+
+    // Reply with instruction to use command
+    switch (command) {
+        case 'mystatus':
+            await ctx.reply('📊 Use /mystatus to check your download stats and premium status.');
+            break;
+        case 'history':
+            await ctx.reply('📜 Use /history to view your recent downloads.');
+            break;
+        case 'premium':
+            await ctx.reply('💎 Use /premium to see premium subscription info.');
+            break;
+        case 'privacy':
+            await ctx.reply('🔒 Use /privacy to read our privacy policy.');
+            break;
+        case 'help':
+            await ctx.reply('❓ Use /help for usage guide.');
+            break;
+        case 'menu':
+            await ctx.reply('📋 Use /menu to see the main menu.');
+            break;
+        default:
+            await ctx.reply(`Use /${command} to see this information.`);
+    }
+}
+
+// ============================================================================
 // MAIN HANDLER REGISTRATION
 // ============================================================================
 
@@ -249,8 +452,47 @@ Send me any social media link and I'll download it for you.
  * ```
  */
 export function registerCallbackHandler(bot: Bot<BotContext>): void {
+    // Download quality callbacks: dl:(hd|sd|audio|cancel):{visitorId}
+    bot.callbackQuery(/^dl:(hd|sd|audio|cancel):(.+)$/, async (ctx) => {
+        const match = ctx.match;
+        if (!match) return;
+
+        const quality = match[1] as 'hd' | 'sd' | 'audio' | 'cancel';
+        const visitorId = match[2];
+
+        logger.debug('telegram', `Download callback: ${quality} for ${visitorId}`);
+
+        try {
+            await botCallbackDownloadQuality(ctx, quality, visitorId);
+        } catch (error) {
+            logger.error('telegram', error, 'DOWNLOAD_CALLBACK');
+            await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
+        }
+    });
+
+    // Menu command callbacks: cmd:(mystatus|history|premium|privacy|help|menu)
+    bot.callbackQuery(/^cmd:(.+)$/, async (ctx) => {
+        const command = ctx.match?.[1];
+        if (!command) return;
+
+        logger.debug('telegram', `Menu command callback: ${command}`);
+
+        try {
+            await botCallbackMenuCommand(ctx, command);
+        } catch (error) {
+            logger.error('telegram', error, 'MENU_COMMAND_CALLBACK');
+            await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
+        }
+    });
+
+    // General callback handler for other actions
     bot.on('callback_query:data', async (ctx) => {
         const { action, payload } = botCallbackParse(ctx.callbackQuery.data);
+
+        // Skip if already handled by specific handlers above
+        if (ctx.callbackQuery.data.startsWith('dl:') || ctx.callbackQuery.data.startsWith('cmd:')) {
+            return;
+        }
 
         logger.debug('telegram', `Callback: ${action}${payload ? ` (${payload})` : ''}`);
 
@@ -304,4 +546,7 @@ export {
     botCallbackRetryDownload,
     botCallbackCancel,
     botCallbackBackToMenu,
+    botCallbackDownloadQuality,
+    botCallbackMenuCommand,
+    findFormatByQuality,
 };
