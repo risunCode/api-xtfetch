@@ -45,6 +45,22 @@ function getBotInstance(): Bot<BotContext> {
             initial: (): SessionData => ({})
         }));
         
+        // Filter stale messages (sent while bot was offline)
+        // Ignore messages older than 60 seconds
+        const STALE_THRESHOLD_SECONDS = 60;
+        botInstance.use(async (ctx, next) => {
+            const messageDate = ctx.message?.date || ctx.callbackQuery?.message?.date;
+            if (messageDate) {
+                const now = Math.floor(Date.now() / 1000);
+                const age = now - messageDate;
+                if (age > STALE_THRESHOLD_SECONDS) {
+                    console.log(`[Bot] Ignoring stale message (${age}s old) from user ${ctx.from?.id}`);
+                    return; // Don't process stale messages
+                }
+            }
+            await next();
+        });
+        
         // Setup middleware (order matters!)
         botInstance.use(maintenanceMiddleware); // Check maintenance first
         botInstance.use(authMiddleware);

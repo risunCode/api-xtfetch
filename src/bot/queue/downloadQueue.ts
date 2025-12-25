@@ -30,35 +30,39 @@ export interface DownloadJobData {
 /**
  * Create IORedis connection for BullMQ
  * BullMQ requires IORedis-compatible connection (not Upstash REST client)
+ * Uses UPSTASH_REDIS_URL which is in rediss:// format
  */
 function createRedisConnection(): IORedis | null {
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    const redisUrl = process.env.UPSTASH_REDIS_URL;
 
-    if (!url || !token) {
-        console.warn('[Queue] Redis credentials not found, queue will not be available');
+    if (!redisUrl) {
+        console.warn('[Queue] UPSTASH_REDIS_URL not found, queue will not be available');
         return null;
     }
 
-    // Convert Upstash REST URL to Redis URL format
-    // Upstash REST: https://xxx.upstash.io
-    // Redis URL: rediss://default:token@xxx.upstash.io:6379
-    const hostname = url.replace('https://', '').replace('http://', '');
-
-    return new IORedis({
-        host: hostname,
-        port: 6379,
-        password: token,
-        tls: {
-            rejectUnauthorized: false,
-        },
-        maxRetriesPerRequest: null, // Required for BullMQ
-        enableReadyCheck: false,
-    });
+    try {
+        return new IORedis(redisUrl, {
+            maxRetriesPerRequest: null, // Required for BullMQ
+            enableReadyCheck: false,
+            tls: redisUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+        });
+    } catch (error) {
+        console.error('[Queue] Failed to create Redis connection:', error);
+        return null;
+    }
 }
 
 // Create Redis connection for BullMQ
 const redisConnection = createRedisConnection();
+
+if (redisConnection) {
+    redisConnection.on('error', (err) => {
+        console.error('[Queue] Redis error:', err.message);
+    });
+    redisConnection.on('connect', () => {
+        console.log('[Queue] Redis connected for BullMQ');
+    });
+}
 
 // Queue options
 const queueOptions: QueueOptions | undefined = redisConnection
