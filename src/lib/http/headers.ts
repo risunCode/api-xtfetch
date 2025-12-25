@@ -122,13 +122,37 @@ export async function httpGetUserAgentAsync(platform?: PlatformId, deviceType?: 
   return httpGetUserAgent(platform);
 }
 
-/** Get user agent string synchronously (uses fallback values) */
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER AGENT CACHING (Sync)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const userAgentCache = new Map<string, { ua: string; expires: number }>();
+const UA_SYNC_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/** Get user agent string synchronously with caching (uses fallback values) */
 export function httpGetUserAgent(platform?: PlatformId): string {
-  switch (platform) {
-    case 'weibo': return DESKTOP_USER_AGENT;
-    case 'tiktok': return MOBILE_USER_AGENT;
-    default: return USER_AGENT;
+  const key = platform || 'default';
+  const cached = userAgentCache.get(key);
+  
+  if (cached && cached.expires > Date.now()) {
+    return cached.ua;
   }
+  
+  // Generate user agent based on platform
+  let ua: string;
+  switch (platform) {
+    case 'weibo': ua = DESKTOP_USER_AGENT; break;
+    case 'tiktok': ua = MOBILE_USER_AGENT; break;
+    default: ua = USER_AGENT;
+  }
+  
+  userAgentCache.set(key, { ua, expires: Date.now() + UA_SYNC_CACHE_TTL });
+  return ua;
+}
+
+/** Clear the user agent cache */
+export function httpClearUserAgentCache(): void {
+  userAgentCache.clear();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -355,11 +379,33 @@ export async function httpGetRandomProfileAsync(options?: {
   return selectWeightedRandom(filtered);
 }
 
-/** Get a random browser profile synchronously (uses cached/fallback values) */
+// ═══════════════════════════════════════════════════════════════════════════════
+// BROWSER PROFILE CACHING (Sync)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const syncProfileCache = new Map<string, { profile: BrowserProfile; expires: number }>();
+const SYNC_PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/** Get a random browser profile synchronously with caching (uses cached/fallback values) */
 export function httpGetRandomProfile(chromiumOnly = false): BrowserProfile {
+  const cacheKey = chromiumOnly ? 'chromium' : 'all';
+  const cached = syncProfileCache.get(cacheKey);
+  
+  if (cached && cached.expires > Date.now()) {
+    return cached.profile;
+  }
+  
   const profiles = profilesCache?.data || FALLBACK_PROFILES;
   const filtered = chromiumOnly ? profiles.filter(p => p.is_chromium) : profiles;
-  return selectWeightedRandom(filtered.length > 0 ? filtered : FALLBACK_PROFILES);
+  const profile = selectWeightedRandom(filtered.length > 0 ? filtered : FALLBACK_PROFILES);
+  
+  syncProfileCache.set(cacheKey, { profile, expires: Date.now() + SYNC_PROFILE_CACHE_TTL });
+  return profile;
+}
+
+/** Clear the synchronous profile cache */
+export function httpClearSyncProfileCache(): void {
+  syncProfileCache.clear();
 }
 
 /** Mark a browser profile as used (updates last_used_at in database) */
@@ -389,9 +435,10 @@ export async function httpMarkProfileError(profileId: string, error: string): Pr
   } catch { /* ignore */ }
 }
 
-/** Clear the browser profiles cache */
+/** Clear the browser profiles cache (both async and sync) */
 export function httpClearProfileCache(): void {
   profilesCache = null;
+  syncProfileCache.clear();
 }
 
 /** Preload browser profiles into cache */

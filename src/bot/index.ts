@@ -24,6 +24,7 @@ import {
     mystatusComposer,
 } from './commands';
 import { adminComposer } from './commands/admin';
+import { initWorker, closeWorker, isQueueAvailable } from './queue';
 
 // ============================================================================
 // Bot Instance (Singleton)
@@ -86,6 +87,14 @@ async function initBot(): Promise<void> {
             await bot.init();
             botInitialized = true;
             console.log('[Bot] Initialized:', bot.botInfo.username);
+            
+            // Initialize queue worker for concurrent processing
+            if (isQueueAvailable()) {
+                const workerStarted = await initWorker();
+                if (workerStarted) {
+                    console.log('[Bot] Queue worker started');
+                }
+            }
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
         }
@@ -183,3 +192,13 @@ export {
     botUrlGetPlatformName,
     botCallbackParse,
 } from './handlers';
+
+// Queue
+export {
+    initWorker,
+    closeWorker,
+    isQueueAvailable,
+    downloadQueue,
+    QUEUE_CONFIG,
+    type DownloadJobData,
+} from './queue';

@@ -24,7 +24,8 @@ import {
     fbExtractPostId,
     fbDetectContentIssue,
     fbHasUnavailableAttachment,
-    fbTryMbasic,
+    fbIsLiveVideo,
+    fbTryTahoe,
     fbExtractDashVideos,
     fbGetQualityLabel,
     type FbContentType,
@@ -69,29 +70,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
     logger.type('facebook', contentType);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // STRATEGY 1: Try mbasic for public videos (faster, no cookie needed)
-    // ─────────────────────────────────────────────────────────────────────────
-    if ((contentType === 'video' || contentType === 'reel') && !parsedCookie) {
-        const mbasicUrl = await fbTryMbasic(inputUrl);
-        if (mbasicUrl) {
-            logger.debug('facebook', 'Got video from mbasic fallback');
-            return {
-                success: true,
-                data: {
-                    title: 'Facebook Video',
-                    thumbnail: '',
-                    author: 'Facebook',
-                    formats: [{ quality: 'Video', type: 'video', url: mbasicUrl, format: 'mp4', itemId: 'video-main' }],
-                    url: inputUrl,
-                    type: 'video',
-                    usedCookie: false,
-                }
-            };
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // STRATEGY 2: Full web scrape
+    // MAIN SCRAPE STRATEGY
     // ─────────────────────────────────────────────────────────────────────────
     const doScrape = async (useCookie: boolean): Promise<ScraperResult> => {
         try {
@@ -107,6 +86,11 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
 
             if (res.finalUrl.includes('/checkpoint/')) {
                 throw new Error('CHECKPOINT_REQUIRED');
+            }
+
+            // Check for live video (not downloadable)
+            if (fbIsLiveVideo(res.data)) {
+                return createError(ScraperErrorCode.UNSUPPORTED_CONTENT, 'Live video tidak dapat didownload');
             }
 
             // Check for login redirect - cookie might be expired or invalid
@@ -194,6 +178,38 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                     }
                     if (sdDash && sdDash.url !== hdDash?.url) {
                         formats.push({ quality: fbGetQualityLabel(sdDash.height), type: 'video', url: sdDash.url, format: 'mp4', itemId: 'video-main', thumbnail });
+                    }
+                }
+                
+                // Try Tahoe API if still no video found
+                if (formats.length === 0) {
+                    const tahoeVideoId = fbExtractVideoId(finalUrl);
+                    if (tahoeVideoId) {
+                        const tahoeResult = await fbTryTahoe(tahoeVideoId, useCookie ? parsedCookie : undefined);
+                        if (tahoeResult) {
+                            const thumb = tahoeResult.thumbnail || thumbnail;
+                            if (tahoeResult.hd) {
+                                formats.push({ 
+                                    quality: 'HD', 
+                                    type: 'video', 
+                                    url: tahoeResult.hd, 
+                                    format: 'mp4', 
+                                    itemId: 'video-main',
+                                    thumbnail: thumb 
+                                });
+                                seenUrls.add(tahoeResult.hd);
+                            }
+                            if (tahoeResult.sd && tahoeResult.sd !== tahoeResult.hd && !seenUrls.has(tahoeResult.sd)) {
+                                formats.push({ 
+                                    quality: 'SD', 
+                                    type: 'video', 
+                                    url: tahoeResult.sd, 
+                                    format: 'mp4', 
+                                    itemId: 'video-main',
+                                    thumbnail: thumb 
+                                });
+                            }
+                        }
                     }
                 }
                 

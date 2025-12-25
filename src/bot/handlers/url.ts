@@ -23,6 +23,7 @@ import type { BotContext, DownloadResult } from '../types';
 import { BOT_MESSAGES } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
 import { errorKeyboard } from '../keyboards';
+import { downloadQueue, isQueueAvailable, QUEUE_CONFIG, type DownloadJobData } from '../queue';
 
 // ============================================================================
 // URL DETECTION
@@ -426,15 +427,42 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
 
         // Send processing message
         const processingMsgId = await botUrlSendProcessing(ctx, platform);
+        if (!processingMsgId) {
+            return;
+        }
 
-        // Call scraper (pass premium status for cookie tier)
+        // Check if queue is available - use concurrent processing
+        if (isQueueAvailable() && downloadQueue) {
+            try {
+                // Add job to queue (non-blocking)
+                const jobData: DownloadJobData = {
+                    chatId: ctx.chat!.id,
+                    userId: ctx.from!.id,
+                    messageId: ctx.message.message_id,
+                    processingMsgId,
+                    url,
+                    isPremium: ctx.isPremium || false,
+                    timestamp: Date.now(),
+                };
+
+                await downloadQueue.add('download', jobData, {
+                    priority: ctx.isPremium ? QUEUE_CONFIG.PRIORITY.PREMIUM : QUEUE_CONFIG.PRIORITY.FREE,
+                });
+
+                logger.debug('telegram', `Job queued for user ${ctx.from!.id}`);
+                return; // Job will be processed by worker
+            } catch (error) {
+                logger.error('telegram', error, 'QUEUE_ADD');
+                // Fall through to inline processing
+            }
+        }
+
+        // Fallback: Inline processing (when queue not available)
         const result = await botUrlCallScraper(url, ctx.isPremium || false);
 
         if (result.success) {
             // Delete processing message
-            if (processingMsgId) {
-                await botUrlDeleteProcessing(ctx, processingMsgId);
-            }
+            await botUrlDeleteProcessing(ctx, processingMsgId);
 
             // Send media with minimal caption and Origin URL button
             const sent = await botUrlSendMedia(ctx, result, url);
@@ -454,14 +482,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             }
         } else {
             // Edit processing message to show error
-            if (processingMsgId) {
-                await botUrlEditToError(ctx, processingMsgId, result.error || BOT_MESSAGES.ERROR_GENERIC, url);
-            } else {
-                await ctx.reply(`❌ ${result.error || BOT_MESSAGES.ERROR_GENERIC}`, {
-                    reply_parameters: { message_id: ctx.message.message_id },
-                    reply_markup: errorKeyboard(url),
-                });
-            }
+            await botUrlEditToError(ctx, processingMsgId, result.error || BOT_MESSAGES.ERROR_GENERIC, url);
         }
     });
 }

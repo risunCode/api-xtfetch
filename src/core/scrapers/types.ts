@@ -10,6 +10,7 @@ export type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weib
 export enum ScraperErrorCode {
     INVALID_URL = 'INVALID_URL',
     UNSUPPORTED_PLATFORM = 'UNSUPPORTED_PLATFORM',
+    UNSUPPORTED_CONTENT = 'UNSUPPORTED_CONTENT',
     COOKIE_REQUIRED = 'COOKIE_REQUIRED',
     COOKIE_EXPIRED = 'COOKIE_EXPIRED',
     COOKIE_INVALID = 'COOKIE_INVALID',
@@ -34,6 +35,7 @@ export enum ScraperErrorCode {
 export const ERROR_MESSAGES: Record<ScraperErrorCode, string> = {
     [ScraperErrorCode.INVALID_URL]: 'Invalid URL format',
     [ScraperErrorCode.UNSUPPORTED_PLATFORM]: 'This platform is not supported',
+    [ScraperErrorCode.UNSUPPORTED_CONTENT]: 'This content type is not supported for download',
     [ScraperErrorCode.COOKIE_REQUIRED]: 'This content requires login. Please provide a cookie.',
     [ScraperErrorCode.COOKIE_EXPIRED]: 'Your cookie has expired. Please update it.',
     [ScraperErrorCode.COOKIE_INVALID]: 'Invalid cookie format',

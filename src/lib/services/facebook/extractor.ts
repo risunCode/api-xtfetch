@@ -8,7 +8,7 @@
  */
 
 import { utilDecodeUrl, utilDecodeHtml } from '@/lib/utils';
-import { httpGet } from '@/lib/http';
+import { httpPost, DESKTOP_USER_AGENT } from '@/lib/http';
 import type { MediaFormat } from '@/lib/types';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -413,57 +413,70 @@ export function fbFindPostBlock(html: string, postId?: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MBASIC FALLBACK (faster for public videos)
+// TAHOE API FALLBACK
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const FB_TAHOE_URL = 'https://www.facebook.com/video/tahoe/async/';
+
 /**
- * Try to extract video URL from mbasic.facebook.com
+ * Try to extract video via Facebook Tahoe API
+ * More reliable than HTML scraping for video-only content
  * 
- * mbasic is Facebook's lightweight mobile version that often has
- * direct video URLs without requiring cookies. This is faster than
- * parsing the full web version.
- * 
- * @param url - Original Facebook URL
- * @returns Direct video URL if found, null otherwise
+ * @param videoId - Facebook video ID (numeric)
+ * @param cookie - Optional cookie for authenticated requests
+ * @returns Video URLs or null if failed
  */
-export async function fbTryMbasic(url: string): Promise<string | null> {
-    // Convert to mbasic URL
-    const mbasicUrl = url.replace(/(?:www|web|m)\.facebook\.com/, 'mbasic.facebook.com');
+export async function fbTryTahoe(
+    videoId: string, 
+    cookie?: string
+): Promise<FbVideoResult | null> {
+    if (!videoId || !/^\d+$/.test(videoId)) return null;
+    
+    const url = `${FB_TAHOE_URL}${videoId}/?chain=true&isvideo=true&payloadtype=primary`;
     
     try {
-        const res = await httpGet(mbasicUrl, {
+        const res = await httpPost(url, new URLSearchParams({ '__a': '1' }).toString(), {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 4.4.2; Nexus 5 Build/KOT49H) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.76 Mobile Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': DESKTOP_USER_AGENT,
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                ...(cookie ? { 'Cookie': cookie } : {}),
             },
-            timeout: 8000,
+            timeout: 10000,
         });
         
-        const html = res.data;
+        if (!res.data) return null;
         
-        // mbasic has direct video URLs in href attributes
-        // Pattern 1: Direct mp4 link
-        const mp4Match = html.match(/href="(https:\/\/video[^"]+\.mp4[^"]*)"/);
-        if (mp4Match) {
-            return utilDecodeUrl(mp4Match[1]);
-        }
+        // Response format: "for (;;);" + JSON
+        const jsonStr = typeof res.data === 'string' 
+            ? res.data.replace(/^for\s*\(\s*;\s*;\s*\)\s*;/, '')
+            : JSON.stringify(res.data);
+        const data = JSON.parse(jsonStr);
         
-        // Pattern 2: Video redirect URL
-        const videoRedirect = html.match(/href="(\/video_redirect\/[^"]+)"/);
-        if (videoRedirect) {
-            // Extract actual URL from redirect
-            const redirectUrl = videoRedirect[1];
-            const srcMatch = redirectUrl.match(/src=([^&]+)/);
-            if (srcMatch) {
-                return decodeURIComponent(srcMatch[1]);
+        // Extract from jsmods.instances
+        const instances = data?.jsmods?.instances || [];
+        for (const instance of instances) {
+            const config = instance[1];
+            const params = instance[2];
+            if (config?.[0] === 'VideoConfig' && params?.[0]?.videoData) {
+                const vd = params[0].videoData;
+                return {
+                    hd: vd.hd_src || vd.hd_src_no_ratelimit || vd.playable_url_quality_hd,
+                    sd: vd.sd_src || vd.sd_src_no_ratelimit || vd.playable_url,
+                    thumbnail: vd.thumbnail_src || vd.poster,
+                };
             }
         }
         
-        // Pattern 3: data-store with video URL
-        const dataStore = html.match(/data-store="[^"]*videoURL[^"]*":"(https:[^"]+)"/);
-        if (dataStore) {
-            return utilDecodeUrl(dataStore[1]);
+        // Alternative: check payload directly
+        const payload = data?.payload;
+        if (payload?.video) {
+            return {
+                hd: payload.video.hd_src || payload.video.browser_native_hd_url,
+                sd: payload.video.sd_src || payload.video.browser_native_sd_url,
+                thumbnail: payload.video.thumbnail_src,
+            };
         }
         
         return null;
@@ -471,6 +484,7 @@ export async function fbTryMbasic(url: string): Promise<string | null> {
         return null;
     }
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // METADATA EXTRACTION
@@ -975,6 +989,20 @@ export function fbExtractPostId(url: string): string | null {
     }
     
     return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIVE VIDEO DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Check if content is a live broadcast (not downloadable)
+ */
+export function fbIsLiveVideo(html: string): boolean {
+    return html.includes('"is_live_streaming":true') || 
+           html.includes('"broadcast_status":"LIVE"') ||
+           html.includes('"is_live":true') ||
+           html.includes('LiveVideoStatus');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -37,6 +37,8 @@ export {
   httpMarkProfileSuccess,
   httpMarkProfileError,
   httpClearProfileCache,
+  httpClearSyncProfileCache,
+  httpClearUserAgentCache,
   httpPreloadProfiles,
   
   // Rate Limiting

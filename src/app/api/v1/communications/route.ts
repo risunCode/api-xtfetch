@@ -16,8 +16,6 @@ export async function GET(request: NextRequest) {
         const page = searchParams.get('page') || 'home';
         const now = new Date().toISOString();
 
-        console.log('[Communications API] Fetching for page:', page, 'at:', now);
-
         // Build page filter for announcements
         const pageFilters: Record<string, string> = {
             home: 'show_on_home',
@@ -39,9 +37,7 @@ export async function GET(request: NextRequest) {
             .limit(5);
 
         if (annError) {
-            console.error('[Communications API] Announcements query error:', annError);
-        } else {
-            console.log('[Communications API] Found announcements:', announcements?.length || 0);
+            console.error('[Communications API] Announcements error:', annError.message);
         }
 
         // Fetch active banner ads
@@ -55,7 +51,7 @@ export async function GET(request: NextRequest) {
             .limit(10);
 
         if (bannerError) {
-            console.error('Banner ads query error:', bannerError);
+            console.error('[Communications API] Banner error:', bannerError.message);
         }
 
         // Fetch active compact ads
@@ -69,7 +65,7 @@ export async function GET(request: NextRequest) {
             .limit(10);
 
         if (compactError) {
-            console.error('Compact ads query error:', compactError);
+            console.error('[Communications API] Compact error:', compactError.message);
         }
 
         return NextResponse.json({
@@ -81,7 +77,7 @@ export async function GET(request: NextRequest) {
             },
         });
     } catch (error) {
-        console.error('Public communications API error:', error);
+        console.error('[Communications API] Error:', error instanceof Error ? error.message : 'Unknown');
         return NextResponse.json({
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
@@ -117,8 +113,7 @@ export async function POST(request: NextRequest) {
         }
 
         return NextResponse.json({ success: true });
-    } catch (error) {
-        console.error('Track communication error:', error);
+    } catch {
         return NextResponse.json({ success: false, error: 'Failed to track' }, { status: 500 });
     }
 }

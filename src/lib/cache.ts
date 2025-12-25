@@ -444,6 +444,62 @@ export async function cacheSetAlias(
     }
 }
 
+// ============================================================================
+// HELPER FUNCTIONS (Extracted for DRY)
+// ============================================================================
+
+/**
+ * Try to get cached result with fallback from quick cache to resolved URL cache
+ * Automatically handles alias backfill for short URLs on cache hit
+ */
+export async function cacheGetWithFallback<T>(
+    platform: PlatformId,
+    originalUrl: string,
+    resolvedUrl?: string
+): Promise<CacheResult<T>> {
+    // 1. Try quick cache (content ID based)
+    const quickResult = await cacheGetQuick<T>(platform, originalUrl);
+    if (quickResult.hit) return quickResult;
+    
+    // 2. If URL was resolved, try resolved URL cache
+    if (resolvedUrl && resolvedUrl !== originalUrl) {
+        const resolvedResult = await cacheGet<T>(platform, resolvedUrl);
+        if (resolvedResult.hit) {
+            // Backfill alias for short URL
+            const contentId = cacheExtractContentId(platform, resolvedUrl);
+            if (contentId && cacheIsShortUrl(originalUrl)) {
+                cacheSetAlias(originalUrl, platform, contentId).catch(() => {});
+            }
+            return resolvedResult;
+        }
+    }
+    
+    return { hit: false };
+}
+
+/**
+ * Set cache with automatic alias handling for short URLs
+ */
+export async function cacheSetWithAlias<T>(
+    platform: PlatformId,
+    originalUrl: string,
+    resolvedUrl: string,
+    data: T,
+    contentType?: ContentType
+): Promise<void> {
+    try {
+        await cacheSet(platform, resolvedUrl, data, contentType);
+        
+        // Set alias for short URLs
+        const contentId = cacheExtractContentId(platform, resolvedUrl);
+        if (contentId && cacheIsShortUrl(originalUrl)) {
+            await cacheSetAlias(originalUrl, platform, contentId);
+        }
+    } catch {
+        // Graceful degradation
+    }
+}
+
 /**
  * Get TTL based on platform and content type
  */
@@ -500,23 +556,39 @@ export async function cacheGetStats(): Promise<CacheStats> {
     if (!isRedisAvailable() || !redis) return defaultStats;
     
     try {
-        // Get global stats
-        const [hits, misses] = await Promise.all([
-            redis.get<number>('stats:cache:hits'),
-            redis.get<number>('stats:cache:misses'),
-        ]);
+        const platforms: PlatformId[] = ['twitter', 'instagram', 'facebook', 'tiktok', 'youtube', 'weibo'];
         
-        const totalHits = hits || 0;
-        const totalMisses = misses || 0;
+        // Use pipeline to batch all stats GET operations in a single round-trip
+        // Order: global hits, global misses, then for each platform: hits, misses
+        const pipeline = redis.pipeline();
+        pipeline.get('stats:cache:hits');
+        pipeline.get('stats:cache:misses');
+        for (const platform of platforms) {
+            pipeline.get(`stats:cache:platform:${platform}:hits`);
+            pipeline.get(`stats:cache:platform:${platform}:misses`);
+        }
+        
+        // Execute pipeline - results come back in order
+        const results = await pipeline.exec();
+        
+        // Parse global stats (first 2 results)
+        const totalHits = (results[0] as number) || 0;
+        const totalMisses = (results[1] as number) || 0;
         const total = totalHits + totalMisses;
         const hitRate = total > 0 ? ((totalHits / total) * 100).toFixed(1) + '%' : '0%';
         
-        // Count cache keys
-        let size = 0;
+        // Initialize byPlatform with hits/misses from pipeline results
         const byPlatform: Record<string, { keys: number; hits: number; misses: number }> = {};
-        const platforms: PlatformId[] = ['twitter', 'instagram', 'facebook', 'tiktok', 'youtube', 'weibo'];
+        for (let i = 0; i < platforms.length; i++) {
+            const platform = platforms[i];
+            // Platform stats start at index 2, each platform has 2 values (hits, misses)
+            const platformHits = (results[2 + i * 2] as number) || 0;
+            const platformMisses = (results[2 + i * 2 + 1] as number) || 0;
+            byPlatform[platform] = { keys: 0, hits: platformHits, misses: platformMisses };
+        }
         
-        // Count keys and get platform stats
+        // Count cache keys using SCAN (unavoidable for key counting)
+        let size = 0;
         let cursor = 0;
         do {
             const [nextCursor, keys] = await redis.scan(cursor, { match: 'result:*', count: 100 });
@@ -535,20 +607,6 @@ export async function cacheGetStats(): Promise<CacheStats> {
                 }
             }
         } while (cursor !== 0);
-        
-        // Get platform-specific hit/miss stats
-        for (const platform of platforms) {
-            const [platformHits, platformMisses] = await Promise.all([
-                redis.get<number>(`stats:cache:platform:${platform}:hits`),
-                redis.get<number>(`stats:cache:platform:${platform}:misses`),
-            ]);
-            
-            if (!byPlatform[platform]) {
-                byPlatform[platform] = { keys: 0, hits: 0, misses: 0 };
-            }
-            byPlatform[platform].hits = platformHits || 0;
-            byPlatform[platform].misses = platformMisses || 0;
-        }
         
         return {
             size,
@@ -625,4 +683,3 @@ export async function cacheResetStats(): Promise<void> {
         // Stats reset failed, not critical
     }
 }
-

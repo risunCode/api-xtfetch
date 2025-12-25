@@ -108,6 +108,52 @@ const BLOCKED_PATTERNS = [
 
 const ALGORITHM = 'aes-256-gcm';
 const SALT_LENGTH = 16;
+const KEY_CACHE_MAX_SIZE = 100;
+
+// --- Key Derivation Cache ---
+// LRU-style cache to avoid repeated expensive scrypt operations
+const keyCache = new Map<string, Buffer>();
+const keyCacheOrder: string[] = []; // Track insertion order for LRU eviction
+
+/**
+ * Gets a derived key from cache or derives it using scrypt
+ * Uses LRU eviction when cache exceeds max size
+ * @param salt - Salt buffer for key derivation
+ * @returns Derived key buffer
+ */
+function getDerivedKey(salt: Buffer): Buffer {
+    const encryptionKey = getEncryptionKey();
+    const cacheKey = salt.toString('hex');
+    
+    // Check cache first
+    const cachedKey = keyCache.get(cacheKey);
+    if (cachedKey) {
+        // Move to end of order (most recently used)
+        const idx = keyCacheOrder.indexOf(cacheKey);
+        if (idx > -1) {
+            keyCacheOrder.splice(idx, 1);
+            keyCacheOrder.push(cacheKey);
+        }
+        return cachedKey;
+    }
+    
+    // Derive key using scrypt (expensive operation)
+    const derivedKey = crypto.scryptSync(encryptionKey, salt, 32);
+    
+    // Evict oldest entry if cache is full (LRU eviction)
+    if (keyCache.size >= KEY_CACHE_MAX_SIZE) {
+        const oldestKey = keyCacheOrder.shift();
+        if (oldestKey) {
+            keyCache.delete(oldestKey);
+        }
+    }
+    
+    // Add to cache
+    keyCache.set(cacheKey, derivedKey);
+    keyCacheOrder.push(cacheKey);
+    
+    return derivedKey;
+}
 
 // --- Private Helpers ---
 
@@ -227,13 +273,14 @@ export function securitySanitizeCookie(cookie: string): string {
 
 /**
  * Encrypts text using AES-256-GCM with random salt and IV
+ * Uses cached key derivation to avoid repeated expensive scrypt operations
  * @param text - Plain text to encrypt
  * @returns Encrypted string in format: salt:iv:authTag:encrypted
  */
 export function securityEncrypt(text: string): string {
     const salt = crypto.randomBytes(SALT_LENGTH);
     const iv = crypto.randomBytes(16);
-    const key = crypto.scryptSync(getEncryptionKey(), salt, 32);
+    const key = getDerivedKey(salt);
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
     let encrypted = cipher.update(text, 'utf8', 'hex');
     encrypted += cipher.final('hex');
@@ -243,6 +290,7 @@ export function securityEncrypt(text: string): string {
 
 /**
  * Decrypts text encrypted with securityEncrypt
+ * Uses cached key derivation to avoid repeated expensive scrypt operations
  * @param encryptedText - Encrypted string to decrypt
  * @returns Decrypted plain text, or empty string on failure
  */
@@ -250,10 +298,12 @@ export function securityDecrypt(encryptedText: string): string {
     try {
         const parts = encryptedText.split(':');
         if (parts.length === 3) {
+            // Legacy format without salt (uses fixed 'salt' string)
             const [ivHex, authTagHex, encrypted] = parts;
             const iv = Buffer.from(ivHex, 'hex');
             const authTag = Buffer.from(authTagHex, 'hex');
-            const key = crypto.scryptSync(getEncryptionKey(), 'salt', 32);
+            const legacySalt = Buffer.from('salt');
+            const key = getDerivedKey(legacySalt);
             const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
             decipher.setAuthTag(authTag);
             let decrypted = decipher.update(encrypted, 'hex', 'utf8');
@@ -264,7 +314,7 @@ export function securityDecrypt(encryptedText: string): string {
         const salt = Buffer.from(saltHex, 'hex');
         const iv = Buffer.from(ivHex, 'hex');
         const authTag = Buffer.from(authTagHex, 'hex');
-        const key = crypto.scryptSync(getEncryptionKey(), salt, 32);
+        const key = getDerivedKey(salt);
         const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
         decipher.setAuthTag(authTag);
         let decrypted = decipher.update(encrypted, 'hex', 'utf8');
@@ -897,6 +947,10 @@ const ERROR_DISPLAYS: Record<ScraperErrorCode, Omit<ErrorDisplay, 'message'>> = 
     [ScraperErrorCode.UNSUPPORTED_PLATFORM]: {
         icon: 'Globe', color: 'text-gray-500', bgColor: 'bg-gray-500/10',
         title: 'Not Supported', retryable: false,
+    },
+    [ScraperErrorCode.UNSUPPORTED_CONTENT]: {
+        icon: 'VideoOff', color: 'text-gray-500', bgColor: 'bg-gray-500/10',
+        title: 'Unsupported Content', retryable: false,
     },
     [ScraperErrorCode.COOKIE_REQUIRED]: {
         icon: 'Cookie', color: 'text-amber-500', bgColor: 'bg-amber-500/10',

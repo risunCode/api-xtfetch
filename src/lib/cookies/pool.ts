@@ -139,6 +139,12 @@ function getCookiePreview(cookie: string): string {
 
 /**
  * Get a rotating cookie from the pool for a platform
+ * Uses optimized single-query approach with smart prioritization:
+ * 1. Healthy cookies from requested tier
+ * 2. Healthy cookies from public tier (if private requested)
+ * 3. Expired cooldown cookies (cooldown_until < now)
+ * 4. Any enabled cookie as last resort
+ * 
  * @param platform - The platform to get a cookie for
  * @param tier - Cookie tier: 'public' (default) or 'private' (with fallback to public)
  */
@@ -153,155 +159,127 @@ export async function cookiePoolGetRotating(
     }
 
     try {
-        try { await db.rpc('reset_expired_cooldowns'); } catch { /* ignore */ }
+        // Non-blocking RPC call to reset expired cooldowns (fire and forget)
+        (async () => {
+            try { await db.rpc('reset_expired_cooldowns'); } catch { /* ignore */ }
+        })();
 
-        // First try: healthy cookies from requested tier
-        const { data, error } = await db
+        const now = new Date().toISOString();
+        
+        // Build tiers to search: for private tier, include public as fallback
+        const tiersToSearch = tier === 'private' ? ['private', 'public'] : ['public'];
+        
+        // Single optimized query that fetches best available cookie
+        // Priority order via computed columns in ORDER BY:
+        // 1. Tier match (requested tier first)
+        // 2. Status priority (healthy > expired cooldown > other)
+        // 3. Cooldown expiry (for cooldown status, prefer already expired)
+        // 4. Last used (least recently used first)
+        // 5. Use count (least used first)
+        const { data: cookies, error } = await db
             .from('admin_cookie_pool')
             .select('*')
             .eq('platform', platform)
-            .eq('tier', tier)
             .eq('enabled', true)
-            .eq('status', 'healthy')
-            .or('cooldown_until.is.null,cooldown_until.lt.now()')
+            .in('tier', tiersToSearch)
             .order('last_used_at', { ascending: true, nullsFirst: true })
             .order('use_count', { ascending: true })
-            .limit(1)
-            .single();
+            .limit(20); // Get a batch to filter in-memory for priority
 
-        if (data) {
-            logger.debug('cookies', `[${platform}:${tier}] Found healthy cookie: ${data.id.substring(0, 8)}...`);
-            await db
-                .from('admin_cookie_pool')
-                .update({
-                    last_used_at: new Date().toISOString(),
-                    use_count: data.use_count + 1
-                })
-                .eq('id', data.id);
-
-            lastUsedCookieId = data.id;
-            const decrypted = decryptCookie(data.cookie);
-            return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
-        }
-
-        // For private tier: fallback to public tier
-        if (tier === 'private') {
-            logger.debug('cookies', `[${platform}:${tier}] No healthy private cookie (error: ${error?.message || 'none'}), falling back to public tier...`);
-            
-            // Try public tier healthy cookies
-            const { data: publicData } = await db
-                .from('admin_cookie_pool')
-                .select('*')
-                .eq('platform', platform)
-                .eq('tier', 'public')
-                .eq('enabled', true)
-                .eq('status', 'healthy')
-                .or('cooldown_until.is.null,cooldown_until.lt.now()')
-                .order('last_used_at', { ascending: true, nullsFirst: true })
-                .order('use_count', { ascending: true })
-                .limit(1)
-                .single();
-
-            if (publicData) {
-                logger.debug('cookies', `[${platform}:${tier}→public] Found healthy public fallback: ${publicData.id.substring(0, 8)}...`);
-                await db
-                    .from('admin_cookie_pool')
-                    .update({
-                        last_used_at: new Date().toISOString(),
-                        use_count: publicData.use_count + 1
-                    })
-                    .eq('id', publicData.id);
-
-                lastUsedCookieId = publicData.id;
-                const decrypted = decryptCookie(publicData.cookie);
-                return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
-            }
-            
-            // Try public tier cooldown cookies
-            const { data: publicCooldown } = await db
-                .from('admin_cookie_pool')
-                .select('*')
-                .eq('platform', platform)
-                .eq('tier', 'public')
-                .eq('enabled', true)
-                .eq('status', 'cooldown')
-                .lt('cooldown_until', new Date().toISOString())
-                .order('cooldown_until', { ascending: true })
-                .limit(1)
-                .single();
-            
-            if (publicCooldown) {
-                logger.debug('cookies', `[${platform}:${tier}→public] Found expired cooldown public fallback: ${publicCooldown.id.substring(0, 8)}...`);
-                await db
-                    .from('admin_cookie_pool')
-                    .update({ status: 'healthy', cooldown_until: null })
-                    .eq('id', publicCooldown.id);
-                
-                lastUsedCookieId = publicCooldown.id;
-                const decrypted = decryptCookie(publicCooldown.cookie);
-                return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
-            }
-
-            logger.warn('cookies', `[${platform}:${tier}] No private or public cookies available!`);
+        if (error || !cookies || cookies.length === 0) {
+            logger.warn('cookies', `[${platform}:${tier}] No cookies found in pool!`);
             return null;
         }
 
-        // Second try: cooldown cookies that have expired (public tier only)
-        logger.debug('cookies', `[${platform}:${tier}] No healthy cookie found (error: ${error?.message || 'none'}), trying cooldown...`);
-        const { data: cooldownData } = await db
-            .from('admin_cookie_pool')
-            .select('*')
-            .eq('platform', platform)
-            .eq('tier', tier)
-            .eq('enabled', true)
-            .eq('status', 'cooldown')
-            .lt('cooldown_until', new Date().toISOString())
-            .order('cooldown_until', { ascending: true })
-            .limit(1)
-            .single();
-        
-        if (cooldownData) {
-            logger.debug('cookies', `[${platform}:${tier}] Found expired cooldown cookie: ${cooldownData.id.substring(0, 8)}...`);
-            await db
-                .from('admin_cookie_pool')
-                .update({ status: 'healthy', cooldown_until: null })
-                .eq('id', cooldownData.id);
+        // Score and sort cookies by priority in-memory
+        // This is faster than multiple DB queries
+        const scoredCookies = cookies.map(cookie => {
+            let priority = 1000; // Lower is better
             
-            lastUsedCookieId = cooldownData.id;
-            const decrypted = decryptCookie(cooldownData.cookie);
-            return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+            // Tier priority: requested tier > fallback tier
+            if (cookie.tier === tier) {
+                priority -= 500;
+            }
+            
+            // Status priority
+            const isHealthy = cookie.status === 'healthy';
+            const isCooldownExpired = cookie.status === 'cooldown' && 
+                cookie.cooldown_until && new Date(cookie.cooldown_until) < new Date(now);
+            const isCooldownActive = cookie.status === 'cooldown' && 
+                cookie.cooldown_until && new Date(cookie.cooldown_until) >= new Date(now);
+            
+            if (isHealthy && (!cookie.cooldown_until || new Date(cookie.cooldown_until) < new Date(now))) {
+                priority -= 400; // Best: healthy with no active cooldown
+            } else if (isCooldownExpired) {
+                priority -= 300; // Good: cooldown has expired
+            } else if (isHealthy) {
+                priority -= 200; // OK: healthy but has active cooldown
+            } else if (!isCooldownActive) {
+                priority -= 100; // Fallback: any other status without active cooldown
+            }
+            // Active cooldown cookies get no bonus (priority stays higher = worse)
+            
+            return { cookie, priority, isHealthy, isCooldownExpired };
+        });
+
+        // Sort by priority (lower is better), then by last_used_at, then by use_count
+        scoredCookies.sort((a, b) => {
+            if (a.priority !== b.priority) return a.priority - b.priority;
+            // Secondary sort by last_used_at (nulls first, then ascending)
+            const aTime = a.cookie.last_used_at ? new Date(a.cookie.last_used_at).getTime() : 0;
+            const bTime = b.cookie.last_used_at ? new Date(b.cookie.last_used_at).getTime() : 0;
+            if (aTime !== bTime) return aTime - bTime;
+            // Tertiary sort by use_count
+            return a.cookie.use_count - b.cookie.use_count;
+        });
+
+        const best = scoredCookies[0];
+        if (!best) {
+            logger.warn('cookies', `[${platform}:${tier}] No suitable cookies found after scoring!`);
+            return null;
         }
 
-        // Third try: ANY enabled cookie regardless of status (last resort, public tier only)
-        logger.debug('cookies', `[${platform}:${tier}] No cooldown cookie found, trying any enabled cookie...`);
-        const { data: anyData } = await db
-            .from('admin_cookie_pool')
-            .select('*')
-            .eq('platform', platform)
-            .eq('tier', tier)
-            .eq('enabled', true)
-            .order('last_used_at', { ascending: true, nullsFirst: true })
-            .limit(1)
-            .single();
+        const selectedCookie = best.cookie;
+        const tierInfo = selectedCookie.tier === tier ? tier : `${tier}→${selectedCookie.tier}`;
         
-        if (anyData) {
-            logger.debug('cookies', `[${platform}:${tier}] Found fallback cookie (status: ${anyData.status}): ${anyData.id.substring(0, 8)}...`);
-            await db
-                .from('admin_cookie_pool')
-                .update({
-                    last_used_at: new Date().toISOString(),
-                    use_count: anyData.use_count + 1,
-                    status: 'healthy' // Reset status since we're using it
-                })
-                .eq('id', anyData.id);
+        // Determine what type of cookie we found for logging
+        let cookieType: string;
+        if (best.isHealthy && (!selectedCookie.cooldown_until || new Date(selectedCookie.cooldown_until) < new Date(now))) {
+            cookieType = 'healthy';
+        } else if (best.isCooldownExpired) {
+            cookieType = 'expired cooldown';
+        } else {
+            cookieType = `fallback (status: ${selectedCookie.status})`;
+        }
+        
+        logger.debug('cookies', `[${platform}:${tierInfo}] Found ${cookieType} cookie: ${selectedCookie.id.substring(0, 8)}...`);
 
-            lastUsedCookieId = anyData.id;
-            const decrypted = decryptCookie(anyData.cookie);
-            return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+        // Update cookie based on its state
+        const updateData: Record<string, unknown> = {
+            last_used_at: now,
+            use_count: selectedCookie.use_count + 1
+        };
+        
+        // Reset cooldown if it was expired, or reset status if using fallback
+        if (best.isCooldownExpired || selectedCookie.status !== 'healthy') {
+            updateData.status = 'healthy';
+            updateData.cooldown_until = null;
         }
 
-        logger.warn('cookies', `[${platform}:${tier}] No cookies found in pool!`);
-        return null;
+        // Non-blocking update (fire and forget for performance)
+        (async () => {
+            try {
+                await db.from('admin_cookie_pool')
+                    .update(updateData)
+                    .eq('id', selectedCookie.id);
+            } catch (err) {
+                logger.warn('cookies', `Failed to update cookie usage: ${err}`);
+            }
+        })();
+
+        lastUsedCookieId = selectedCookie.id;
+        const decrypted = decryptCookie(selectedCookie.cookie);
+        return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
     } catch (e) {
         logger.error('cookies', `[${platform}:${tier}] cookiePoolGetRotating error: ${e}`);
         return null;

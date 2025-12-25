@@ -23,11 +23,8 @@ import { utilFetchFilesizes } from '@/lib/utils';
 import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
 import { 
     cacheGetQuick, 
-    cacheGet, 
-    cacheSet, 
-    cacheSetAlias,
-    cacheExtractContentId,
-    cacheIsShortUrl,
+    cacheGetWithFallback,
+    cacheSetWithAlias,
     type ContentType
 } from '@/lib/cache';
 import type { ScraperResult } from '@/core/scrapers/types';
@@ -166,22 +163,13 @@ export async function POST(request: NextRequest) {
         if (urlResult.wasResolved && !skipCache) {
             let resolvedCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
-                resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);
+                // Use the unified helper that handles alias backfill automatically
+                resolvedCache = await cacheGetWithFallback<ScraperResult>(urlResult.platform, url, urlResult.resolvedUrl);
             } catch (cacheError) {
                 logger.warn('cache', `Cache read failed for resolved URL, proceeding without cache: ${cacheError}`);
             }
             if (resolvedCache.hit && resolvedCache.data?.success) {
                 logger.cache(urlResult.platform, true);
-                
-                // Backfill alias for short URL → content ID mapping
-                const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
-                if (contentId && cacheIsShortUrl(url)) {
-                    try {
-                        await cacheSetAlias(url, urlResult.platform, contentId);
-                    } catch (cacheError) {
-                        logger.warn('cache', `Cache alias write failed: ${cacheError}`);
-                    }
-                }
                 
                 const responseTime = Date.now() - startTime;
                 
@@ -230,23 +218,13 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 8: Cache successful result
+        // Step 8: Cache successful result (using unified helper)
         if (result.success && result.data) {
             const contentType = (result.data.type as ContentType) || 'unknown';
             try {
-                await cacheSet(urlResult.platform, urlResult.resolvedUrl, result, contentType);
+                await cacheSetWithAlias(urlResult.platform, url, urlResult.resolvedUrl, result, contentType);
             } catch (cacheError) {
                 logger.warn('cache', `Cache write failed: ${cacheError}`);
-            }
-            
-            // Set alias for short URLs
-            const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
-            if (contentId && cacheIsShortUrl(url)) {
-                try {
-                    await cacheSetAlias(url, urlResult.platform, contentId);
-                } catch (cacheError) {
-                    logger.warn('cache', `Cache alias write failed: ${cacheError}`);
-                }
             }
         }
 
