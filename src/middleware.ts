@@ -173,6 +173,13 @@ export function middleware(request: NextRequest) {
     const origin = request.headers.get('origin');
     const pathname = request.nextUrl.pathname;
     const fullUrl = request.url;
+    
+    // Log incoming request for debugging (only for API routes)
+    if (pathname.startsWith('/api/')) {
+        const bridgeSecret = request.headers.get('x-bridge-secret');
+        const host = request.headers.get('host');
+        console.log(`[Middleware] ${request.method} ${pathname} | Host: ${host} | Origin: ${origin || 'none'} | Bridge: ${bridgeSecret ? 'yes' : 'no'}`);
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // SECURITY: Block suspicious requests
