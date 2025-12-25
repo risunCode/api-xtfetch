@@ -69,26 +69,26 @@ export async function authVerifySession(request: NextRequest): Promise<AuthResul
     }
     
     const authHeader = request.headers.get('Authorization');
-    if (DEBUG_AUTH) {
-        console.log(`[Auth] Header present: ${!!authHeader}, starts with Bearer: ${authHeader?.startsWith('Bearer ')}`);
-    }
+    
+    // Always log auth attempts for debugging
+    console.log(`[Auth] Header present: ${!!authHeader}, starts with Bearer: ${authHeader?.startsWith('Bearer ')}`);
     
     if (!authHeader?.startsWith('Bearer ')) {
+        console.log(`[Auth] Rejected: No Bearer prefix. Header value: ${authHeader?.substring(0, 50) || 'null'}`);
         return { valid: false, error: 'No authorization token' };
     }
     
     const token = authHeader.slice(7);
-    if (DEBUG_AUTH) {
-        console.log(`[Auth] Token length: ${token.length}`);
-    }
+    console.log(`[Auth] Token length: ${token.length}, first 20 chars: ${token.substring(0, 20)}...`);
     
     try {
         const { data: { user }, error } = await authClient.auth.getUser(token);
         
+        // Always log Supabase response
+        console.log(`[Auth] Supabase response - user: ${user?.id || 'null'}, error: ${error?.message || 'none'}`);
+        
         if (error || !user) {
-            if (DEBUG_AUTH) {
-                console.error(`[Auth] Token verification failed: ${error?.message || 'No user returned'}`);
-            }
+            console.error(`[Auth] Token verification failed: ${error?.message || 'No user returned'}`);
             return { valid: false, error: error?.message || 'Invalid token' };
         }
         
