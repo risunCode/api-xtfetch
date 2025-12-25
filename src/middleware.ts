@@ -57,7 +57,7 @@ const envOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).fi
 const ALLOWED_ORIGINS = [
     // Production - DownAria (new branding)
     'https://downaria.vercel.app',        // Frontend (new)
-    'https://api-xfetch.vercel.app',      // Bridge  
+    'https://api-xtfetch.vercel.app',     // Bridge  
     'https://xtfetch-api-production.up.railway.app', // Backend direct
     ...envOrigins,
     // Development origins

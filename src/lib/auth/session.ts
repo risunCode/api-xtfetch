@@ -18,7 +18,8 @@ import { createClient } from '@supabase/supabase-js';
 // SUPABASE CLIENT SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+// Support both NEXT_PUBLIC_ prefix (frontend) and non-prefixed (backend-only)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 // IMPORTANT: Auth MUST use service role key, NOT anon key
@@ -26,6 +27,15 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const authClient = supabaseUrl && supabaseServiceKey 
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null;
+
+// Log auth client status on startup (only once)
+if (!authClient) {
+    console.error('[Auth] ⚠️ Auth client NOT initialized!');
+    console.error(`[Auth] SUPABASE_URL: ${supabaseUrl ? 'SET' : 'MISSING'}`);
+    console.error(`[Auth] SERVICE_ROLE_KEY: ${supabaseServiceKey ? 'SET' : 'MISSING'}`);
+} else {
+    console.log('[Auth] ✓ Auth client initialized');
+}
 
 // Debug flag - set to true for verbose auth logging
 const DEBUG_AUTH = process.env.LOG_LEVEL === 'debug';
