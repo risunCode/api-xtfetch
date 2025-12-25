@@ -9,11 +9,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { webhookCallback } from 'grammy';
 import { bot, botConfigIsValid } from '@/bot';
 
-// Create webhook handler once (singleton)
-const handleUpdate = webhookCallback(bot, 'std/http', {
-  timeoutMilliseconds: 25_000,
-  onTimeout: 'return',
-});
+// Lazy-init webhook handler (avoid build-time errors when bot is null)
+let handleUpdate: ((req: Request) => Promise<Response>) | null = null;
+
+function getHandler() {
+  if (!handleUpdate && bot) {
+    handleUpdate = webhookCallback(bot, 'std/http', {
+      timeoutMilliseconds: 25_000,
+      onTimeout: 'return',
+    });
+  }
+  return handleUpdate;
+}
 
 // ============================================================================
 // Webhook Handler
@@ -26,9 +33,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Bot not configured' }, { status: 503 });
   }
 
+  const handler = getHandler();
+  if (!handler) {
+    console.error('[Webhook] Handler not initialized');
+    return NextResponse.json({ error: 'Bot not ready' }, { status: 503 });
+  }
+
   try {
-    // Directly pass to grammY - no body consumption before this!
-    return await handleUpdate(request);
+    return await handler(request);
   } catch (error) {
     console.error('[Webhook] Error:', error);
     return NextResponse.json({ ok: true }); // Always 200 to prevent Telegram retry
