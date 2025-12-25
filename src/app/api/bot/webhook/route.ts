@@ -6,44 +6,32 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { bot, botCreateWebhookHandler, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET } from '@/bot';
+import { webhookCallback } from 'grammy';
+import { bot, botConfigIsValid } from '@/bot';
+
+// Create webhook handler once (singleton)
+const handleUpdate = webhookCallback(bot, 'std/http', {
+  timeoutMilliseconds: 25_000,
+  onTimeout: 'return',
+});
 
 // ============================================================================
 // Webhook Handler
 // ============================================================================
 
 export async function POST(request: NextRequest) {
-  console.log('[Webhook] POST received');
-  
   // Check if bot is configured
   if (!botConfigIsValid()) {
-    console.error('[Webhook] Bot not configured - missing TELEGRAM_BOT_TOKEN');
-    return NextResponse.json(
-      { error: 'Bot not configured' },
-      { status: 503 }
-    );
-  }
-
-  // Log incoming update for debugging
-  try {
-    const body = await request.clone().json();
-    console.log('[Webhook] Update:', JSON.stringify(body).slice(0, 500));
-  } catch (e) {
-    console.log('[Webhook] Could not parse body');
+    console.error('[Webhook] Bot not configured');
+    return NextResponse.json({ error: 'Bot not configured' }, { status: 503 });
   }
 
   try {
-    // Get the webhook handler
-    const handleUpdate = botCreateWebhookHandler();
-
-    // Process the update
+    // Directly pass to grammY - no body consumption before this!
     return await handleUpdate(request);
   } catch (error) {
-    console.error('[Webhook] Error processing update:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    console.error('[Webhook] Error:', error);
+    return NextResponse.json({ ok: true }); // Always 200 to prevent Telegram retry
   }
 }
 
@@ -52,11 +40,8 @@ export async function POST(request: NextRequest) {
 // ============================================================================
 
 export async function GET() {
-  const isConfigured = botConfigIsValid();
-
   return NextResponse.json({
-    status: isConfigured ? 'ok' : 'not_configured',
-    bot: isConfigured ? 'ready' : 'missing_token',
+    status: botConfigIsValid() ? 'ok' : 'not_configured',
     timestamp: new Date().toISOString(),
   });
 }

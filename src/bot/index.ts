@@ -119,10 +119,13 @@ export function botCreateWebhookHandler() {
     return async (request: NextRequest): Promise<NextResponse> => {
         try {
             // Ensure bot is initialized
+            console.log('[Bot] Initializing...');
             await initBot();
+            console.log('[Bot] Init done, processing update...');
             
             // Process the update
             const response = await handleUpdate(request);
+            console.log('[Bot] Update processed, status:', response.status);
             
             return new NextResponse(response.body, {
                 status: response.status,
