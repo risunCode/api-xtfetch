@@ -13,6 +13,8 @@ import { bot, botCreateWebhookHandler, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET
 // ============================================================================
 
 export async function POST(request: NextRequest) {
+  console.log('[Webhook] POST received');
+  
   // Check if bot is configured
   if (!botConfigIsValid()) {
     console.error('[Webhook] Bot not configured - missing TELEGRAM_BOT_TOKEN');
@@ -22,18 +24,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Verify webhook secret if configured
-  // TEMP: Disabled for debugging - will re-enable after bot works
-  // if (TELEGRAM_WEBHOOK_SECRET) {
-  //   const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
-  //   if (secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
-  //     console.warn('[Webhook] Invalid secret token');
-  //     return NextResponse.json(
-  //       { error: 'Unauthorized' },
-  //       { status: 401 }
-  //     );
-  //   }
-  // }
+  // Log incoming update for debugging
+  try {
+    const body = await request.clone().json();
+    console.log('[Webhook] Update:', JSON.stringify(body).slice(0, 500));
+  } catch (e) {
+    console.log('[Webhook] Could not parse body');
+  }
 
   try {
     // Get the webhook handler
