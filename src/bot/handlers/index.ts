@@ -14,7 +14,6 @@ export {
     registerUrlHandler, 
     botUrlExtract, 
     botUrlCallScraper,
-    botUrlGetPlatformEmoji,
     botUrlGetPlatformName,
 } from './url';
 
