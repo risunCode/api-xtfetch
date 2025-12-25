@@ -108,7 +108,7 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
     }
 
     const user = ctx.botUser;
-    const telegramId = user.telegram_id;
+    const telegramId = user.id;
 
     // Premium users bypass all limits
     if (ctx.isPremium) {
@@ -170,7 +170,7 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
 export async function botRateLimitRecordDownload(ctx: BotContext): Promise<void> {
     if (!ctx.botUser) return;
 
-    const telegramId = ctx.botUser.telegram_id;
+    const telegramId = ctx.botUser.id;
 
     // Premium users don't have cooldown
     if (!ctx.isPremium) {

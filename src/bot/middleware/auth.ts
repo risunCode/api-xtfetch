@@ -50,12 +50,11 @@ async function botUserGetOrCreate(
     if (data) {
         return {
             id: data.id,
-            telegram_id: data.telegram_id,
             username: data.username || undefined,
             first_name: data.first_name || undefined,
-            last_name: undefined, // Not in service type
+            last_name: undefined,
             language_code: data.language_code,
-            is_banned: false, // Not in service type, default to false
+            is_banned: data.is_banned || false,
             ban_reason: undefined,
             api_key_id: data.api_key_id || undefined,
             daily_downloads: data.daily_downloads,

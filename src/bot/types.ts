@@ -15,8 +15,7 @@ import type { PlatformId } from '@/core/config';
 
 /** Bot user record in database */
 export interface BotUser {
-    id: string;                    // UUID primary key
-    telegram_id: number;           // Telegram user ID
+    id: number;                    // Telegram user ID (BIGINT primary key)
     username?: string;             // Telegram username
     first_name?: string;           // Telegram first name
     last_name?: string;            // Telegram last name

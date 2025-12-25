@@ -11,12 +11,11 @@ import { supabaseAdmin } from '@/lib/database';
 // ============================================================================
 
 export interface BotUser {
-  id: string;
-  telegram_id: number;
+  id: number;  // Telegram user ID (BIGINT)
   username: string | null;
   first_name: string | null;
   language_code: string;
-  is_premium: boolean;
+  is_banned: boolean;
   api_key_id: string | null;
   daily_downloads: number;
   total_downloads: number;
@@ -27,7 +26,7 @@ export interface BotUser {
 }
 
 export interface BotUserCreateInput {
-  telegram_id: number;
+  id: number;  // Telegram user ID
   username?: string | null;
   first_name?: string | null;
   language_code?: string;
@@ -66,11 +65,11 @@ export async function botUserCreate(
     const { data, error } = await supabaseAdmin
       .from('bot_users')
       .insert({
-        telegram_id: telegramId,
+        id: telegramId,
         username: username || null,
         first_name: firstName || null,
         language_code: langCode,
-        is_premium: false,
+        is_banned: false,
         daily_downloads: 0,
         total_downloads: 0,
         daily_reset_at: new Date().toISOString(),
@@ -106,7 +105,7 @@ export async function botUserGet(
     const { data, error } = await supabaseAdmin
       .from('bot_users')
       .select('*')
-      .eq('telegram_id', telegramId)
+      .eq('id', telegramId)
       .single();
 
     if (error) {
@@ -141,7 +140,7 @@ export async function botUserUpdate(
         ...updateData,
         updated_at: new Date().toISOString(),
       })
-      .eq('telegram_id', telegramId)
+      .eq('id', telegramId)
       .select()
       .single();
 
@@ -276,7 +275,7 @@ export async function botUserIncrementDownloads(
         daily_reset_at: needsReset ? now.toISOString() : user.daily_reset_at,
         updated_at: now.toISOString(),
       })
-      .eq('telegram_id', telegramId)
+      .eq('id', telegramId)
       .select()
       .single();
 
@@ -348,7 +347,7 @@ export async function botUserGetStats(telegramId: number): Promise<{
   return {
     dailyDownloads: user.daily_downloads,
     totalDownloads: user.total_downloads,
-    isPremium: user.is_premium,
+    isPremium: !!user.api_key_id,  // Premium if has API key
     lastDownloadAt: user.last_download_at,
   };
 }
@@ -368,7 +367,7 @@ export async function botUserGetRemainingDownloads(
   }
 
   // Premium users have unlimited downloads
-  if (user.is_premium) {
+  if (user.api_key_id) {
     return { remaining: -1, isPremium: true }; // -1 indicates unlimited
   }
 
