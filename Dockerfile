@@ -3,6 +3,9 @@
 
 FROM node:20-slim
 
+# Cache bust - change this value to force rebuild
+ARG CACHE_BUST=20251226_v2
+
 WORKDIR /app
 
 # Install Python, pip, and ffmpeg

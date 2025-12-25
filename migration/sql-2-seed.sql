@@ -766,5 +766,72 @@ GRANT EXECUTE ON FUNCTION record_download_stat(TEXT, VARCHAR, VARCHAR, BOOLEAN, 
 GRANT EXECUTE ON FUNCTION record_error_log(TEXT, TEXT, TEXT, TEXT, TEXT, UUID, VARCHAR, INET, TEXT, TEXT) TO service_role;
 
 -- ============================================================================
+-- SECTION J: BOT TABLES (Telegram Bot)
+-- ============================================================================
+
+-- BOT USERS TABLE
+CREATE TABLE IF NOT EXISTS bot_users (
+    id BIGINT PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
+    language_code TEXT DEFAULT 'en',
+    is_banned BOOLEAN DEFAULT false,
+    is_admin BOOLEAN DEFAULT false,
+    api_key_id VARCHAR(20) REFERENCES api_keys(id) ON DELETE SET NULL,
+    premium_expires_at TIMESTAMPTZ,
+    daily_downloads INT DEFAULT 0,
+    last_download_reset TIMESTAMPTZ,
+    daily_reset_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE bot_users IS 'Telegram bot user records';
+COMMENT ON COLUMN bot_users.id IS 'Telegram user ID (primary key)';
+COMMENT ON COLUMN bot_users.api_key_id IS 'Optional link to premium API key';
+COMMENT ON COLUMN bot_users.premium_expires_at IS 'Premium expiry date (NULL = no premium)';
+COMMENT ON COLUMN bot_users.daily_downloads IS 'Number of downloads today (resets daily)';
+COMMENT ON COLUMN bot_users.daily_reset_at IS 'Timestamp when daily downloads were last reset';
+
+-- BOT DOWNLOADS TABLE
+CREATE TABLE IF NOT EXISTS bot_downloads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id BIGINT REFERENCES bot_users(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    status TEXT DEFAULT 'pending',
+    is_premium BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE bot_downloads IS 'Download history for Telegram bot users';
+COMMENT ON COLUMN bot_downloads.status IS 'Download status: pending, success, failed';
+COMMENT ON COLUMN bot_downloads.is_premium IS 'Whether download was made with premium account';
+
+-- BOT INDEXES
+CREATE INDEX IF NOT EXISTS idx_bot_users_api_key ON bot_users(api_key_id);
+CREATE INDEX IF NOT EXISTS idx_bot_users_banned ON bot_users(is_banned) WHERE is_banned = true;
+CREATE INDEX IF NOT EXISTS idx_bot_downloads_user ON bot_downloads(user_id);
+CREATE INDEX IF NOT EXISTS idx_bot_downloads_created ON bot_downloads(created_at);
+CREATE INDEX IF NOT EXISTS idx_bot_downloads_platform ON bot_downloads(platform);
+
+-- BOT RLS
+ALTER TABLE bot_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bot_downloads ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "bot_users_service" ON bot_users FOR ALL TO service_role USING (true);
+CREATE POLICY "bot_downloads_service" ON bot_downloads FOR ALL TO service_role USING (true);
+
+-- BOT TRIGGER
+CREATE TRIGGER trigger_bot_users_updated
+    BEFORE UPDATE ON bot_users
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- BOT GRANTS
+GRANT ALL ON bot_users TO service_role;
+GRANT ALL ON bot_downloads TO service_role;
+
+-- ============================================================================
 -- END OF SEED SCRIPT
 -- ============================================================================

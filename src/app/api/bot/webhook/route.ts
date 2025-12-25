@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { webhookCallback } from 'grammy';
-import { bot, botConfigIsValid } from '@/bot';
+import { bot, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET } from '@/bot';
 
 // Lazy-init webhook handler (avoid build-time errors when bot is null)
 let handleUpdate: ((req: Request) => Promise<Response>) | null = null;
@@ -17,6 +17,7 @@ function getHandler() {
     handleUpdate = webhookCallback(bot, 'std/http', {
       timeoutMilliseconds: 25_000,
       onTimeout: 'return',
+      secretToken: TELEGRAM_WEBHOOK_SECRET || undefined,
     });
   }
   return handleUpdate;
@@ -31,6 +32,15 @@ export async function POST(request: NextRequest) {
   if (!botConfigIsValid()) {
     console.error('[Webhook] Bot not configured');
     return NextResponse.json({ error: 'Bot not configured' }, { status: 503 });
+  }
+
+  // Verify secret token if configured
+  if (TELEGRAM_WEBHOOK_SECRET) {
+    const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
+    if (secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
+      console.error('[Webhook] Invalid secret token');
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
   }
 
   const handler = getHandler();

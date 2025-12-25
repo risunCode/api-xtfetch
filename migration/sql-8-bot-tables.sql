@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS bot_users (
     premium_expires_at TIMESTAMP WITH TIME ZONE,
     daily_downloads INT DEFAULT 0,
     last_download_reset TIMESTAMP WITH TIME ZONE,
+    daily_reset_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
