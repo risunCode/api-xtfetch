@@ -1,6 +1,7 @@
 /**
  * Health Check Endpoint
  * Used by Railway/Render for health monitoring
+ * @module health
  */
 
 import { NextResponse } from 'next/server';
