@@ -112,6 +112,16 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
         return next();
     }
 
+    // Skip rate limit for callback queries (quality selection, menu buttons, etc.)
+    if (ctx.callbackQuery) {
+        return next();
+    }
+
+    // Skip rate limit for commands (only apply to URL messages)
+    if (ctx.message?.text?.startsWith('/')) {
+        return next();
+    }
+
     const user = ctx.botUser;
     const telegramId = user.id;
 

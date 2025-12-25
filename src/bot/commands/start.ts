@@ -1,21 +1,15 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * BOT COMMAND - /start
- * ═══════════════════════════════════════════════════════════════════════════════
- * 
- * Welcome message with inline keyboard buttons.
- * Auto-registers user to database and shows stats.
- * 
- * @module bot/commands/start
+ * /start command - Professional welcome message with language support
  */
 
-import { Composer } from 'grammy';
+import { Composer, InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
 import { supabaseAdmin } from '@/lib/database/supabase';
+import { t, detectLanguage, type BotLanguage } from '../i18n';
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
 interface BotUser {
     id: number;
@@ -26,20 +20,17 @@ interface BotUser {
     is_admin: boolean;
     api_key_id: string | null;
     daily_downloads: number;
+    total_downloads: number;
     last_download_reset: string | null;
     created_at: string;
     updated_at: string;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 const FREE_DAILY_LIMIT = 10;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 // HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
 /**
  * Register or update bot user in database
@@ -54,7 +45,6 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
     const languageCode = ctx.from.language_code || 'en';
 
     try {
-        // Check if user exists
         const { data: existingUser } = await db
             .from('bot_users')
             .select('*')
@@ -62,7 +52,6 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
             .single();
 
         if (existingUser) {
-            // Update existing user
             const { data: updatedUser, error } = await db
                 .from('bot_users')
                 .update({
@@ -82,7 +71,6 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
             return updatedUser as BotUser;
         }
 
-        // Create new user
         const { data: newUser, error } = await db
             .from('bot_users')
             .insert({
@@ -94,6 +82,7 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
                 is_admin: false,
                 api_key_id: null,
                 daily_downloads: 0,
+                total_downloads: 0,
                 last_download_reset: new Date().toISOString()
             })
             .select()
@@ -111,7 +100,7 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
 }
 
 /**
- * Get user's download stats for today
+ * Get user's download stats
  */
 async function botUserGetTodayStats(userId: number): Promise<{ downloadsToday: number; remaining: number }> {
     const db = supabaseAdmin;
@@ -126,13 +115,11 @@ async function botUserGetTodayStats(userId: number): Promise<{ downloadsToday: n
 
         if (!user) return { downloadsToday: 0, remaining: FREE_DAILY_LIMIT };
 
-        // Check if we need to reset daily counter
         const lastReset = user.last_download_reset ? new Date(user.last_download_reset) : new Date(0);
         const now = new Date();
         const isNewDay = lastReset.toDateString() !== now.toDateString();
 
         if (isNewDay) {
-            // Reset counter for new day
             await db
                 .from('bot_users')
                 .update({
@@ -143,9 +130,8 @@ async function botUserGetTodayStats(userId: number): Promise<{ downloadsToday: n
             return { downloadsToday: 0, remaining: FREE_DAILY_LIMIT };
         }
 
-        // Premium users have unlimited
         if (user.api_key_id) {
-            return { downloadsToday: user.daily_downloads || 0, remaining: -1 }; // -1 = unlimited
+            return { downloadsToday: user.daily_downloads || 0, remaining: -1 };
         }
 
         const downloadsToday = user.daily_downloads || 0;
@@ -157,24 +143,40 @@ async function botUserGetTodayStats(userId: number): Promise<{ downloadsToday: n
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * Build start keyboard with language-aware buttons
+ */
+function buildStartKeyboard(lang: BotLanguage): InlineKeyboard {
+    return new InlineKeyboard()
+        .text(t('btn_menu', lang), 'cmd:menu')
+        .text(t('btn_help', lang), 'cmd:help')
+        .row()
+        .text(t('btn_mystatus', lang), 'cmd:mystatus')
+        .text(t('btn_premium', lang), 'cmd:premium')
+        .row()
+        .url(t('btn_website', lang), 'https://downaria.vercel.app');
+}
+
+// ============================================================================
 // COMMAND HANDLER
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
 
 const startComposer = new Composer<Context>();
 
 startComposer.command('start', async (ctx) => {
-    // Register/update user
-    await botUserRegister(ctx);
-
-    // Simple welcome message (no emojis)
-    const message = `DownAria Bot
-
-Paste any video link.
-
-Supported: YouTube, Instagram, TikTok, X, Facebook, Weibo`;
-
-    await ctx.reply(message);
+    const user = await botUserRegister(ctx);
+    const lang = detectLanguage(ctx.from?.language_code);
+    
+    // Check if returning user (has downloads)
+    const isReturning = user && (user.total_downloads > 0 || user.daily_downloads > 0);
+    
+    const messageKey = isReturning ? 'start_welcome_back' : 'start_welcome';
+    const message = t(messageKey, lang);
+    
+    await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: buildStartKeyboard(lang),
+    });
 });
 
 export { startComposer, botUserRegister, botUserGetTodayStats };

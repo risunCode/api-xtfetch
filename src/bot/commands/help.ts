@@ -1,82 +1,39 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * BOT COMMAND - /help
- * ═══════════════════════════════════════════════════════════════════════════════
- * 
- * Shows supported platforms list and brief usage instructions.
- * 
- * @module bot/commands/help
+ * /help command - Shows usage guide with language support
  */
 
-import { Composer } from 'grammy';
+import { Composer, InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const SUPPORTED_PLATFORMS = [
-    { name: 'YouTube', domains: 'youtube.com, youtu.be' },
-    { name: 'Instagram', domains: 'instagram.com/p/, /reel/, /stories/' },
-    { name: 'TikTok', domains: 'tiktok.com, vm.tiktok.com' },
-    { name: 'Twitter/X', domains: 'twitter.com, x.com' },
-    { name: 'Facebook', domains: 'facebook.com, fb.watch' },
-    { name: 'Weibo', domains: 'weibo.com, weibo.cn' },
-];
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// COMMAND HANDLER
-// ═══════════════════════════════════════════════════════════════════════════════
+import { t, detectLanguage, type BotLanguage } from '../i18n';
 
 const helpComposer = new Composer<Context>();
 
+function buildHelpKeyboard(lang: BotLanguage): InlineKeyboard {
+    return new InlineKeyboard()
+        .text(t('btn_menu', lang), 'cmd:menu')
+        .text(t('btn_premium', lang), 'cmd:premium')
+        .row()
+        .url(t('btn_website', lang), 'https://downaria.vercel.app');
+}
+
 helpComposer.command('help', async (ctx) => {
-    // Build platforms list (no emojis)
-    const platformsList = SUPPORTED_PLATFORMS
-        .map(p => `- ${p.name}: ${p.domains}`)
-        .join('\n');
-
-    const message = `DownAria Bot Help
-
-Supported Platforms:
-${platformsList}
-
-Commands:
-/start - Start the bot
-/help - Show this help
-/mystatus - Check your status
-/history - Download history
-/premium - Premium info
-
-Just paste any video URL to download.`;
-
-    await ctx.reply(message);
+    const lang = detectLanguage(ctx.from?.language_code);
+    
+    await ctx.reply(t('help_title', lang), {
+        parse_mode: 'Markdown',
+        reply_markup: buildHelpKeyboard(lang),
+    });
 });
 
 // Handle inline button callback for help
 helpComposer.callbackQuery('help', async (ctx) => {
     await ctx.answerCallbackQuery();
+    const lang = detectLanguage(ctx.from?.language_code);
     
-    // Build platforms list (no emojis)
-    const platformsList = SUPPORTED_PLATFORMS
-        .map(p => `- ${p.name}: ${p.domains}`)
-        .join('\n');
-
-    const message = `DownAria Bot Help
-
-Supported Platforms:
-${platformsList}
-
-Commands:
-/start - Start the bot
-/help - Show this help
-/mystatus - Check your status
-/history - Download history
-/premium - Premium info
-
-Just paste any video URL to download.`;
-
-    await ctx.reply(message);
+    await ctx.reply(t('help_title', lang), {
+        parse_mode: 'Markdown',
+        reply_markup: buildHelpKeyboard(lang),
+    });
 });
 
 export { helpComposer };

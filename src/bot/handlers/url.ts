@@ -9,7 +9,7 @@
  * - Photo (album): Send all photos as media group with Original URL button
  */
 
-import { Bot, InputFile, InlineKeyboard } from 'grammy';
+import { Bot, InputFile } from 'grammy';
 import type { InputMediaPhoto } from 'grammy/types';
 
 import { platformDetect, type PlatformId } from '@/core/config';
@@ -19,10 +19,11 @@ import { cookiePoolGetRotating } from '@/lib/cookies';
 import { logger } from '@/lib/services/shared/logger';
 import { recordDownloadStat } from '@/lib/database';
 
-import type { BotContext, DownloadResult, ContentType } from '../types';
+import type { BotContext, DownloadResult } from '../types';
 import { BOT_MESSAGES, detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
 import { errorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectQualities } from '../keyboards';
+import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 
 // ============================================================================
 // URL DETECTION
@@ -135,25 +136,43 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
 // ============================================================================
 
 /**
- * Build caption with bold platform name and full title (no truncation)
+ * Escape Markdown special characters
  */
-function buildCaption(result: DownloadResult): string {
+function escapeMarkdown(text: string): string {
+    return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
+}
+
+/**
+ * Build caption with bold platform name, full title, and filesize
+ */
+function buildCaption(result: DownloadResult, lang: BotLanguage = 'en'): string {
     const platformName = botUrlGetPlatformName(result.platform!);
     
     let caption = `*${platformName}*\n\n`;
     
-    // Full title - NO TRUNCATION
+    // Full title - NO TRUNCATION, escape special chars
     if (result.title) {
-        caption += `${result.title}\n`;
+        caption += `${escapeMarkdown(result.title)}\n`;
     }
     
     // Author
     if (result.author) {
-        caption += `${result.author}`;
+        caption += `${escapeMarkdown(result.author)}\n`;
+    }
+    
+    // Filesize - show best quality size
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    const bestVideo = videos.find(f => 
+        f.quality.includes('1080') || f.quality.includes('720') || f.quality.toLowerCase().includes('hd')
+    ) || videos[0];
+    
+    if (bestVideo?.filesize) {
+        caption += `\n📦 ${formatFilesize(bestVideo.filesize, lang)}`;
     }
     
     return caption.trim();
 }
+
 
 // ============================================================================
 // SEND FUNCTIONS BY CONTENT TYPE
@@ -161,7 +180,6 @@ function buildCaption(result: DownloadResult): string {
 
 /**
  * Send video directly (non-YouTube)
- * Video is sent immediately with quality buttons for re-download options
  */
 async function sendVideoDirectly(
     ctx: BotContext,
@@ -169,16 +187,16 @@ async function sendVideoDirectly(
     originalUrl: string,
     visitorId: string
 ): Promise<boolean> {
+    const lang = detectLanguage(ctx.from?.language_code);
     const videos = result.formats?.filter(f => f.type === 'video') || [];
     if (videos.length === 0) return false;
 
-    // Get best quality video (prefer HD)
     const hdVideo = videos.find(f => 
         f.quality.includes('1080') || f.quality.includes('720') || f.quality.toLowerCase().includes('hd')
     );
     const videoToSend = hdVideo || videos[0];
 
-    const caption = buildCaption(result);
+    const caption = buildCaption(result, lang);
     const qualities = detectQualities(result);
     const keyboard = buildVideoKeyboard(originalUrl, visitorId, qualities);
 
@@ -192,7 +210,6 @@ async function sendVideoDirectly(
     } catch (error) {
         logger.error('telegram', error, 'SEND_VIDEO');
         
-        // Fallback: send as link
         try {
             await ctx.reply(`📥 Download:\n\n${caption}\n\n${videoToSend.url}`, {
                 parse_mode: 'Markdown',
@@ -208,7 +225,6 @@ async function sendVideoDirectly(
 
 /**
  * Send YouTube preview with thumbnail
- * User must select quality before download (needs conversion)
  */
 async function sendYouTubePreview(
     ctx: BotContext,
@@ -216,21 +232,20 @@ async function sendYouTubePreview(
     originalUrl: string,
     visitorId: string
 ): Promise<boolean> {
-    const caption = buildCaption(result);
+    const lang = detectLanguage(ctx.from?.language_code);
+    const caption = buildCaption(result, lang);
     const qualities = detectQualities(result);
     const keyboard = buildYouTubeKeyboard(originalUrl, visitorId, qualities);
 
     try {
         if (result.thumbnail) {
-            // Send thumbnail with quality selection
             await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
-                caption: `${caption}\n\n📥 Select quality:`,
+                caption: `${caption}\n\n${t('select_quality', lang)}`,
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });
         } else {
-            // No thumbnail - send text message
-            await ctx.reply(`${caption}\n\n📥 Select quality:`, {
+            await ctx.reply(`${caption}\n\n${t('select_quality', lang)}`, {
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });
@@ -250,10 +265,11 @@ async function sendSinglePhoto(
     result: DownloadResult,
     originalUrl: string
 ): Promise<boolean> {
+    const lang = detectLanguage(ctx.from?.language_code);
     const images = result.formats?.filter(f => f.type === 'image') || [];
     if (images.length === 0) return false;
 
-    const caption = buildCaption(result);
+    const caption = buildCaption(result, lang);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
     try {
@@ -271,19 +287,18 @@ async function sendSinglePhoto(
 
 /**
  * Send multiple photos as album (media group)
- * All photos sent at once, not as slider
  */
 async function sendPhotoAlbum(
     ctx: BotContext,
     result: DownloadResult,
     originalUrl: string
 ): Promise<boolean> {
+    const lang = detectLanguage(ctx.from?.language_code);
     const images = result.formats?.filter(f => f.type === 'image') || [];
     if (images.length === 0) return false;
 
-    const caption = buildCaption(result);
+    const caption = buildCaption(result, lang);
 
-    // Build media group (max 10 photos)
     const mediaGroup: InputMediaPhoto[] = images.slice(0, 10).map((img, index) => ({
         type: 'photo' as const,
         media: img.url,
@@ -292,18 +307,14 @@ async function sendPhotoAlbum(
     }));
 
     try {
-        // Send album
         await ctx.replyWithMediaGroup(mediaGroup);
         
-        // Send keyboard separately (can't attach to media group)
         const keyboard = buildPhotoKeyboard(originalUrl);
-        await ctx.reply('📥 Download complete!', { reply_markup: keyboard });
+        await ctx.reply(t('download_complete', lang), { reply_markup: keyboard });
         
         return true;
     } catch (error) {
         logger.error('telegram', error, 'SEND_ALBUM');
-        
-        // Fallback: send first photo only
         return await sendSinglePhoto(ctx, result, originalUrl);
     }
 }
@@ -312,9 +323,6 @@ async function sendPhotoAlbum(
 // MAIN SEND FUNCTION
 // ============================================================================
 
-/**
- * Send media based on content type
- */
 async function sendMediaByType(
     ctx: BotContext,
     result: DownloadResult,
@@ -325,7 +333,6 @@ async function sendMediaByType(
     
     switch (contentType) {
         case 'youtube':
-            // Store result for callback (user needs to select quality)
             ctx.session.pendingDownload = {
                 url: originalUrl,
                 visitorId,
@@ -348,14 +355,16 @@ async function sendMediaByType(
     }
 }
 
+
 // ============================================================================
 // HELPERS
 // ============================================================================
 
 async function sendProcessingMessage(ctx: BotContext, platform: PlatformId): Promise<number | null> {
     try {
+        const lang = detectLanguage(ctx.from?.language_code);
         const name = botUrlGetPlatformName(platform);
-        const msg = await ctx.reply(`⏳ Processing ${name}...`, {
+        const msg = await ctx.reply(t('processing', lang, { platform: name }), {
             reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
         });
         return msg.message_id;
@@ -393,22 +402,37 @@ function generateVisitorId(): string {
 export function registerUrlHandler(bot: Bot<BotContext>): void {
     bot.on('message:text', async (ctx) => {
         const text = ctx.message.text;
+        const lang = detectLanguage(ctx.from?.language_code);
         
-        // Skip commands
-        if (text.startsWith('/')) return;
+        // Skip known commands
+        if (text.startsWith('/')) {
+            const knownCommands = ['/start', '/help', '/mystatus', '/history', '/premium', '/menu', '/privacy', '/status', '/stats', '/broadcast', '/ban', '/unban', '/givepremium', '/maintenance'];
+            const cmd = text.split(' ')[0].toLowerCase();
+            
+            if (!knownCommands.includes(cmd)) {
+                await ctx.reply(t('unknown_command', lang), {
+                    reply_parameters: { message_id: ctx.message.message_id },
+                });
+            }
+            return;
+        }
         
         const url = botUrlExtract(text);
-        if (!url) return;
-
-        const platform = platformDetect(url);
-        if (!platform) {
-            await ctx.reply(BOT_MESSAGES.ERROR_UNSUPPORTED, {
+        if (!url) {
+            await ctx.reply(t('unknown_text', lang), {
                 reply_parameters: { message_id: ctx.message.message_id },
             });
             return;
         }
 
-        // Store for retry
+        const platform = platformDetect(url);
+        if (!platform) {
+            await ctx.reply(t('error_unsupported', lang), {
+                reply_parameters: { message_id: ctx.message.message_id },
+            });
+            return;
+        }
+
         ctx.session.pendingRetryUrl = url;
         ctx.session.lastPlatform = platform;
 
@@ -424,16 +448,15 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             const sent = await sendMediaByType(ctx, result, url, visitorId);
             
             if (sent) {
-                // Delete user message (clean chat)
                 await deleteMessage(ctx, ctx.message.message_id);
                 await botRateLimitRecordDownload(ctx);
             } else {
-                await ctx.reply(BOT_MESSAGES.ERROR_GENERIC, {
+                await ctx.reply(t('error_generic', lang), {
                     reply_markup: errorKeyboard(url),
                 });
             }
         } else {
-            await editToError(ctx, processingMsgId, result.error || BOT_MESSAGES.ERROR_GENERIC, url);
+            await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url);
         }
     });
 }
@@ -451,4 +474,5 @@ export {
     sendSinglePhoto,
     sendPhotoAlbum,
     buildCaption,
+    escapeMarkdown,
 };

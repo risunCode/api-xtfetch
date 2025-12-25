@@ -22,6 +22,8 @@ import {
     historyComposer, 
     premiumComposer,
     mystatusComposer,
+    menuComposer,
+    privacyComposer,
 } from './commands';
 import { adminComposer } from './commands/admin';
 import { initWorker, closeWorker, isQueueAvailable } from './queue';
@@ -73,6 +75,8 @@ function getBotInstance(): Bot<BotContext> {
         botInstance.use(historyComposer);
         botInstance.use(premiumComposer);
         botInstance.use(mystatusComposer);
+        botInstance.use(menuComposer);
+        botInstance.use(privacyComposer);
         botInstance.use(adminComposer);
         
         // Register handlers

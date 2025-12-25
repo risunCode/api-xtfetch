@@ -266,15 +266,20 @@ export async function botUserIncrementDownloads(
     const needsReset = resetDate.toDateString() !== now.toDateString();
 
     // Update with increment
-    const { data, error } = await supabaseAdmin
-      .from('bot_users')
-      .update({
+    const updateData: Record<string, unknown> = {
         daily_downloads: needsReset ? 1 : user.daily_downloads + 1,
-        total_downloads: user.total_downloads + 1,
-        last_download_at: now.toISOString(),
         daily_reset_at: needsReset ? now.toISOString() : user.daily_reset_at,
         updated_at: now.toISOString(),
-      })
+    };
+    
+    // Only update total_downloads if column exists (graceful handling)
+    if ('total_downloads' in user) {
+        updateData.total_downloads = (user.total_downloads || 0) + 1;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('bot_users')
+      .update(updateData)
       .eq('id', telegramId)
       .select()
       .single();

@@ -303,14 +303,80 @@ async function botCallbackDownloadQuality(
     if (quality === 'cancel') {
         await ctx.deleteMessage();
         await ctx.answerCallbackQuery('Cancelled');
-        // Clean up session
         ctx.session.pendingDownload = undefined;
         return;
     }
 
     // Get pending download from session
     const pending = ctx.session.pendingDownload;
+    
+    // Session expired - try to extract URL from keyboard
     if (!pending || pending.visitorId !== visitorId) {
+        // Try to get Original URL from inline keyboard
+        const keyboard = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard;
+        let originalUrl: string | null = null;
+        
+        if (keyboard) {
+            for (const row of keyboard) {
+                for (const btn of row) {
+                    // Check if button has url property (URL button type)
+                    if ('url' in btn && btn.url && (btn.text?.includes('Original') || btn.text?.includes('🔗'))) {
+                        originalUrl = btn.url;
+                        break;
+                    }
+                }
+                if (originalUrl) break;
+            }
+        }
+        
+        if (originalUrl) {
+            // Re-scrape and send
+            await ctx.answerCallbackQuery({ text: '⏳ Re-fetching...' });
+            
+            try {
+                await ctx.editMessageCaption({ caption: '⏳ Re-fetching media...' });
+            } catch {
+                try { await ctx.editMessageText('⏳ Re-fetching media...'); } catch {}
+            }
+            
+            const result = await botUrlCallScraper(originalUrl, ctx.isPremium || false);
+            
+            if (result.success && result.formats) {
+                const formatToSend = findFormatByQuality(result.formats, quality);
+                
+                if (formatToSend) {
+                    try {
+                        await ctx.deleteMessage();
+                        
+                        let caption = result.title || '';
+                        if (result.author) caption += `\n\n👤 ${result.author}`;
+                        caption += '\n\n📥 via @DownAriaBot';
+                        
+                        if (quality === 'audio') {
+                            await ctx.replyWithAudio(new InputFile({ url: formatToSend.url }), {
+                                caption,
+                                title: result.title?.substring(0, 64),
+                            });
+                        } else {
+                            await ctx.replyWithVideo(new InputFile({ url: formatToSend.url }), { caption });
+                        }
+                        
+                        await botRateLimitRecordDownload(ctx);
+                        return;
+                    } catch (error) {
+                        logger.error('telegram', error, 'REFETCH_SEND');
+                        await ctx.reply(`🔗 Download link:\n${formatToSend.url}`, {
+                            link_preview_options: { is_disabled: true },
+                        });
+                        return;
+                    }
+                }
+            }
+            
+            await ctx.answerCallbackQuery({ text: '❌ Failed to fetch. Try again.', show_alert: true });
+            return;
+        }
+        
         await ctx.answerCallbackQuery({ 
             text: '⏰ Session expired. Please send the URL again.',
             show_alert: true 
@@ -354,10 +420,7 @@ async function botCallbackDownloadQuality(
     }
 
     try {
-        // Delete preview message
-        await ctx.deleteMessage();
-
-        // Build caption
+        // Build caption (don't delete preview message - user might want other qualities)
         let caption = '';
         if (pending.result.title) {
             caption = pending.result.title.substring(0, 200);
@@ -368,7 +431,7 @@ async function botCallbackDownloadQuality(
         }
         caption += '\n\n📥 via @DownAriaBot';
 
-        // Send the media
+        // Send the media (don't delete preview - user might want other qualities)
         if (quality === 'audio') {
             await ctx.replyWithAudio(new InputFile({ url: formatToSend.url }), {
                 caption,
@@ -383,8 +446,16 @@ async function botCallbackDownloadQuality(
         // Record successful download
         await botRateLimitRecordDownload(ctx);
 
-        // Clean up session
-        ctx.session.pendingDownload = undefined;
+        // Update preview message to show success (don't delete - user might want other qualities)
+        try {
+            const successCaption = `✅ ${qualityLabel} downloaded!\n\nSelect another quality or cancel:`;
+            await ctx.editMessageCaption({ caption: successCaption });
+        } catch {
+            // If can't edit, just leave it
+        }
+
+        // DON'T clear session - user might want to download other qualities
+        // ctx.session.pendingDownload = undefined;
 
         logger.debug('telegram', `Download sent: ${quality} quality for ${pending.platform}`);
     } catch (error) {

@@ -1,40 +1,30 @@
 /**
- * /menu command - Shows main menu with platform list
+ * /menu command - Shows main menu with language support
  */
 
 import { Composer, InlineKeyboard } from 'grammy';
 import type { BotContext } from '../types';
+import { t, detectLanguage, type BotLanguage } from '../i18n';
 
 export const menuComposer = new Composer<BotContext>();
 
-const MENU_MESSAGE = `📋 *Menu DownAria Bot*
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Kirim link video dari platform berikut:
-
-• *YouTube* \\- Video & Shorts
-• *Instagram* \\- Reels, Posts, Stories
-• *TikTok* \\- Video
-• *Twitter/X* \\- Video tweets
-• *Facebook* \\- Video & Reels
-• *Weibo* \\- Video
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-
-const menuKeyboard = new InlineKeyboard()
-    .text('📊 My Status', 'cmd:mystatus')
-    .text('📜 History', 'cmd:history')
-    .row()
-    .text('💎 Premium', 'cmd:premium')
-    .text('🔒 Privacy', 'cmd:privacy')
-    .row()
-    .url('🌐 Website', 'https://downaria.vercel.app')
-    .text('❓ Help', 'cmd:help');
+function buildMenuKeyboard(lang: BotLanguage): InlineKeyboard {
+    return new InlineKeyboard()
+        .text(t('btn_mystatus', lang), 'cmd:mystatus')
+        .text(t('btn_history', lang), 'cmd:history')
+        .row()
+        .text(t('btn_premium', lang), 'cmd:premium')
+        .text(t('btn_privacy', lang), 'cmd:privacy')
+        .row()
+        .url(t('btn_website', lang), 'https://downaria.vercel.app')
+        .text(t('btn_help', lang), 'cmd:help');
+}
 
 menuComposer.command('menu', async (ctx) => {
-    await ctx.reply(MENU_MESSAGE, {
-        parse_mode: 'MarkdownV2',
-        reply_markup: menuKeyboard,
+    const lang = detectLanguage(ctx.from?.language_code);
+    
+    await ctx.reply(t('menu_title', lang), {
+        parse_mode: 'Markdown',
+        reply_markup: buildMenuKeyboard(lang),
     });
 });
