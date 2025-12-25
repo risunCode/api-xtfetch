@@ -204,7 +204,6 @@ export {
     registerCallbackHandler,
     botUrlExtract,
     botUrlCallScraper,
-    botUrlGetPlatformEmoji,
     botUrlGetPlatformName,
     botCallbackParse,
 } from './handlers';
