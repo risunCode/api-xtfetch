@@ -16,12 +16,12 @@ import type { Context } from 'grammy';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const SUPPORTED_PLATFORMS = [
-    { icon: '▶️', name: 'YouTube', domains: 'youtube.com, youtu.be' },
-    { icon: '📸', name: 'Instagram', domains: 'instagram.com/p/, /reel/, /stories/' },
-    { icon: '🎵', name: 'TikTok', domains: 'tiktok.com, vm.tiktok.com' },
-    { icon: '𝕏', name: 'Twitter/X', domains: 'twitter.com, x.com' },
-    { icon: '📘', name: 'Facebook', domains: 'facebook.com, fb.watch' },
-    { icon: '🔴', name: 'Weibo', domains: 'weibo.com, weibo.cn' },
+    { name: 'YouTube', domains: 'youtube.com, youtu.be' },
+    { name: 'Instagram', domains: 'instagram.com/p/, /reel/, /stories/' },
+    { name: 'TikTok', domains: 'tiktok.com, vm.tiktok.com' },
+    { name: 'Twitter/X', domains: 'twitter.com, x.com' },
+    { name: 'Facebook', domains: 'facebook.com, fb.watch' },
+    { name: 'Weibo', domains: 'weibo.com, weibo.cn' },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -31,76 +31,52 @@ const SUPPORTED_PLATFORMS = [
 const helpComposer = new Composer<Context>();
 
 helpComposer.command('help', async (ctx) => {
-    // Build platforms list
+    // Build platforms list (no emojis)
     const platformsList = SUPPORTED_PLATFORMS
-        .map(p => `${p.icon} *${p.name}*\n   └ ${p.domains}`)
-        .join('\n\n');
+        .map(p => `- ${p.name}: ${p.domains}`)
+        .join('\n');
 
-    const message = `❓ *XTFetch Bot Help*
+    const message = `DownAria Bot Help
 
-*Supported Platforms:*
-
+Supported Platforms:
 ${platformsList}
 
-━━━━━━━━━━━━━━━━━━━━━━
+Commands:
+/start - Start the bot
+/help - Show this help
+/mystatus - Check your status
+/history - Download history
+/premium - Premium info
 
-*Commands:*
-/start - Start the bot & see stats
-/help - Show this help message
-/status - Check platform availability
-/history - View your download history
-/premium - Get unlimited downloads
-/mystatus - Check your premium status
+Just paste any video URL to download.`;
 
-━━━━━━━━━━━━━━━━━━━━━━
-
-*How to Download:*
-Just paste any video URL directly in the chat!
-
-*Tips:*
-• Make sure videos are public
-• Short URLs are supported
-• Free tier: 10 downloads/day
-• Premium: Unlimited downloads
-
-Need more help? Contact @risunCode`;
-
-    await ctx.reply(message, { parse_mode: 'Markdown' });
+    await ctx.reply(message);
 });
 
 // Handle inline button callback for help
 helpComposer.callbackQuery('help', async (ctx) => {
     await ctx.answerCallbackQuery();
     
-    // Build platforms list
+    // Build platforms list (no emojis)
     const platformsList = SUPPORTED_PLATFORMS
-        .map(p => `${p.icon} *${p.name}*\n   └ ${p.domains}`)
-        .join('\n\n');
+        .map(p => `- ${p.name}: ${p.domains}`)
+        .join('\n');
 
-    const message = `❓ *XTFetch Bot Help*
+    const message = `DownAria Bot Help
 
-*Supported Platforms:*
-
+Supported Platforms:
 ${platformsList}
 
-━━━━━━━━━━━━━━━━━━━━━━
+Commands:
+/start - Start the bot
+/help - Show this help
+/mystatus - Check your status
+/history - Download history
+/premium - Premium info
 
-*Commands:*
-/start - Start the bot & see stats
-/help - Show this help message
-/status - Check platform availability
-/history - View your download history
-/premium - Get unlimited downloads
-/mystatus - Check your premium status
+Just paste any video URL to download.`;
 
-━━━━━━━━━━━━━━━━━━━━━━
-
-*How to Download:*
-Just paste any video URL directly in the chat!
-
-Need more help? Contact @risunCode`;
-
-    await ctx.reply(message, { parse_mode: 'Markdown' });
+    await ctx.reply(message);
 });
 
 export { helpComposer };

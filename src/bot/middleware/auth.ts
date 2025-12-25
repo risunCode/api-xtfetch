@@ -57,9 +57,10 @@ async function botUserGetOrCreate(
             is_banned: data.is_banned || false,
             ban_reason: undefined,
             api_key_id: data.api_key_id || undefined,
+            premium_expires_at: (data as any).premium_expires_at || undefined,
             daily_downloads: data.daily_downloads,
             last_download_at: data.last_download_at || undefined,
-            downloads_reset_at: data.daily_reset_at,
+            last_download_reset: data.daily_reset_at,
             total_downloads: data.total_downloads,
             created_at: data.created_at,
             updated_at: data.updated_at,
@@ -77,10 +78,11 @@ function botUserIsBanned(user: BotUser): boolean {
 }
 
 /**
- * Check if user is premium (has linked API key or is_premium flag)
+ * Check if user is premium (has linked API key and not expired)
  */
 function botUserIsPremium(user: BotUser): boolean {
-    return !!user.api_key_id;
+    return !!user.api_key_id && 
+        (!user.premium_expires_at || new Date(user.premium_expires_at) > new Date());
 }
 
 // ============================================================================

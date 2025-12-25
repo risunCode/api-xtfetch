@@ -23,9 +23,10 @@ export interface BotUser {
     is_banned: boolean;            // Whether user is banned
     ban_reason?: string;           // Reason for ban
     api_key_id?: string;           // Linked API key (premium user)
+    premium_expires_at?: string;   // ISO timestamp when premium expires
     daily_downloads: number;       // Downloads today
     last_download_at?: string;     // ISO timestamp of last download
-    downloads_reset_at?: string;   // ISO timestamp when daily count was reset
+    last_download_reset?: string;  // ISO timestamp when daily count was reset
     total_downloads: number;       // Lifetime downloads
     created_at: string;            // ISO timestamp
     updated_at: string;            // ISO timestamp
@@ -120,12 +121,12 @@ export const RATE_LIMITS = {
 
 /** Bot messages */
 export const BOT_MESSAGES = {
-    PROCESSING: '⏳ Processing your link...',
-    SUCCESS: '✅ Here\'s your media!',
-    ERROR_GENERIC: '❌ Failed to download. Please try again.',
-    ERROR_UNSUPPORTED: '❌ Unsupported platform or invalid URL.',
-    ERROR_RATE_LIMIT: '⏰ Please wait {seconds}s before your next download.',
-    ERROR_LIMIT_REACHED: '📊 You\'ve reached your limit ({limit} downloads per {hours}h).\n\n⏰ Your limit will reset soon!\n💎 Upgrade to premium for unlimited downloads!',
-    ERROR_BANNED: '🚫 Your account has been suspended.',
-    WELCOME: '👋 Welcome to DownAria Bot!\n\nSend me any social media link and I\'ll download it for you.\n\nSupported platforms: YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo',
+    PROCESSING: 'Processing...',
+    SUCCESS: '',
+    ERROR_GENERIC: 'Download failed.',
+    ERROR_UNSUPPORTED: 'Unsupported link.',
+    ERROR_RATE_LIMIT: 'Wait {seconds}s.',
+    ERROR_LIMIT_REACHED: 'Limit reached ({limit}/{hours}h). Resets in {reset}.',
+    ERROR_BANNED: 'Account suspended.',
+    WELCOME: 'DownAria Bot\n\nPaste any video link.\n\nSupported: YouTube, Instagram, TikTok, X, Facebook, Weibo',
 } as const;

@@ -23,11 +23,16 @@ import {
  * Check if downloads need to be reset (every 3 hours)
  */
 function botRateLimitNeedsReset(user: BotUser): boolean {
-    if (!user.downloads_reset_at) return true;
+    if (!user.last_download_reset) {
+        console.log(`[RateLimit] User ${user.id}: No last_download_reset, needs reset`);
+        return true;
+    }
 
-    const resetDate = new Date(user.downloads_reset_at);
+    const resetDate = new Date(user.last_download_reset);
     const now = new Date();
     const hoursDiff = (now.getTime() - resetDate.getTime()) / (1000 * 60 * 60);
+
+    console.log(`[RateLimit] User ${user.id}: last_download_reset=${user.last_download_reset}, hoursDiff=${hoursDiff.toFixed(2)}, needsReset=${hoursDiff >= RATE_LIMITS.FREE_RESET_HOURS}`);
 
     // Reset if more than 3 hours have passed
     return hoursDiff >= RATE_LIMITS.FREE_RESET_HOURS;

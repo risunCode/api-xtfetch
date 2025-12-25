@@ -9,7 +9,7 @@
  * @module bot/commands/start
  */
 
-import { Composer, InlineKeyboard } from 'grammy';
+import { Composer } from 'grammy';
 import type { Context } from 'grammy';
 import { supabaseAdmin } from '@/lib/database/supabase';
 
@@ -165,67 +165,16 @@ const startComposer = new Composer<Context>();
 
 startComposer.command('start', async (ctx) => {
     // Register/update user
-    const user = await botUserRegister(ctx);
-    
-    // Get stats
-    const userId = ctx.from?.id || 0;
-    const stats = await botUserGetTodayStats(userId);
-    const firstName = ctx.from?.first_name || 'there';
+    await botUserRegister(ctx);
 
-    // Build stats line
-    let statsLine: string;
-    if (stats.remaining === -1) {
-        statsLine = `📊 Your Stats: ${stats.downloadsToday} downloads today (👑 Unlimited)`;
-    } else {
-        statsLine = `📊 Your Stats: ${stats.downloadsToday} downloads today (${stats.remaining} remaining)`;
-    }
+    // Simple welcome message (no emojis)
+    const message = `DownAria Bot
 
-    // Build inline keyboard
-    const keyboard = new InlineKeyboard()
-        .text('📥 How to Use', 'howto')
-        .text('📊 Status', 'status')
-        .row()
-        .text('📜 History', 'history')
-        .text('❓ Help', 'help');
+Paste any video link.
 
-    // Welcome message
-    const message = `🎬 *Welcome to XTFetch Bot, ${firstName}!*
+Supported: YouTube, Instagram, TikTok, X, Facebook, Weibo`;
 
-Download videos from your favorite platforms instantly.
-Just paste any video URL and I'll handle the rest!
-
-✅ *Supported:* YouTube, Instagram, TikTok, Twitter, Facebook, Weibo
-
-━━━━━━━━━━━━━━━━━━━━━━
-${statsLine}
-━━━━━━━━━━━━━━━━━━━━━━`;
-
-    await ctx.reply(message, {
-        parse_mode: 'Markdown',
-        reply_markup: keyboard
-    });
-});
-
-// Handle inline button callbacks for start menu
-startComposer.callbackQuery('howto', async (ctx) => {
-    await ctx.answerCallbackQuery();
-    
-    const message = `📥 *How to Use XTFetch Bot*
-
-Simply paste any video URL from supported platforms and I'll download it for you!
-
-*Example URLs:*
-• \`https://www.youtube.com/watch?v=xxx\`
-• \`https://www.instagram.com/reel/xxx\`
-• \`https://www.tiktok.com/@user/video/xxx\`
-• \`https://twitter.com/user/status/xxx\`
-
-*Tips:*
-• Make sure the video is public
-• Short URLs work too (youtu.be, vm.tiktok.com)
-• Use /premium for unlimited downloads`;
-
-    await ctx.reply(message, { parse_mode: 'Markdown' });
+    await ctx.reply(message);
 });
 
 export { startComposer, botUserRegister, botUserGetTodayStats };
