@@ -26,19 +26,12 @@ export async function POST(request: NextRequest) {
   if (TELEGRAM_WEBHOOK_SECRET) {
     const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
 
-    // Debug: log full values and lengths
-    console.log('[Webhook] Expected secret length:', TELEGRAM_WEBHOOK_SECRET?.length);
-    console.log('[Webhook] Received secret length:', secretHeader?.length);
-    console.log('[Webhook] Expected:', JSON.stringify(TELEGRAM_WEBHOOK_SECRET));
-    console.log('[Webhook] Received:', JSON.stringify(secretHeader));
-
     if (secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
-      console.warn('[Webhook] Invalid secret token - mismatch!');
-      // TEMP: Skip auth for debugging
-      // return NextResponse.json(
-      //   { error: 'Unauthorized' },
-      //   { status: 401 }
-      // );
+      console.warn('[Webhook] Invalid secret token');
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
   }
 

@@ -10,8 +10,8 @@
 /** Telegram Bot Token from @BotFather */
 export const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
-/** Webhook secret for verifying incoming requests */
-export const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+/** Webhook secret for verifying incoming requests (trimmed to handle Railway newline issue) */
+export const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
 
 /** Comma-separated list of admin Telegram user IDs */
 export const TELEGRAM_ADMIN_IDS = (process.env.TELEGRAM_ADMIN_IDS || '')
