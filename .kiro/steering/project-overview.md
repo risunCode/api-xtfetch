@@ -9,7 +9,8 @@ Backend (Port 3002): api-xtfetch/
 ├── Next.js API routes
 ├── Uses Supabase SERVICE ROLE KEY
 ├── Uses Redis for rate limiting
-└── All scraping logic lives here
+├── All scraping logic lives here
+└── Telegram Bot (@downariaxt_bot)
 ```
 
 Frontend counterpart: `XTFetch-SocmedDownloader/` (Port 3001)
@@ -26,12 +27,66 @@ Frontend counterpart: `XTFetch-SocmedDownloader/` (Port 3001)
 - `POST /api/v1/youtube/merge` - YouTube HD merge
 - `POST /api/v1/playground` - Playground testing (admin only)
 
+### Bot (`/api/bot/*`)
+- `POST /api/bot/webhook` - Telegram webhook (receives updates)
+- `GET /api/bot/webhook` - Health check
+- `GET /api/bot/setup` - Setup webhook with Telegram (admin only)
+
 ### Admin (`/api/admin/*`) - Requires Bearer token
 - `/api/admin/cookies/*` - Cookie management
 - `/api/admin/services` - Platform config
 - `/api/admin/stats` - Statistics
 - `/api/admin/users` - User management
 - `/api/admin/apikeys` - API key management
+
+---
+
+## Telegram Bot (@downariaxt_bot)
+
+### User Commands
+- `/start` - Start the bot
+- `/help` - Usage guide  
+- `/mystatus` - Check download stats & premium status
+- `/history` - View recent downloads
+- `/premium` - Premium subscription info
+
+### Admin Commands
+- `/stats` - Bot statistics
+- `/broadcast <message>` - Send to all users
+- `/ban <user_id>` / `/unban <user_id>` - User management
+- `/givepremium <user_id>` - Grant premium
+- `/maintenance on/off` - Broadcast maintenance notifications
+
+### Rate Limits
+- **Free**: 10 downloads / 6 hours, 5s cooldown
+- **Premium**: Unlimited, no cooldown (auto-queue)
+
+### Bot Structure
+```
+src/bot/
+├── index.ts           # Bot instance & webhook handler
+├── config.ts          # Bot configuration
+├── types.ts           # Type definitions
+├── commands/          # Command handlers
+│   ├── admin/         # Admin commands (stats, broadcast, ban, givepremium, maintenance)
+│   └── *.ts           # User commands (start, help, mystatus, history, premium)
+├── handlers/          # URL & callback handlers
+├── middleware/        # Auth, rate limit, maintenance
+│   ├── auth.ts        # User authentication
+│   ├── rateLimit.ts   # Download limits & cooldown
+│   └── maintenance.ts # Maintenance mode check
+├── services/          # User & download services
+└── utils/             # Helper functions
+```
+
+### Bot Environment Variables
+```env
+TELEGRAM_BOT_TOKEN=           # From @BotFather
+TELEGRAM_ADMIN_IDS=           # Comma-separated admin user IDs
+TELEGRAM_WEBHOOK_SECRET=      # Random string for webhook verification
+TELEGRAM_BOT_USERNAME=        # Bot username without @
+TELEGRAM_ADMIN_USERNAME=      # Admin contact username
+```
 
 ---
 
@@ -52,6 +107,9 @@ All functions use **domain-prefixed naming**:
 | **Utils** | `util*` | `utilAddFormat`, `utilDecodeUrl`, `utilExtractMeta` |
 | **Security** | `security*` | `securityEncrypt`, `securityDecrypt`, `securityValidateSocialUrl` |
 | **API Keys** | `apiKey*` | `apiKeyCreate`, `apiKeyValidate`, `apiKeyGetAll` |
+| **Bot User** | `botUser*` | `botUserGetOrCreate`, `botUserIsBanned`, `botUserIsPremium` |
+| **Bot Rate Limit** | `botRateLimit*` | `botRateLimitCheck`, `botRateLimitRecordDownload` |
+| **Bot Admin** | `botAdmin*` | `botAdminBanUser`, `botAdminGivePremium`, `botBroadcastMessage` |
 
 ### DO NOT USE (Deprecated - Removed Dec 2024)
 ```typescript
@@ -77,11 +135,23 @@ src/
 │   │   ├── status/
 │   │   ├── proxy/
 │   │   └── youtube/
+│   ├── bot/                   # Telegram bot endpoints
+│   │   ├── webhook/           # Webhook handler
+│   │   └── setup/             # Webhook setup
 │   └── admin/                 # Admin endpoints (auth required)
 │       ├── cookies/
 │       ├── services/
 │       ├── stats/
 │       └── ...
+├── bot/                       # Telegram bot module
+│   ├── index.ts               # Bot instance & exports
+│   ├── config.ts              # Configuration
+│   ├── types.ts               # Type definitions
+│   ├── commands/              # Command handlers
+│   ├── handlers/              # URL & callback handlers
+│   ├── middleware/            # Auth, rate limit, maintenance
+│   ├── services/              # User & download services
+│   └── utils/                 # Helper functions
 ├── core/
 │   ├── scrapers/              # Platform scrapers
 │   │   ├── facebook.ts
@@ -153,6 +223,13 @@ UPSTASH_REDIS_REST_TOKEN=
 # Security
 ENCRYPTION_KEY=
 
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ADMIN_IDS=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_BOT_USERNAME=
+TELEGRAM_ADMIN_USERNAME=
+
 # Optional
 GEMINI_API_KEY=
 ```
@@ -167,3 +244,15 @@ When modifying shared concepts, ensure frontend (`XTFetch-SocmedDownloader`) sta
 2. **Platform IDs** - Both use `PlatformId` type
 3. **Engagement Stats** - Both use `EngagementStats` interface
 4. **Error Codes** - Frontend should handle all backend error codes
+
+---
+
+## Database Tables
+
+### Bot Tables (sql-8-bot-tables.sql)
+- `bot_users` - Telegram bot user records
+  - `id` (BIGINT) - Telegram user ID
+  - `api_key_id` (VARCHAR) - Linked premium API key
+  - `daily_downloads` (INT) - Downloads in current period
+  - `is_banned` (BOOLEAN) - Ban status
+- `bot_downloads` - Download history for bot users

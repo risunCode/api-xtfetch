@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/core/database';
+import { supabase } from '@/lib/database';
 
 export async function GET(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
@@ -28,12 +28,7 @@ export async function GET(request: NextRequest) {
 
         if (error) throw error;
 
-        // Get stats
-        const { data: stats } = await supabase
-            .from('browser_profiles_stats')
-            .select('*');
-
-        // Calculate totals
+        // Calculate totals from profiles directly (no separate stats table needed)
         const totals = {
             total: profiles?.length || 0,
             enabled: profiles?.filter(p => p.enabled).length || 0,
@@ -42,11 +37,34 @@ export async function GET(request: NextRequest) {
             totalErrors: profiles?.reduce((sum, p) => sum + (p.error_count || 0), 0) || 0,
         };
 
+        // Calculate stats by platform/browser/device from profiles
+        const statsMap = new Map<string, { platform: string; browser: string; device_type: string; total: number; enabled_count: number; total_uses: number; total_success: number; total_errors: number }>();
+        
+        for (const p of profiles || []) {
+            const key = `${p.platform}-${p.browser}-${p.device_type}`;
+            const existing = statsMap.get(key) || {
+                platform: p.platform,
+                browser: p.browser,
+                device_type: p.device_type,
+                total: 0,
+                enabled_count: 0,
+                total_uses: 0,
+                total_success: 0,
+                total_errors: 0,
+            };
+            existing.total++;
+            if (p.enabled) existing.enabled_count++;
+            existing.total_uses += p.use_count || 0;
+            existing.total_success += p.success_count || 0;
+            existing.total_errors += p.error_count || 0;
+            statsMap.set(key, existing);
+        }
+
         return NextResponse.json({
             success: true,
             data: {
                 profiles: profiles || [],
-                stats: stats || [],
+                stats: Array.from(statsMap.values()),
                 totals,
             }
         });

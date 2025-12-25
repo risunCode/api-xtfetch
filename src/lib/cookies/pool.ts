@@ -16,6 +16,7 @@ import { cookieParse, type CookiePlatform } from './parser';
 // ============================================================================
 
 export type CookieStatus = 'healthy' | 'cooldown' | 'expired' | 'disabled';
+export type CookieTier = 'public' | 'private';
 
 export interface PooledCookie {
     id: string;
@@ -23,6 +24,7 @@ export interface PooledCookie {
     cookie: string;
     label: string | null;
     user_id: string | null;
+    tier: CookieTier;
     status: CookieStatus;
     last_used_at: string | null;
     use_count: number;
@@ -39,6 +41,7 @@ export interface PooledCookie {
 
 export interface CookiePoolStats {
     platform: string;
+    tier: CookieTier;
     total: number;
     enabled_count: number;
     healthy_count: number;
@@ -136,8 +139,13 @@ function getCookiePreview(cookie: string): string {
 
 /**
  * Get a rotating cookie from the pool for a platform
+ * @param platform - The platform to get a cookie for
+ * @param tier - Cookie tier: 'public' (default) or 'private' (with fallback to public)
  */
-export async function cookiePoolGetRotating(platform: string): Promise<string | null> {
+export async function cookiePoolGetRotating(
+    platform: string,
+    tier: CookieTier = 'public'
+): Promise<string | null> {
     const db = getSupabase();
     if (!db) {
         logger.warn('cookies', `No database configured for cookie pool`);
@@ -147,11 +155,12 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
     try {
         try { await db.rpc('reset_expired_cooldowns'); } catch { /* ignore */ }
 
-        // First try: healthy cookies
+        // First try: healthy cookies from requested tier
         const { data, error } = await db
             .from('admin_cookie_pool')
             .select('*')
             .eq('platform', platform)
+            .eq('tier', tier)
             .eq('enabled', true)
             .eq('status', 'healthy')
             .or('cooldown_until.is.null,cooldown_until.lt.now()')
@@ -161,7 +170,7 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
             .single();
 
         if (data) {
-            logger.debug('cookies', `[${platform}] Found healthy cookie: ${data.id.substring(0, 8)}...`);
+            logger.debug('cookies', `[${platform}:${tier}] Found healthy cookie: ${data.id.substring(0, 8)}...`);
             await db
                 .from('admin_cookie_pool')
                 .update({
@@ -175,12 +184,75 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
             return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
         }
 
-        // Second try: cooldown cookies that have expired
-        logger.debug('cookies', `[${platform}] No healthy cookie found (error: ${error?.message || 'none'}), trying cooldown...`);
+        // For private tier: fallback to public tier
+        if (tier === 'private') {
+            logger.debug('cookies', `[${platform}:${tier}] No healthy private cookie (error: ${error?.message || 'none'}), falling back to public tier...`);
+            
+            // Try public tier healthy cookies
+            const { data: publicData } = await db
+                .from('admin_cookie_pool')
+                .select('*')
+                .eq('platform', platform)
+                .eq('tier', 'public')
+                .eq('enabled', true)
+                .eq('status', 'healthy')
+                .or('cooldown_until.is.null,cooldown_until.lt.now()')
+                .order('last_used_at', { ascending: true, nullsFirst: true })
+                .order('use_count', { ascending: true })
+                .limit(1)
+                .single();
+
+            if (publicData) {
+                logger.debug('cookies', `[${platform}:${tier}→public] Found healthy public fallback: ${publicData.id.substring(0, 8)}...`);
+                await db
+                    .from('admin_cookie_pool')
+                    .update({
+                        last_used_at: new Date().toISOString(),
+                        use_count: publicData.use_count + 1
+                    })
+                    .eq('id', publicData.id);
+
+                lastUsedCookieId = publicData.id;
+                const decrypted = decryptCookie(publicData.cookie);
+                return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+            }
+            
+            // Try public tier cooldown cookies
+            const { data: publicCooldown } = await db
+                .from('admin_cookie_pool')
+                .select('*')
+                .eq('platform', platform)
+                .eq('tier', 'public')
+                .eq('enabled', true)
+                .eq('status', 'cooldown')
+                .lt('cooldown_until', new Date().toISOString())
+                .order('cooldown_until', { ascending: true })
+                .limit(1)
+                .single();
+            
+            if (publicCooldown) {
+                logger.debug('cookies', `[${platform}:${tier}→public] Found expired cooldown public fallback: ${publicCooldown.id.substring(0, 8)}...`);
+                await db
+                    .from('admin_cookie_pool')
+                    .update({ status: 'healthy', cooldown_until: null })
+                    .eq('id', publicCooldown.id);
+                
+                lastUsedCookieId = publicCooldown.id;
+                const decrypted = decryptCookie(publicCooldown.cookie);
+                return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
+            }
+
+            logger.warn('cookies', `[${platform}:${tier}] No private or public cookies available!`);
+            return null;
+        }
+
+        // Second try: cooldown cookies that have expired (public tier only)
+        logger.debug('cookies', `[${platform}:${tier}] No healthy cookie found (error: ${error?.message || 'none'}), trying cooldown...`);
         const { data: cooldownData } = await db
             .from('admin_cookie_pool')
             .select('*')
             .eq('platform', platform)
+            .eq('tier', tier)
             .eq('enabled', true)
             .eq('status', 'cooldown')
             .lt('cooldown_until', new Date().toISOString())
@@ -189,7 +261,7 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
             .single();
         
         if (cooldownData) {
-            logger.debug('cookies', `[${platform}] Found expired cooldown cookie: ${cooldownData.id.substring(0, 8)}...`);
+            logger.debug('cookies', `[${platform}:${tier}] Found expired cooldown cookie: ${cooldownData.id.substring(0, 8)}...`);
             await db
                 .from('admin_cookie_pool')
                 .update({ status: 'healthy', cooldown_until: null })
@@ -200,19 +272,20 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
             return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
         }
 
-        // Third try: ANY enabled cookie regardless of status (last resort)
-        logger.debug('cookies', `[${platform}] No cooldown cookie found, trying any enabled cookie...`);
+        // Third try: ANY enabled cookie regardless of status (last resort, public tier only)
+        logger.debug('cookies', `[${platform}:${tier}] No cooldown cookie found, trying any enabled cookie...`);
         const { data: anyData } = await db
             .from('admin_cookie_pool')
             .select('*')
             .eq('platform', platform)
+            .eq('tier', tier)
             .eq('enabled', true)
             .order('last_used_at', { ascending: true, nullsFirst: true })
             .limit(1)
             .single();
         
         if (anyData) {
-            logger.debug('cookies', `[${platform}] Found fallback cookie (status: ${anyData.status}): ${anyData.id.substring(0, 8)}...`);
+            logger.debug('cookies', `[${platform}:${tier}] Found fallback cookie (status: ${anyData.status}): ${anyData.id.substring(0, 8)}...`);
             await db
                 .from('admin_cookie_pool')
                 .update({
@@ -227,10 +300,10 @@ export async function cookiePoolGetRotating(platform: string): Promise<string | 
             return cookieParse(decrypted, platform as CookiePlatform) || decrypted;
         }
 
-        logger.warn('cookies', `[${platform}] No cookies found in pool!`);
+        logger.warn('cookies', `[${platform}:${tier}] No cookies found in pool!`);
         return null;
     } catch (e) {
-        logger.error('cookies', `[${platform}] cookiePoolGetRotating error: ${e}`);
+        logger.error('cookies', `[${platform}:${tier}] cookiePoolGetRotating error: ${e}`);
         return null;
     }
 }
@@ -400,7 +473,7 @@ export async function cookiePoolGetStats(): Promise<CookiePoolStats[]> {
 export async function cookiePoolAdd(
     platform: string,
     cookie: string,
-    options?: { label?: string; note?: string; max_uses_per_hour?: number }
+    options?: { label?: string; note?: string; max_uses_per_hour?: number; tier?: CookieTier }
 ): Promise<PooledCookie | null> {
     const db = getSupabase();
     if (!db) throw new Error('Database not configured');
@@ -416,7 +489,8 @@ export async function cookiePoolAdd(
             user_id: userId,
             label: options?.label,
             note: options?.note,
-            max_uses_per_hour: options?.max_uses_per_hour || 60
+            max_uses_per_hour: options?.max_uses_per_hour || 60,
+            tier: options?.tier || 'public'
         })
         .select()
         .single();
@@ -430,7 +504,7 @@ export async function cookiePoolAdd(
  */
 export async function cookiePoolUpdate(
     id: string,
-    updates: Partial<Pick<PooledCookie, 'cookie' | 'label' | 'note' | 'enabled' | 'status' | 'max_uses_per_hour'>>
+    updates: Partial<Pick<PooledCookie, 'cookie' | 'label' | 'note' | 'enabled' | 'status' | 'max_uses_per_hour' | 'tier'>>
 ): Promise<PooledCookie | null> {
     const db = getSupabase();
     if (!db) throw new Error('Database not configured');

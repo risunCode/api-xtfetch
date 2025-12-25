@@ -50,8 +50,8 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Get cookie from admin pool for this platform
-        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        // Get cookie from admin pool for this platform (public tier for playground)
+        const poolCookie = await cookiePoolGetRotating(urlResult.platform, 'public');
         
         // Run scraper with cookie
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
@@ -82,9 +82,10 @@ export async function GET(request: NextRequest) {
             logger.error(urlResult.platform, result.error || 'Unknown error');
         }
 
+        const responseTime = Date.now() - startTime;
         return NextResponse.json({
             success: result.success,
-            data: result.data,
+            data: result.data ? { ...result.data, responseTime } : result.data,
             error: result.error,
             errorCode: result.errorCode,
             meta: {
@@ -92,7 +93,7 @@ export async function GET(request: NextRequest) {
                 platform: urlResult.platform,
                 rateLimit: `${rateLimit} requests per 2 minutes`,
                 endpoint: '/api/v1/playground',
-                responseTime: `${Date.now() - startTime}ms`,
+                responseTime: `${responseTime}ms`,
                 note: 'For testing purposes only. Get API key for production use.'
             }
         });
@@ -143,8 +144,8 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Get cookie from admin pool for this platform
-        const poolCookie = await cookiePoolGetRotating(urlResult.platform);
+        // Get cookie from admin pool for this platform (public tier for playground)
+        const poolCookie = await cookiePoolGetRotating(urlResult.platform, 'public');
         
         // Run scraper with cookie
         const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
@@ -175,9 +176,10 @@ export async function POST(request: NextRequest) {
             logger.error(urlResult.platform, result.error || 'Unknown error');
         }
 
+        const responseTime = Date.now() - startTime;
         return NextResponse.json({
             success: result.success,
-            data: result.data,
+            data: result.data ? { ...result.data, responseTime } : result.data,
             error: result.error,
             errorCode: result.errorCode,
             meta: {
@@ -185,7 +187,7 @@ export async function POST(request: NextRequest) {
                 platform: urlResult.platform,
                 rateLimit: `${rateLimit} requests per 2 minutes`,
                 endpoint: '/api/v1/playground',
-                responseTime: `${Date.now() - startTime}ms`,
+                responseTime: `${responseTime}ms`,
                 note: 'For testing purposes only. Get API key for production use.'
             }
         });

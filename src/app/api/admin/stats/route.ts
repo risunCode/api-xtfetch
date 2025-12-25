@@ -40,16 +40,16 @@ interface ErrorLog {
 }
 
 export async function GET(request: NextRequest) {
-    const auth = await authVerifyAdminSession(request);
-    if (!auth.valid) {
-        return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
-    }
-
-    if (!supabase) {
-        return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
-    }
-
     try {
+        const auth = await authVerifyAdminSession(request);
+        if (!auth.valid) {
+            return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
+        }
+
+        if (!supabase) {
+            return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
+        }
+
         const { searchParams } = new URL(request.url);
         const days = parseInt(searchParams.get('days') || '7');
         const startDate = new Date();

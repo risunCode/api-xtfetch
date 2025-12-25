@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
         const earlyPlatform = detectedPlatform || platformDetect(url);
         let poolCookie: string | null = null;
         if (earlyPlatform) {
-            poolCookie = bodyCookie || await cookiePoolGetRotating(earlyPlatform);
+            poolCookie = bodyCookie || await cookiePoolGetRotating(earlyPlatform, 'public');
             console.log(`[publicservices] Early cookie fetch for ${earlyPlatform}: ${poolCookie ? 'found' : 'NOT FOUND'}`);
         }
 
@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
 
         // Refresh cookie if platform changed after resolution
         if (urlResult.platform !== earlyPlatform && !bodyCookie) {
-            poolCookie = await cookiePoolGetRotating(urlResult.platform);
+            poolCookie = await cookiePoolGetRotating(urlResult.platform, 'public');
         }
 
         // Step 5: Check cache with resolved URL (if URL was resolved and skipCache not set)

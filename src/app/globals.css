@@ -183,6 +183,12 @@ body {
     color: var(--text-muted);
 }
 
+.logo-img {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+}
+
 .sidebar-nav {
     flex: 1;
     padding: 16px;
@@ -1178,4 +1184,150 @@ body {
     .section {
         animation: none !important;
     }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Services Grid
+   ═══════════════════════════════════════════════════════════════ */
+
+.services-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+@media (max-width: 768px) {
+    .services-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.service-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px;
+    text-decoration: none;
+    cursor: pointer;
+    position: relative;
+}
+
+.service-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.service-card.coming-soon {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.service-card.coming-soon:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--border-color);
+}
+
+.service-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+.service-icon img {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+}
+
+.service-icon i {
+    font-size: 24px;
+}
+
+.service-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.service-info h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+
+.service-info p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.service-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.service-badge.active {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--success);
+}
+
+.service-badge.soon {
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--warning);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   About Card
+   ═══════════════════════════════════════════════════════════════ */
+
+.about-card {
+    padding: 24px;
+}
+
+.about-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 16px;
+}
+
+.about-links {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.about-links a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.about-links a:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+
+.about-links a i {
+    font-size: 16px;
 }

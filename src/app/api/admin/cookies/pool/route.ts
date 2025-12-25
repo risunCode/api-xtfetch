@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const platform = searchParams.get('platform');
     const stats = searchParams.get('stats');
+    const tier = searchParams.get('tier');
 
     try {
         if (stats === 'true') {
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
             const result: CookiePoolStats[] = platforms.map(p => {
                 const existing = poolStats.find(s => s.platform === p);
                 return existing || {
-                    platform: p, total: 0, enabled_count: 0, healthy_count: 0,
+                    platform: p, tier: 'public' as const, total: 0, enabled_count: 0, healthy_count: 0,
                     cooldown_count: 0, expired_count: 0, disabled_count: 0,
                     total_uses: 0, total_success: 0, total_errors: 0
                 };
@@ -44,7 +45,13 @@ export async function GET(req: NextRequest) {
         }
 
         if (platform) {
-            const cookies = await cookiePoolGetByPlatform(platform);
+            let cookies = await cookiePoolGetByPlatform(platform);
+            
+            // Filter by tier if provided
+            if (tier && (tier === 'public' || tier === 'private')) {
+                cookies = cookies.filter(c => c.tier === tier);
+            }
+            
             const masked = cookies.map(c => ({
                 ...c,
                 cookie: (c as { cookiePreview?: string }).cookiePreview || '[encrypted]',
@@ -66,13 +73,13 @@ export async function POST(req: NextRequest) {
 
     try {
         const body = await req.json();
-        const { platform, cookie, label, note, max_uses_per_hour } = body;
+        const { platform, cookie, label, note, max_uses_per_hour, tier = 'public' } = body;
 
         if (!platform || !cookie) {
             return NextResponse.json({ success: false, error: 'Missing platform or cookie' }, { status: 400 });
         }
 
-        const result = await cookiePoolAdd(platform, cookie, { label, note, max_uses_per_hour });
+        const result = await cookiePoolAdd(platform, cookie, { label, note, max_uses_per_hour, tier });
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: (e as Error).message }, { status: 500 });

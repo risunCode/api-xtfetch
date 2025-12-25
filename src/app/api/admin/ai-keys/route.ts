@@ -12,7 +12,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/lib/database';
+import { supabaseAdmin, supabase } from '@/lib/database';
+
+// Use admin client (bypasses RLS) or fallback to regular client
+const db = supabaseAdmin || supabase;
 
 // AI Provider type
 type AiProvider = 'gemini' | 'openai' | 'anthropic' | 'other';
@@ -39,15 +42,15 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
     
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
     }
 
     try {
         const { searchParams } = new URL(request.url);
-        const provider = searchParams.get('provider'); // Optional filter by provider
+        const provider = searchParams.get('provider');
 
-        let query = supabase
+        let query = db
             .from('ai_api_keys')
             .select('*')
             .order('created_at', { ascending: false });
@@ -59,14 +62,13 @@ export async function GET(request: NextRequest) {
         const { data: keys, error } = await query;
         if (error) throw error;
         
-        // Mask API keys for security (show only first 10 chars)
+        // Mask API keys for security
         const maskedKeys = (keys || []).map((k: AiApiKey) => ({
             ...k,
             key: k.key.substring(0, 10) + '...' + k.key.substring(k.key.length - 4),
             keyPreview: k.key.substring(0, 10) + '***',
         }));
         
-        // Calculate stats by provider
         const stats = {
             total: keys?.length || 0,
             enabled: keys?.filter((k: AiApiKey) => k.enabled).length || 0,
@@ -82,10 +84,7 @@ export async function GET(request: NextRequest) {
         
         return NextResponse.json({
             success: true,
-            data: {
-                keys: maskedKeys,
-                stats,
-            }
+            data: { keys: maskedKeys, stats }
         });
     } catch (error) {
         return NextResponse.json({
@@ -101,7 +100,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
     
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
     }
 
@@ -109,9 +108,7 @@ export async function POST(request: NextRequest) {
         const body = await request.json();
         const { action, id, key, label, name, enabled, provider } = body;
         
-        // Support both 'label' and 'name' for compatibility
         const keyLabel = label || name;
-        // Default provider to 'gemini' for backward compatibility
         const keyProvider: AiProvider = provider || 'gemini';
         
         switch (action) {
@@ -121,8 +118,8 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'key and label/name required' }, { status: 400 });
                 }
                 
-                // Check for duplicate key
-                const { data: existing } = await supabase
+                // Check for duplicate
+                const { data: existing } = await db
                     .from('ai_api_keys')
                     .select('id')
                     .eq('key', key)
@@ -132,7 +129,7 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'API key already exists' }, { status: 400 });
                 }
                 
-                const { error } = await supabase.from('ai_api_keys').insert({
+                const { error } = await db.from('ai_api_keys').insert({
                     provider: keyProvider,
                     key,
                     label: keyLabel,
@@ -141,7 +138,10 @@ export async function POST(request: NextRequest) {
                     error_count: 0
                 });
                 
-                if (error) throw error;
+                if (error) {
+                    console.error('[ai-keys] Insert error:', error);
+                    throw error;
+                }
                 
                 return NextResponse.json({ success: true, message: `${keyProvider.toUpperCase()} API key added` });
             }
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
                 if (enabled !== undefined) updates.enabled = enabled;
                 if (provider !== undefined) updates.provider = provider;
                 
-                const { error } = await supabase
+                const { error } = await db
                     .from('ai_api_keys')
                     .update(updates)
                     .eq('id', id);
@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'id required' }, { status: 400 });
                 }
                 
-                const { error } = await supabase
+                const { error } = await db
                     .from('ai_api_keys')
                     .delete()
                     .eq('id', id);
@@ -192,14 +192,13 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// Handle PATCH for toggle (frontend uses PATCH for updates)
 export async function PATCH(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
     
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
     }
 
@@ -217,7 +216,7 @@ export async function PATCH(request: NextRequest) {
         if (enabled !== undefined) updates.enabled = enabled;
         if (provider !== undefined) updates.provider = provider;
         
-        const { error } = await supabase
+        const { error } = await db
             .from('ai_api_keys')
             .update(updates)
             .eq('id', id);
@@ -233,14 +232,13 @@ export async function PATCH(request: NextRequest) {
     }
 }
 
-// Handle DELETE
 export async function DELETE(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
     if (!auth.valid) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
     
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
     }
 
@@ -252,7 +250,7 @@ export async function DELETE(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'id required' }, { status: 400 });
         }
         
-        const { error } = await supabase
+        const { error } = await db
             .from('ai_api_keys')
             .delete()
             .eq('id', id);

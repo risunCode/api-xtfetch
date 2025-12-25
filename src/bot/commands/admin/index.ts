@@ -1,0 +1,85 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * BOT ADMIN COMMANDS - Index & Middleware
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * Admin middleware to check if user is authorized.
+ * Re-exports all admin command composers.
+ * 
+ * @module bot/commands/admin
+ */
+
+import { Composer } from 'grammy';
+import type { Context } from 'grammy';
+import { TELEGRAM_ADMIN_IDS, botIsAdmin } from '@/bot/config';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN MIDDLEWARE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Middleware to check if user is an admin
+ * Rejects non-admins with a message
+ */
+export function adminMiddleware() {
+    return async (ctx: Context, next: () => Promise<void>) => {
+        const userId = ctx.from?.id;
+        
+        if (!userId) {
+            await ctx.reply('❌ Unable to identify user.');
+            return;
+        }
+
+        if (!botIsAdmin(userId)) {
+            await ctx.reply('🚫 This command is restricted to administrators only.');
+            return;
+        }
+
+        // User is admin, proceed
+        await next();
+    };
+}
+
+/**
+ * Check if a user ID is in the admin list
+ * @param userId - Telegram user ID to check
+ */
+export function botAdminIsAuthorized(userId: number): boolean {
+    return TELEGRAM_ADMIN_IDS.includes(userId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN COMPOSER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Main admin composer that combines all admin commands
+ * Apply admin middleware to all routes in this composer
+ */
+export const adminComposer = new Composer<Context>();
+
+// Apply admin middleware to all commands in this composer
+adminComposer.use(adminMiddleware());
+
+// Import and use admin command composers
+import { statsComposer } from './stats';
+import { broadcastComposer } from './broadcast';
+import { banComposer } from './ban';
+import { givepremiumComposer } from './givepremium';
+import { maintenanceComposer } from './maintenance';
+
+adminComposer.use(statsComposer);
+adminComposer.use(broadcastComposer);
+adminComposer.use(banComposer);
+adminComposer.use(givepremiumComposer);
+adminComposer.use(maintenanceComposer);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export { statsComposer } from './stats';
+export { broadcastComposer } from './broadcast';
+export { banComposer } from './ban';
+export { givepremiumComposer, botAdminGivePremium, botAdminRevokePremium } from './givepremium';
+export { maintenanceComposer, botBroadcastMessage, botGetAllUserIds } from './maintenance';

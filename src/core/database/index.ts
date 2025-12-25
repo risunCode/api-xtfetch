@@ -1,29 +1,18 @@
 /**
  * Core Database Module
- * Centralized database access and services.
+ * Re-exports from lib/database for consistency.
+ * 
+ * IMPORTANT: Always use @/lib/database for admin operations
+ * as it uses SERVICE_ROLE_KEY for bypassing RLS.
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+// Re-export from lib/database for consistency
+export { supabase, supabaseAdmin } from '@/lib/database';
 
-// Supabase clients
-let supabase: SupabaseClient | null = null;
-let supabaseAdmin: SupabaseClient | null = null;
+// Import for local use
+import { supabase, supabaseAdmin } from '@/lib/database';
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (url && anonKey) {
-    supabase = createClient(url, anonKey);
-}
-
-if (url && serviceKey) {
-    supabaseAdmin = createClient(url, serviceKey);
-}
-
-export { supabase, supabaseAdmin };
-
-// Auth helpers
+// Legacy exports for backward compatibility
 export async function signIn(email: string, password: string) {
     if (!supabase) throw new Error('Supabase not configured');
     return supabase.auth.signInWithPassword({ email, password });

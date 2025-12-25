@@ -33,6 +33,7 @@ export {
     cookiePoolGetDecrypted,
     cookiePoolMigrateUnencrypted,
     type CookieStatus,
+    type CookieTier,
     type PooledCookie,
     type CookiePoolStats,
 } from './pool';

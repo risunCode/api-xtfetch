@@ -2,6 +2,27 @@
 
 All notable changes to the XTFetch Backend API will be documented in this file.
 
+## [December 25, 2025] - Telegram Bot Integration
+
+### Added
+- **Telegram Bot** - @downariaxt_bot for video downloads via Telegram
+  - grammY framework with webhook support
+  - User commands: `/start`, `/help`, `/mystatus`, `/history`, `/premium`
+  - Admin commands: `/stats`, `/broadcast`, `/ban`, `/unban`, `/givepremium`, `/maintenance`
+- **Bot Webhook API** - `/api/bot/webhook` with secret token verification
+- **Bot Setup API** - `/api/bot/setup` for webhook configuration
+- **Bot Tables** - `bot_users`, `bot_downloads` in Supabase
+- **Maintenance Middleware** - Auto-blocks bot during full maintenance
+- **Rate Limiting** - Free: 10/day + 30s cooldown, Premium: unlimited
+
+### Technical
+- `serverExternalPackages: ['grammy']` in next.config.ts
+- `webhookCallback` with 25s timeout and `onTimeout: 'return'`
+- `bot.init()` called before webhook handling
+- Global error handler with `bot.catch()`
+
+---
+
 ## [December 25, 2025] - API Bridge & Security
 
 ### Added

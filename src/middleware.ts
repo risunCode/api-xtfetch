@@ -55,15 +55,15 @@ const envOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()).fi
 
 // Allowed origins for CORS
 const ALLOWED_ORIGINS = [
-    'https://xt-fetch.vercel.app',
-    'https://xtfetch.com',
-    'https://www.xtfetch.com',
-    'https://xtfetch-api-production.up.railway.app',
+    // Production - DownAria (new branding)
+    'https://downaria.vercel.app',        // Frontend (new)
+    'https://api-xfetch.vercel.app',      // Bridge  
+    'https://xtfetch-api-production.up.railway.app', // Backend direct
     ...envOrigins,
     // Development origins
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
+    'http://localhost:3001',              // Frontend dev
+    'http://localhost:3002',              // Backend dev
+    'http://localhost:3003',              // Bridge dev
 ].filter(Boolean) as string[];
 
 // Rate limits per service tier
@@ -142,21 +142,29 @@ function getServiceTier(pathname: string, request: NextRequest): string {
     return 'legacy';
 }
 
-function getCorsHeaders(origin: string | null): Record<string, string> {
+function getCorsHeaders(origin: string | null, pathname: string = ''): Record<string, string> {
     const headers: Record<string, string> = {
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, X-Requested-With',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key, X-Requested-With, X-Bridge-Secret',
         'Access-Control-Max-Age': '86400',
-        'Access-Control-Allow-Credentials': 'true',
     };
 
-    // Check if origin is allowed
-    if (origin && ALLOWED_ORIGINS.includes(origin)) {
-        headers['Access-Control-Allow-Origin'] = origin;
-    } else if (process.env.NODE_ENV === 'development') {
-        // Allow all in development
-        headers['Access-Control-Allow-Origin'] = origin || '*';
+    // Special case: /api/v1/proxy is open for thumbnail sharing
+    if (pathname.startsWith('/api/v1/proxy')) {
+        headers['Access-Control-Allow-Origin'] = '*';
+        return headers;
     }
+
+    // Strict CORS for other endpoints
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        // Origin is in allowed list - grant access
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers['Access-Control-Allow-Credentials'] = 'true';
+    } else if (!origin) {
+        // Server-to-server (no origin header) - allow
+        headers['Access-Control-Allow-Origin'] = '*';
+    }
+    // Browser from unknown origin = NO Access-Control-Allow-Origin = blocked by browser
 
     return headers;
 }
@@ -200,7 +208,7 @@ export function middleware(request: NextRequest) {
         return new NextResponse(null, {
             status: 204,
             headers: {
-                ...getCorsHeaders(origin),
+                ...getCorsHeaders(origin, pathname),
                 ...SECURITY_HEADERS,
             },
         });
@@ -213,7 +221,7 @@ export function middleware(request: NextRequest) {
     const response = NextResponse.next();
 
     // Add CORS headers
-    const corsHeaders = getCorsHeaders(origin);
+    const corsHeaders = getCorsHeaders(origin, pathname);
     Object.entries(corsHeaders).forEach(([key, value]) => {
         response.headers.set(key, value);
     });

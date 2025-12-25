@@ -13,7 +13,6 @@
 
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { logger } from '@/lib/services/shared/logger';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPABASE CLIENT SETUP
@@ -27,6 +26,9 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const authClient = supabaseUrl && supabaseServiceKey 
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null;
+
+// Debug flag - set to true for verbose auth logging
+const DEBUG_AUTH = process.env.LOG_LEVEL === 'debug';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -52,29 +54,47 @@ export interface AuthResult {
  */
 export async function authVerifySession(request: NextRequest): Promise<AuthResult> {
     if (!authClient) {
-        logger.error('auth', 'Supabase not configured - SUPABASE_SERVICE_ROLE_KEY missing!');
+        console.error('[Auth] Supabase not configured - SUPABASE_SERVICE_ROLE_KEY missing!');
         return { valid: false, error: 'Auth service not configured (missing service key)' };
     }
     
     const authHeader = request.headers.get('Authorization');
+    if (DEBUG_AUTH) {
+        console.log(`[Auth] Header present: ${!!authHeader}, starts with Bearer: ${authHeader?.startsWith('Bearer ')}`);
+    }
+    
     if (!authHeader?.startsWith('Bearer ')) {
         return { valid: false, error: 'No authorization token' };
     }
     
     const token = authHeader.slice(7);
+    if (DEBUG_AUTH) {
+        console.log(`[Auth] Token length: ${token.length}`);
+    }
     
     try {
         const { data: { user }, error } = await authClient.auth.getUser(token);
         
         if (error || !user) {
+            if (DEBUG_AUTH) {
+                console.error(`[Auth] Token verification failed: ${error?.message || 'No user returned'}`);
+            }
             return { valid: false, error: error?.message || 'Invalid token' };
         }
         
-        const { data: profile } = await authClient
+        if (DEBUG_AUTH) {
+            console.log(`[Auth] User verified: ${user.id}`);
+        }
+        
+        const { data: profile, error: profileError } = await authClient
             .from('users')
             .select('username, role')
             .eq('id', user.id)
             .single();
+        
+        if (profileError && DEBUG_AUTH) {
+            console.error(`[Auth] Profile fetch error: ${profileError.message}`);
+        }
         
         const role = (profile?.role as UserRole) || 'user';
         
@@ -86,7 +106,7 @@ export async function authVerifySession(request: NextRequest): Promise<AuthResul
             role
         };
     } catch (error) {
-        logger.error('auth', `Session verification error: ${error}`);
+        console.error(`[Auth] Session verification error:`, error);
         return { valid: false, error: 'Session verification failed' };
     }
 }
@@ -129,7 +149,7 @@ export async function authVerifyAdminToken(request: NextRequest): Promise<{ vali
  */
 export async function authVerifyApiKey(apiKey: string): Promise<{ valid: boolean; rateLimit?: number; error?: string }> {
     if (!authClient) {
-        logger.error('auth', 'Supabase not configured');
+        console.error('[Auth] Supabase not configured');
         return { valid: false, error: 'Auth service not configured' };
     }
 
@@ -157,7 +177,7 @@ export async function authVerifyApiKey(apiKey: string): Promise<{ valid: boolean
             rateLimit: keyData.rate_limit || 100,
         };
     } catch (error) {
-        logger.error('auth', `API key verification error: ${error}`);
+        console.error(`[Auth] API key verification error:`, error);
         return { valid: false, error: 'API key verification failed' };
     }
 }

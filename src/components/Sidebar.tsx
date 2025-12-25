@@ -3,17 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 
 // ═══════════════════════════════════════════════════════════════
-// Types
-// ═══════════════════════════════════════════════════════════════
-
-export type NavSection = 'home' | 'docs';
-
-interface SidebarProps {
-    activeSection: NavSection;
-    onSectionChange: (section: NavSection) => void;
-}
-
-// ═══════════════════════════════════════════════════════════════
 // Theme - Solarized Only
 // ═══════════════════════════════════════════════════════════════
 
@@ -24,19 +13,10 @@ function initTheme() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Navigation Config - Simple: Home & Docs only
-// ═══════════════════════════════════════════════════════════════
-
-const NAV_ITEMS: { id: NavSection; label: string; icon: string }[] = [
-    { id: 'home', label: 'Home', icon: 'fa-home' },
-    { id: 'docs', label: 'Documentation', icon: 'fa-book' },
-];
-
-// ═══════════════════════════════════════════════════════════════
 // Sidebar Component
 // ═══════════════════════════════════════════════════════════════
 
-export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
+export function Sidebar() {
     const [mobileOpen, setMobileOpen] = useState(false);
     const sidebarRef = useRef<HTMLElement>(null);
 
@@ -54,25 +34,17 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [mobileOpen]);
 
-    const handleNavClick = (section: NavSection) => {
-        onSectionChange(section);
-        setMobileOpen(false);
-    };
-
     return (
         <>
-            {/* Mobile Header - No theme icon */}
+            {/* Mobile Header */}
             <div className="mobile-header">
                 <button className="mobile-burger" onClick={() => setMobileOpen(!mobileOpen)}>
                     <i className={`fa-solid ${mobileOpen ? 'fa-xmark' : 'fa-bars'}`}></i>
                 </button>
                 <div className="mobile-logo">
-                    <div className="logo-icon">
-                        <i className="fa-solid fa-bolt"></i>
-                    </div>
+                    <img src="/icon.png" alt="XTFetch" className="logo-img" />
                     <span>XTFetch API</span>
                 </div>
-                {/* Empty div for flex spacing */}
                 <div style={{ width: 40 }}></div>
             </div>
 
@@ -86,27 +58,19 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
             <aside ref={sidebarRef} className={`sidebar ${mobileOpen ? 'open' : ''}`}>
                 {/* Logo */}
                 <div className="sidebar-header">
-                    <div className="logo-icon">
-                        <i className="fa-solid fa-bolt"></i>
-                    </div>
+                    <img src="/icon.png" alt="XTFetch" className="logo-img" />
                     <div>
-                        <h1 className="logo-text">XTFetch</h1>
-                        <span className="logo-sub">API Documentation</span>
+                        <h1 className="logo-text">XTFetch API</h1>
+                        <span className="logo-sub">powered by risunCode</span>
                     </div>
                 </div>
 
-                {/* Navigation - Simple list */}
+                {/* Navigation - Home only */}
                 <nav className="sidebar-nav">
-                    {NAV_ITEMS.map((item) => (
-                        <button
-                            key={item.id}
-                            onClick={() => handleNavClick(item.id)}
-                            className={`nav-item ${activeSection === item.id ? 'active' : ''}`}
-                        >
-                            <i className={`fa-solid ${item.icon}`}></i>
-                            <span>{item.label}</span>
-                        </button>
-                    ))}
+                    <button className="nav-item active">
+                        <i className="fa-solid fa-home"></i>
+                        <span>Home</span>
+                    </button>
                 </nav>
 
                 {/* Footer */}
@@ -130,14 +94,12 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
 
 interface LayoutProps {
     children: React.ReactNode;
-    activeSection: NavSection;
-    onSectionChange: (section: NavSection) => void;
 }
 
-export function SidebarLayout({ children, activeSection, onSectionChange }: LayoutProps) {
+export function SidebarLayout({ children }: LayoutProps) {
     return (
         <div className="app-layout">
-            <Sidebar activeSection={activeSection} onSectionChange={onSectionChange} />
+            <Sidebar />
             <main className="main-content">
                 {children}
             </main>

@@ -123,7 +123,7 @@ export async function GET(request: NextRequest) {
         const earlyPlatform = detectedPlatform || platformDetect(url);
         let poolCookie: string | null = null;
         if (earlyPlatform) {
-            poolCookie = await cookiePoolGetRotating(earlyPlatform);
+            poolCookie = await cookiePoolGetRotating(earlyPlatform, 'private');
         }
 
         // Step 4: URL resolution (only if cache miss) - pass cookie for platforms that need auth
@@ -137,7 +137,7 @@ export async function GET(request: NextRequest) {
 
         // Refresh cookie if platform changed after resolution
         if (urlResult.platform !== earlyPlatform) {
-            poolCookie = await cookiePoolGetRotating(urlResult.platform);
+            poolCookie = await cookiePoolGetRotating(urlResult.platform, 'private');
         }
 
         // Step 5: Check cache with resolved URL (if URL was resolved)

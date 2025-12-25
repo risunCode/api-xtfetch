@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/core/database';
+import { supabase } from '@/lib/database';
 import { httpClearProfileCache as clearProfileCache } from '@/lib/http';
 
 interface RouteParams {
