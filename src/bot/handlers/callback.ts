@@ -480,32 +480,128 @@ async function botCallbackDownloadQuality(
 /**
  * Handle menu command callback
  * Pattern: cmd:(mystatus|history|premium|privacy|help|menu)
+ * 
+ * Directly executes the command content instead of telling user to type it
  */
 async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise<void> {
     await ctx.answerCallbackQuery();
+    
+    const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
 
-    // Reply with instruction to use command
     switch (command) {
-        case 'mystatus':
-            await ctx.reply('📊 Use /mystatus to check your download stats and premium status.');
+        case 'mystatus': {
+            // Import and execute mystatus logic
+            const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('../commands/mystatus');
+            const userId = ctx.from?.id;
+            if (!userId) {
+                await ctx.reply('❌ User not found');
+                return;
+            }
+            
+            const [statusResult, totalDownloads] = await Promise.all([
+                botUserGetPremiumStatus(userId),
+                botUserGetTotalDownloads(userId),
+            ]);
+            
+            const user = statusResult?.user;
+            const apiKey = statusResult?.apiKey;
+            const isPremium = !!apiKey;
+            const dailyUsed = user?.daily_downloads || 0;
+            const dailyLimit = 10;
+            const remaining = isPremium ? '∞' : String(Math.max(0, dailyLimit - dailyUsed));
+            
+            const message = lang === 'id' 
+                ? `📊 *Status Anda*\n\n` +
+                  `👤 User ID: \`${userId}\`\n` +
+                  `💎 Status: ${isPremium ? 'Premium ✓' : 'Free'}\n` +
+                  `📥 Download hari ini: ${dailyUsed}${isPremium ? '' : `/${dailyLimit}`}\n` +
+                  `📊 Total download: ${totalDownloads}\n` +
+                  `⏳ Sisa: ${remaining}`
+                : `📊 *Your Status*\n\n` +
+                  `👤 User ID: \`${userId}\`\n` +
+                  `💎 Status: ${isPremium ? 'Premium ✓' : 'Free'}\n` +
+                  `📥 Downloads today: ${dailyUsed}${isPremium ? '' : `/${dailyLimit}`}\n` +
+                  `📊 Total downloads: ${totalDownloads}\n` +
+                  `⏳ Remaining: ${remaining}`;
+            
+            await ctx.reply(message, { parse_mode: 'Markdown' });
             break;
-        case 'history':
-            await ctx.reply('📜 Use /history to view your recent downloads.');
+        }
+        
+        case 'history': {
+            const { botDownloadGetHistory } = await import('../commands/history');
+            const userId = ctx.from?.id;
+            if (!userId) {
+                await ctx.reply('❌ User not found');
+                return;
+            }
+            
+            const history = await botDownloadGetHistory(userId, 5);
+            
+            if (!history || history.length === 0) {
+                const msg = lang === 'id' ? '📜 Belum ada riwayat download.' : '📜 No download history yet.';
+                await ctx.reply(msg);
+                return;
+            }
+            
+            const header = lang === 'id' ? '📜 *Riwayat Download Terakhir*\n\n' : '📜 *Recent Downloads*\n\n';
+            const items = history.map((h, i) => {
+                const date = new Date(h.created_at).toLocaleDateString();
+                return `${i + 1}. ${h.platform} - ${date}`;
+            }).join('\n');
+            
+            await ctx.reply(header + items, { parse_mode: 'Markdown' });
             break;
-        case 'premium':
-            await ctx.reply('💎 Use /premium to see premium subscription info.');
+        }
+        
+        case 'premium': {
+            const message = lang === 'id'
+                ? `💎 *Premium DownAria*\n\n` +
+                  `Keuntungan Premium:\n` +
+                  `• Download tanpa batas\n` +
+                  `• Tanpa cooldown\n` +
+                  `• Prioritas support\n` +
+                  `• Kualitas lebih tinggi\n\n` +
+                  `Hubungi @suntaw untuk info lebih lanjut.`
+                : `💎 *DownAria Premium*\n\n` +
+                  `Premium benefits:\n` +
+                  `• Unlimited downloads\n` +
+                  `• No cooldown\n` +
+                  `• Priority support\n` +
+                  `• Higher quality options\n\n` +
+                  `Contact @suntaw for more info.`;
+            
+            await ctx.reply(message, { parse_mode: 'Markdown' });
             break;
-        case 'privacy':
-            await ctx.reply('🔒 Use /privacy to read our privacy policy.');
+        }
+        
+        case 'privacy': {
+            const { t, detectLanguage } = await import('../i18n');
+            const detectedLang = detectLanguage(ctx.from?.language_code);
+            await ctx.reply(t('privacy_title', detectedLang), { parse_mode: 'Markdown' });
             break;
-        case 'help':
-            await ctx.reply('❓ Use /help for usage guide.');
+        }
+        
+        case 'help': {
+            const { t, detectLanguage } = await import('../i18n');
+            const detectedLang = detectLanguage(ctx.from?.language_code);
+            await ctx.reply(t('help_title', detectedLang), { parse_mode: 'Markdown' });
             break;
-        case 'menu':
-            await ctx.reply('📋 Use /menu to see the main menu.');
+        }
+        
+        case 'menu': {
+            const { t, detectLanguage } = await import('../i18n');
+            const detectedLang = detectLanguage(ctx.from?.language_code);
+            const { menuKeyboard } = await import('../keyboards');
+            await ctx.reply(t('menu_title', detectedLang), { 
+                parse_mode: 'Markdown',
+                reply_markup: menuKeyboard(),
+            });
             break;
+        }
+        
         default:
-            await ctx.reply(`Use /${command} to see this information.`);
+            await ctx.reply(`❓ Unknown command: ${command}`);
     }
 }
 

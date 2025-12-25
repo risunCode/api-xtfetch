@@ -61,8 +61,10 @@ export interface SessionData {
 export interface BotContext extends Context, SessionFlavor<SessionData> {
     /** Authenticated bot user from database */
     botUser?: BotUser;
-    /** Whether user is premium (has API key) */
+    /** Whether user is premium (has API key or is admin) */
     isPremium?: boolean;
+    /** Whether user is admin */
+    isAdmin?: boolean;
     /** Rate limit info */
     rateLimit?: {
         remaining: number;

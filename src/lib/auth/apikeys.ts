@@ -137,11 +137,15 @@ function hashKey(key: string): string {
 }
 
 async function loadKeysFromDB(): Promise<ApiKey[]> {
-    const db = getReadClient();
+    // Use admin client for API keys (RLS blocks anon access)
+    const db = getWriteClient();
     if (!db) return [];
     try {
         const { data, error } = await db.from('api_keys').select('*').order('created_at', { ascending: false });
-        if (error || !data) return [];
+        if (error || !data) {
+            console.error('[loadKeysFromDB] Error:', error?.message);
+            return [];
+        }
         return data.map((row: Record<string, unknown>) => ({
             id: row.id as string,
             name: row.name as string,
@@ -159,7 +163,8 @@ async function loadKeysFromDB(): Promise<ApiKey[]> {
                 errorCount: (row.error_count as number) || 0
             }
         }));
-    } catch {
+    } catch (e) {
+        console.error('[loadKeysFromDB] Exception:', e);
         return [];
     }
 }

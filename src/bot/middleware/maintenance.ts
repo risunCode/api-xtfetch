@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
  * Checks if system is in maintenance mode and blocks bot usage accordingly.
+ * Admins can still use all commands during maintenance.
  * 
  * @module bot/middleware/maintenance
  */
@@ -15,6 +16,7 @@ import {
     serviceConfigGetMaintenanceMessage,
     serviceConfigGetMaintenanceType,
 } from '@/lib/config';
+import { botIsAdmin } from '../config';
 
 // ============================================================================
 // Maintenance Middleware
@@ -22,7 +24,7 @@ import {
 
 /**
  * Middleware to check maintenance mode
- * Blocks all bot operations during full maintenance
+ * Blocks all bot operations during full maintenance (except for admins)
  */
 export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
     const isMaintenanceMode = serviceConfigIsMaintenanceMode();
@@ -30,13 +32,27 @@ export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next)
     
     // Only block on full maintenance (not API-only)
     if (isMaintenanceMode && maintenanceType === 'full') {
-        const message = serviceConfigGetMaintenanceMessage() || 
-            '🔧 DownAria is currently under maintenance. Please try again later.';
+        // Allow admins to bypass maintenance mode
+        const userId = ctx.from?.id;
+        if (userId && botIsAdmin(userId)) {
+            // Admin bypass - continue normally
+            await next();
+            return;
+        }
         
-        await ctx.reply(
-            `🚧 *Maintenance Mode*\n\n${message}\n\n_We'll be back soon!_`,
-            { parse_mode: 'Markdown' }
-        );
+        // Get custom message or use default
+        const customMessage = serviceConfigGetMaintenanceMessage();
+        const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
+        
+        const message = lang === 'id'
+            ? `🔧 *Sedang Maintenance*\n\n` +
+              `${customMessage || 'Layanan sedang dalam pemeliharaan.'}\n\n` +
+              `Silakan coba lagi nanti. Terima kasih atas kesabarannya! 🙏`
+            : `🔧 *Under Maintenance*\n\n` +
+              `${customMessage || 'Service is currently under maintenance.'}\n\n` +
+              `Please try again later. Thanks for your patience! 🙏`;
+        
+        await ctx.reply(message, { parse_mode: 'Markdown' });
         return; // Don't proceed to next middleware
     }
     

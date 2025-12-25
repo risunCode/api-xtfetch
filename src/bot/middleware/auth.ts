@@ -12,6 +12,7 @@ import { BOT_MESSAGES } from '../types';
 import { 
     botUserGetOrCreate as botUserGetOrCreateService,
 } from '../services/userService';
+import { botIsAdmin } from '../config';
 
 // ============================================================================
 // USER MANAGEMENT (Wrapper around userService)
@@ -131,7 +132,9 @@ export const authMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
 
     // Attach user data to context
     ctx.botUser = botUser;
-    ctx.isPremium = botUserIsPremium(botUser);
+    // Admin is always premium, otherwise check api_key_id
+    ctx.isPremium = botIsAdmin(from.id) || botUserIsPremium(botUser);
+    ctx.isAdmin = botIsAdmin(from.id);
 
     // Continue to next middleware/handler
     return next();

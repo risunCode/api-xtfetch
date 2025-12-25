@@ -24,9 +24,26 @@ export async function GET(request: NextRequest) {
     
     try {
         const keys = await apiKeyGetAll();
-        // Include key_type in response
-        return NextResponse.json({ success: true, data: keys });
+        
+        // Map to frontend expected format
+        const mappedKeys = keys.map(k => ({
+            id: k.id,
+            name: k.name,
+            key: k.key,
+            keyHash: k.hashedKey,
+            keyPreview: k.key,
+            keyType: k.keyType,
+            enabled: k.enabled,
+            rateLimit: k.rateLimit,
+            createdAt: k.created,  // Frontend expects createdAt
+            lastUsed: k.lastUsed,
+            expiresAt: k.expiresAt,
+            stats: k.stats,
+        }));
+        
+        return NextResponse.json({ success: true, data: mappedKeys });
     } catch (error) {
+        console.error('[apikeys GET] Error:', error);
         return NextResponse.json({
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
