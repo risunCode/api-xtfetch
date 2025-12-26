@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     try {
         if (stats === 'true') {
             const poolStats = await cookiePoolGetStats();
-            const platforms = ['facebook', 'instagram', 'twitter', 'weibo'];
+            const platforms = ['facebook', 'instagram', 'twitter', 'weibo', 'youtube'];
             const result: CookiePoolStats[] = platforms.map(p => {
                 const existing = poolStats.find(s => s.platform === p);
                 return existing || {

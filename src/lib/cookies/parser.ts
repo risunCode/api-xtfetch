@@ -146,6 +146,7 @@ function extractCookieInfo(
 
 /**
  * Parse cookie input from various formats into a standard cookie string
+ * Note: For YouTube, returns original JSON to preserve metadata for Netscape conversion
  */
 export function cookieParse(input: unknown, platform?: CookiePlatform): string | null {
     if (!input) return null;
@@ -160,6 +161,11 @@ export function cookieParse(input: unknown, platform?: CookiePlatform): string |
             try {
                 const arr = JSON.parse(trimmed) as CookieObject[];
                 if (Array.isArray(arr)) {
+                    // For YouTube, return original JSON to preserve metadata (domain, expiry, secure)
+                    // This allows convertToNetscapeFormat to properly create the cookie file
+                    if (platform === 'youtube') {
+                        return trimmed;
+                    }
                     pairs = filterAndExtract(arr, platform);
                 }
             } catch {
@@ -169,6 +175,10 @@ export function cookieParse(input: unknown, platform?: CookiePlatform): string |
             return trimmed;
         }
     } else if (Array.isArray(input)) {
+        // For YouTube, convert array back to JSON string to preserve metadata
+        if (platform === 'youtube') {
+            return JSON.stringify(input);
+        }
         pairs = filterAndExtract(input as CookieObject[], platform);
     } else if (typeof input === 'object' && input !== null) {
         const obj = input as CookieObject;

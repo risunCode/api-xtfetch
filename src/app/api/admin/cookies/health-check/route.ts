@@ -8,7 +8,7 @@ import { authVerifyAdminSession } from '@/core/security';
 import { cookiePoolGetByPlatform, cookiePoolTestHealth } from '@/lib/cookies';
 import { checkCookiePoolHealth, updateLastHealthCheck } from '@/lib/integrations/admin-alerts';
 
-const PLATFORMS = ['facebook', 'instagram', 'twitter', 'weibo'] as const;
+const PLATFORMS = ['facebook', 'instagram', 'twitter', 'weibo', 'youtube'] as const;
 
 export async function POST(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
