@@ -9,6 +9,36 @@ import { NextRequest, NextResponse } from 'next/server';
 import { webhookCallback } from 'grammy';
 import { bot, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET } from '@/bot';
 
+// Telegram's official IP ranges for webhook requests
+// https://core.telegram.org/bots/webhooks#the-short-version
+const TELEGRAM_IP_RANGES = [
+  '149.154.160.0/20',  // 149.154.160.0 - 149.154.175.255
+  '91.108.4.0/22',     // 91.108.4.0 - 91.108.7.255
+  '91.108.8.0/22',     // 91.108.8.0 - 91.108.11.255
+  '91.108.56.0/22',    // 91.108.56.0 - 91.108.59.255
+];
+
+// Check if IP is in Telegram's range
+function isFromTelegram(ip: string): boolean {
+  if (!ip || ip === 'unknown') return false;
+  
+  // Parse IP to number for range check
+  const ipParts = ip.split('.').map(Number);
+  if (ipParts.length !== 4 || ipParts.some(isNaN)) return false;
+  
+  const ipNum = (ipParts[0] << 24) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+  
+  // Check each Telegram range
+  const ranges = [
+    { start: (149 << 24) + (154 << 16) + (160 << 8), end: (149 << 24) + (154 << 16) + (175 << 8) + 255 },
+    { start: (91 << 24) + (108 << 16) + (4 << 8), end: (91 << 24) + (108 << 16) + (7 << 8) + 255 },
+    { start: (91 << 24) + (108 << 16) + (8 << 8), end: (91 << 24) + (108 << 16) + (11 << 8) + 255 },
+    { start: (91 << 24) + (108 << 16) + (56 << 8), end: (91 << 24) + (108 << 16) + (59 << 8) + 255 },
+  ];
+  
+  return ranges.some(r => ipNum >= r.start && ipNum <= r.end);
+}
+
 // Lazy-init webhook handler (avoid build-time errors when bot is null)
 let handleUpdate: ((req: Request) => Promise<Response>) | null = null;
 
@@ -34,12 +64,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Bot not configured' }, { status: 503 });
   }
 
-  // SECURITY: Validate webhook secret if configured
-  // NOTE: Secret validation disabled temporarily - Railway env issue with secret_token
-  // TODO: Re-enable when Telegram properly sends x-telegram-bot-api-secret-token header
-  const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
-  if (TELEGRAM_WEBHOOK_SECRET && secretHeader && secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
-    console.warn('[Webhook] Rejected: Invalid secret token');
+  // SECURITY: Validate request is from Telegram's IP range
+  const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0].trim() 
+    || request.headers.get('x-real-ip') 
+    || 'unknown';
+  
+  if (!isFromTelegram(clientIp)) {
+    console.warn('[Webhook] Rejected: Not from Telegram IP', { ip: clientIp });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
