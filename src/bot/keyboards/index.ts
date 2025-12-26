@@ -107,10 +107,10 @@ export function buildPhotoKeyboard(originalUrl: string): InlineKeyboard {
  */
 export function startKeyboard(): InlineKeyboard {
     return new InlineKeyboard()
-        .text('📊 My Stats', 'stats')
-        .text('⭐ Premium', 'premium')
+        .text('📊 My Stats', 'cmd:mystatus')
+        .text('⭐ Premium', 'cmd:premium')
         .row()
-        .text('❓ Help', 'help')
+        .text('❓ Help', 'cmd:help')
         .url('🌐 Website', 'https://downaria.vercel.app');
 }
 
@@ -124,7 +124,7 @@ export function helpKeyboard(): InlineKeyboard {
         .row()
         .text('⭐ Premium Features', 'help_premium')
         .row()
-        .text('« Back to Menu', 'menu');
+        .text('« Back to Menu', 'cmd:menu');
 }
 
 /**
@@ -132,14 +132,14 @@ export function helpKeyboard(): InlineKeyboard {
  */
 export function menuKeyboard(): InlineKeyboard {
     return new InlineKeyboard()
-        .text('📊 My Status', 'mystatus')
-        .text('📜 History', 'history')
+        .text('📊 My Status', 'cmd:mystatus')
+        .text('📜 History', 'cmd:history')
         .row()
-        .text('💎 Premium', 'premium')
-        .text('🔒 Privacy', 'privacy')
+        .text('💎 Premium', 'cmd:premium')
+        .text('🔒 Privacy', 'cmd:privacy')
         .row()
         .url('🌐 Website', 'https://downaria.vercel.app')
-        .text('❓ Help', 'help');
+        .text('❓ Help', 'cmd:help');
 }
 
 /**
@@ -149,7 +149,7 @@ export function settingsKeyboard(currentLang: string = 'en'): InlineKeyboard {
     return new InlineKeyboard()
         .text(`🌐 Language: ${currentLang.toUpperCase()}`, 'settings_language')
         .row()
-        .text('« Back to Menu', 'menu');
+        .text('« Back to Menu', 'cmd:menu');
 }
 
 /**
@@ -176,7 +176,7 @@ export function premiumKeyboard(): InlineKeyboard {
         .row()
         .url(`💬 Contact Admin`, `https://t.me/${ADMIN_CONTACT_USERNAME}`)
         .row()
-        .text('« Back to Menu', 'menu');
+        .text('« Back to Menu', 'cmd:menu');
 }
 
 /**
@@ -188,7 +188,7 @@ export function premiumStatusKeyboard(): InlineKeyboard {
         .row()
         .text('🔓 Unlink API Key', 'premium_unlink')
         .row()
-        .text('« Back to Menu', 'menu');
+        .text('« Back to Menu', 'cmd:menu');
 }
 
 /**
@@ -197,14 +197,14 @@ export function premiumStatusKeyboard(): InlineKeyboard {
 export function confirmUnlinkKeyboard(): InlineKeyboard {
     return new InlineKeyboard()
         .text('✅ Yes, Unlink', 'premium_unlink_confirm')
-        .text('❌ Cancel', 'premium');
+        .text('❌ Cancel', 'cmd:premium');
 }
 
 /**
  * API key input cancel keyboard
  */
 export function cancelKeyboard(): InlineKeyboard {
-    return new InlineKeyboard().text('❌ Cancel', 'premium');
+    return new InlineKeyboard().text('❌ Cancel', 'cmd:premium');
 }
 
 // ============================================================================
@@ -244,7 +244,7 @@ export function downloadSuccessKeyboard(url: string): InlineKeyboard {
     return new InlineKeyboard()
         .url('🔗 Original Link', url)
         .row()
-        .text('📊 My Stats', 'stats');
+        .text('📊 My Stats', 'cmd:mystatus');
 }
 
 /**
@@ -267,7 +267,7 @@ export function statsKeyboard(): InlineKeyboard {
         .row()
         .text('📜 Download History', 'stats_history')
         .row()
-        .text('« Back to Menu', 'menu');
+        .text('« Back to Menu', 'cmd:menu');
 }
 
 /**
@@ -284,7 +284,7 @@ export function historyKeyboard(page: number, hasMore: boolean): InlineKeyboard 
         keyboard.text('Next »', `history_page:${page + 1}`);
     }
 
-    keyboard.row().text('« Back to Stats', 'stats');
+    keyboard.row().text('« Back to Stats', 'cmd:mystatus');
 
     return keyboard;
 }
