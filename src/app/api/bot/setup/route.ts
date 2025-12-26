@@ -43,8 +43,7 @@ export async function GET(request: NextRequest) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 url: webhookUrl,
-                // NOTE: secret_token disabled due to Railway env newline issue
-                // secret_token: TELEGRAM_WEBHOOK_SECRET || undefined,
+                secret_token: TELEGRAM_WEBHOOK_SECRET || undefined,
                 allowed_updates: ['message', 'callback_query'],
                 drop_pending_updates: true,
             }),
