@@ -7,8 +7,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/lib/database';
+import { supabaseAdmin, supabase } from '@/lib/database';
 import { httpClearProfileCache as clearProfileCache } from '@/lib/http';
+
+// Use admin client for full access, fallback to regular client
+const db = supabaseAdmin || supabase;
 
 interface RouteParams {
     params: Promise<{ id: string }>;
@@ -20,14 +23,14 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
     }
 
     const { id } = await params;
 
     try {
-        const { data, error } = await supabase
+        const { data, error } = await db
             .from('browser_profiles')
             .select('*')
             .eq('id', id)
@@ -53,7 +56,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
     }
 
@@ -67,7 +70,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         const allowedFields = [
             'platform', 'label', 'user_agent', 'sec_ch_ua', 'sec_ch_ua_platform',
             'sec_ch_ua_mobile', 'accept_language', 'browser', 'device_type', 'os',
-            'is_chromium', 'priority', 'enabled', 'note'
+            'is_chromium', 'priority', 'enabled', 'note',
+            'use_count', 'success_count', 'error_count', 'last_error'
         ];
 
         for (const field of allowedFields) {
@@ -80,7 +84,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             return NextResponse.json({ success: false, error: 'No fields to update' }, { status: 400 });
         }
 
-        const { data, error } = await supabase
+        const { data, error } = await db
             .from('browser_profiles')
             .update(updates)
             .eq('id', id)
@@ -107,14 +111,14 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
     }
 
     const { id } = await params;
 
     try {
-        const { error } = await supabase
+        const { error } = await db
             .from('browser_profiles')
             .delete()
             .eq('id', id);

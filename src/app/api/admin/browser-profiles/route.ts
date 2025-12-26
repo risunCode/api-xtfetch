@@ -6,7 +6,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { authVerifyAdminSession } from '@/core/security';
-import { supabase } from '@/lib/database';
+import { supabaseAdmin, supabase } from '@/lib/database';
+
+// Use admin client for full access, fallback to regular client
+const db = supabaseAdmin || supabase;
 
 export async function GET(request: NextRequest) {
     const auth = await authVerifyAdminSession(request);
@@ -14,13 +17,13 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
     }
 
     try {
         // Get all profiles
-        const { data: profiles, error } = await supabase
+        const { data: profiles, error } = await db
             .from('browser_profiles')
             .select('*')
             .order('platform')
@@ -82,7 +85,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
     }
 
-    if (!supabase) {
+    if (!db) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 503 });
     }
 
@@ -110,7 +113,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, error: 'Label and user_agent are required' }, { status: 400 });
         }
 
-        const { data, error } = await supabase
+        const { data, error } = await db
             .from('browser_profiles')
             .insert({
                 platform,
