@@ -108,15 +108,15 @@ YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo
 /menu - Show menu
 /mystatus - Your stats
 /history - Download history
-/premium - Premium info
+/donate - Support & VIP info
 /privacy - Privacy policy
 /help - This message
 
 *Limits (Free):*
-• 10 downloads per 6 hours
-• 5 second cooldown
+• 8 downloads per day
+• 4 second cooldown
 
-*Premium:* Unlimited downloads, no cooldown
+*VIP (Donator):* Unlimited downloads, no cooldown
 
 Contact: @suntaw`,
 
@@ -144,7 +144,7 @@ Available commands:
 /menu - Show menu
 /mystatus - Your stats
 /history - Download history
-/premium - Premium info`,
+/donate - Support & VIP`,
 
         unknown_text: `🔗 Send me a video link!
 
@@ -163,7 +163,7 @@ Type /help for more info.`,
         // Menu buttons
         btn_mystatus: '📊 My Status',
         btn_history: '📜 History',
-        btn_premium: '💎 Premium',
+        btn_donate: '💝 Donate',
         btn_privacy: '🔒 Privacy',
         btn_website: '🌐 Website',
         btn_help: '❓ Help',
@@ -270,15 +270,15 @@ YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo
 /menu - Tampilkan menu
 /mystatus - Status Anda
 /history - Riwayat download
-/premium - Info premium
+/donate - Donasi & info VIP
 /privacy - Kebijakan privasi
 /help - Pesan ini
 
 *Batasan (Gratis):*
-• 10 download per 6 jam
-• Jeda 5 detik
+• 8 download per hari
+• Jeda 4 detik
 
-*Premium:* Download tanpa batas, tanpa jeda
+*VIP (Donatur):* Download tanpa batas, tanpa jeda
 
 Kontak: @suntaw`,
 
@@ -306,7 +306,7 @@ Perintah tersedia:
 /menu - Tampilkan menu
 /mystatus - Status Anda
 /history - Riwayat download
-/premium - Info premium`,
+/donate - Donasi & VIP`,
 
         unknown_text: `🔗 Kirim link video!
 
@@ -325,7 +325,7 @@ Ketik /help untuk info lebih lanjut.`,
         // Menu buttons
         btn_mystatus: '📊 Status Saya',
         btn_history: '📜 Riwayat',
-        btn_premium: '💎 Premium',
+        btn_donate: '💝 Donasi',
         btn_privacy: '🔒 Privasi',
         btn_website: '🌐 Website',
         btn_help: '❓ Bantuan',

@@ -16,7 +16,7 @@ import { PlatformId } from './platform';
 // ============================================================================
 
 /** Maintenance mode types */
-export type MaintenanceType = 'off' | 'api' | 'full';
+export type MaintenanceType = 'off' | 'api' | 'full' | 'all';
 
 /** Platform statistics */
 export interface PlatformStats {

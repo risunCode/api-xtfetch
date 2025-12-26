@@ -152,7 +152,7 @@ function buildStartKeyboard(lang: BotLanguage): InlineKeyboard {
         .text(t('btn_help', lang), 'cmd:help')
         .row()
         .text(t('btn_mystatus', lang), 'cmd:mystatus')
-        .text(t('btn_premium', lang), 'cmd:premium')
+        .text(t('btn_donate', lang), 'cmd:donate')
         .row()
         .url(t('btn_website', lang), 'https://downaria.vercel.app');
 }

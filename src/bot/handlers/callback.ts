@@ -19,7 +19,7 @@
  * Menu command callbacks:
  * - cmd:mystatus - Trigger /mystatus
  * - cmd:history - Trigger /history
- * - cmd:premium - Trigger /premium
+ * - cmd:donate - Trigger /donate
  * - cmd:privacy - Trigger /privacy
  * - cmd:help - Trigger /help
  * - cmd:menu - Trigger /menu

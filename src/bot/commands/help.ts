@@ -11,7 +11,7 @@ const helpComposer = new Composer<Context>();
 function buildHelpKeyboard(lang: BotLanguage): InlineKeyboard {
     return new InlineKeyboard()
         .text(t('btn_menu', lang), 'cmd:menu')
-        .text(t('btn_premium', lang), 'cmd:premium')
+        .text(t('btn_donate', lang), 'cmd:donate')
         .row()
         .url(t('btn_website', lang), 'https://downaria.vercel.app');
 }

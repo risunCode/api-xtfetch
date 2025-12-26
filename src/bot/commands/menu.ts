@@ -14,7 +14,7 @@ function buildMenuKeyboard(lang: BotLanguage, isAdmin: boolean): InlineKeyboard 
         .text(t('btn_mystatus', lang), 'cmd:mystatus')
         .text(t('btn_history', lang), 'cmd:history')
         .row()
-        .text(t('btn_premium', lang), 'cmd:premium')
+        .text(t('btn_donate', lang), 'cmd:donate')
         .text(t('btn_privacy', lang), 'cmd:privacy')
         .row()
         .url(t('btn_website', lang), 'https://downaria.vercel.app')

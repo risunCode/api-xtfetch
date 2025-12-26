@@ -11,12 +11,7 @@
 
 import type { MiddlewareFn } from 'grammy';
 import type { BotContext } from '../types';
-import { 
-    serviceConfigIsMaintenanceMode, 
-    serviceConfigGetMaintenanceMessage,
-    serviceConfigGetMaintenanceType,
-} from '@/lib/config';
-import { redis } from '@/lib/database';
+import { serviceConfigLoad, serviceConfigGet } from '@/lib/config';
 import { botIsAdmin } from '../config';
 
 // ============================================================================
@@ -26,13 +21,27 @@ import { botIsAdmin } from '../config';
 /**
  * Middleware to check maintenance mode
  * Blocks all bot operations during full maintenance (except for admins)
+ * 
+ * NOTE: Fetches fresh config from DB on each request to ensure sync with admin console
  */
 export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
-    const isMaintenanceMode = serviceConfigIsMaintenanceMode();
-    const maintenanceType = serviceConfigGetMaintenanceType();
+    // Force refresh config from DB
+    await serviceConfigLoad(true);
+    const config = serviceConfigGet();
     
-    // Only block on full maintenance (not API-only)
-    if (isMaintenanceMode && maintenanceType === 'full') {
+    const isMaintenanceMode = config.maintenanceMode === true;
+    const maintenanceType = String(config.maintenanceType || 'off');
+    
+    // Debug log (only in development)
+    if (process.env.NODE_ENV !== 'production') {
+        console.log('[Bot Maintenance] Check:', { isMaintenanceMode, maintenanceType });
+    }
+    
+    // Block on full maintenance or 'all' (not API-only)
+    // maintenanceType values: 'off', 'api', 'full', 'all'
+    const shouldBlock = isMaintenanceMode && (maintenanceType === 'full' || maintenanceType === 'all');
+    
+    if (shouldBlock) {
         // Allow admins to bypass maintenance mode
         const userId = ctx.from?.id;
         if (userId && botIsAdmin(userId)) {
@@ -42,7 +51,7 @@ export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next)
         }
         
         // Get custom message or use default
-        const customMessage = serviceConfigGetMaintenanceMessage();
+        const customMessage = config.maintenanceMessage;
         const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
         
         const message = lang === 'id'
@@ -65,36 +74,22 @@ export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next)
 // ============================================================================
 
 /**
- * Check if bot should be in maintenance mode
+ * Check if bot should be in maintenance mode (async - fetches from DB)
  */
-export function botIsInMaintenance(): boolean {
-    const isMaintenanceMode = serviceConfigIsMaintenanceMode();
-    const maintenanceType = serviceConfigGetMaintenanceType();
-    return isMaintenanceMode && maintenanceType === 'full';
+export async function botIsInMaintenance(): Promise<boolean> {
+    await serviceConfigLoad(true);
+    const config = serviceConfigGet();
+    const isMaintenanceMode = config.maintenanceMode === true;
+    const maintenanceType = config.maintenanceType;
+    return isMaintenanceMode && (maintenanceType === 'full' || maintenanceType === 'all');
 }
 
 /**
  * Get maintenance message for bot
  */
-export function botGetMaintenanceMessage(): string {
-    return serviceConfigGetMaintenanceMessage() || 
+export async function botGetMaintenanceMessage(): Promise<string> {
+    await serviceConfigLoad(true);
+    const config = serviceConfigGet();
+    return config.maintenanceMessage || 
         '🔧 DownAria is currently under maintenance. Please try again later.';
-}
-
-// ============================================================================
-// Global Maintenance Check (Redis)
-// ============================================================================
-
-/**
- * Check if global maintenance mode is enabled (from Redis)
- * This syncs with frontend's maintenance status
- */
-export async function botIsGlobalMaintenance(): Promise<boolean> {
-    if (!redis) return false;
-    try {
-        const value = await redis.get('global:maintenance');
-        return value === 'true' || value === '1';
-    } catch {
-        return false;
-    }
 }

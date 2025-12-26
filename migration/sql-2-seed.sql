@@ -85,6 +85,7 @@ CREATE TABLE admin_cookie_pool (
     cookie TEXT NOT NULL,
     label TEXT,
     user_id TEXT,
+    tier VARCHAR(10) NOT NULL DEFAULT 'public',
     status cookie_status NOT NULL DEFAULT 'healthy',
     enabled BOOLEAN NOT NULL DEFAULT true,
     use_count INTEGER NOT NULL DEFAULT 0,
@@ -96,7 +97,8 @@ CREATE TABLE admin_cookie_pool (
     max_uses_per_hour INTEGER NOT NULL DEFAULT 60,
     note TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT check_tier_values CHECK (tier IN ('public', 'private'))
 );
 
 COMMENT ON TABLE admin_cookie_pool IS 'Cookie pool for platform scraping with rotation';
@@ -298,7 +300,7 @@ CREATE INDEX idx_api_keys_enabled ON api_keys(enabled) WHERE enabled = true;
 -- Cookie Pool indexes
 CREATE INDEX idx_cookie_pool_platform ON admin_cookie_pool(platform);
 CREATE INDEX idx_cookie_pool_status ON admin_cookie_pool(status);
-CREATE INDEX idx_cookie_pool_rotation ON admin_cookie_pool(platform, enabled, status, cooldown_until, last_used_at);
+CREATE INDEX idx_cookie_pool_rotation ON admin_cookie_pool(platform, tier, enabled, status, cooldown_until, last_used_at);
 
 -- Browser Profiles indexes
 CREATE INDEX idx_browser_profiles_platform ON browser_profiles(platform);
@@ -606,6 +608,7 @@ CREATE TRIGGER on_auth_user_created
 CREATE OR REPLACE VIEW cookie_pool_stats AS
 SELECT 
     platform,
+    tier,
     COUNT(*)::int as total,
     COUNT(*) FILTER (WHERE enabled = true)::int as enabled_count,
     COUNT(*) FILTER (WHERE status = 'healthy' AND enabled = true)::int as healthy_count,
@@ -616,7 +619,7 @@ SELECT
     COALESCE(SUM(success_count), 0)::bigint as total_success,
     COALESCE(SUM(error_count), 0)::bigint as total_errors
 FROM admin_cookie_pool
-GROUP BY platform;
+GROUP BY platform, tier;
 
 -- View 2: browser_profiles_stats
 CREATE OR REPLACE VIEW browser_profiles_stats AS
@@ -835,3 +838,68 @@ GRANT ALL ON bot_downloads TO service_role;
 -- ============================================================================
 -- END OF SEED SCRIPT
 -- ============================================================================
+
+
+-- ============================================================================
+-- SECTION J: BOT TABLES (Telegram Bot)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- TABLE 12: bot_users - Telegram bot users
+-- ----------------------------------------------------------------------------
+CREATE TABLE bot_users (
+    id BIGINT PRIMARY KEY,  -- Telegram user ID
+    username TEXT,
+    first_name TEXT,
+    language_code TEXT DEFAULT 'en',
+    is_banned BOOLEAN DEFAULT false,
+    is_admin BOOLEAN DEFAULT false,
+    api_key_id VARCHAR(20) REFERENCES api_keys(id) ON DELETE SET NULL,
+    premium_expires_at TIMESTAMPTZ,
+    daily_downloads INTEGER DEFAULT 0,
+    total_downloads INTEGER DEFAULT 0,
+    last_download_at TIMESTAMPTZ,
+    daily_reset_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE bot_users IS 'Telegram bot user records';
+
+-- ----------------------------------------------------------------------------
+-- TABLE 13: bot_downloads - Bot download history
+-- ----------------------------------------------------------------------------
+CREATE TABLE bot_downloads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id BIGINT REFERENCES bot_users(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    status TEXT DEFAULT 'pending',
+    is_premium BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+COMMENT ON TABLE bot_downloads IS 'Telegram bot download history';
+
+-- Bot tables indexes
+CREATE INDEX idx_bot_users_username ON bot_users(username);
+CREATE INDEX idx_bot_users_api_key ON bot_users(api_key_id);
+CREATE INDEX idx_bot_downloads_user ON bot_downloads(user_id);
+CREATE INDEX idx_bot_downloads_created ON bot_downloads(created_at DESC);
+
+-- Bot tables RLS
+ALTER TABLE bot_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bot_downloads ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "bot_users_service" ON bot_users FOR ALL TO service_role USING (true);
+CREATE POLICY "bot_downloads_service" ON bot_downloads FOR ALL TO service_role USING (true);
+
+-- Bot tables triggers
+CREATE TRIGGER trigger_bot_users_updated 
+    BEFORE UPDATE ON bot_users 
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- Grant permissions
+GRANT ALL ON bot_users TO service_role;
+GRANT ALL ON bot_downloads TO service_role;

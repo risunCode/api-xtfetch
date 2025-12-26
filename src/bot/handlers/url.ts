@@ -22,7 +22,7 @@ import { recordDownloadStat } from '@/lib/database';
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { botIsGlobalMaintenance } from '../middleware/maintenance';
+import { botIsInMaintenance } from '../middleware/maintenance';
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 
@@ -644,7 +644,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         // Process URLs sequentially
         for (const url of urls) {
             // Check global maintenance mode (synced with frontend via Redis)
-            const isGlobalMaintenance = await botIsGlobalMaintenance();
+            const isGlobalMaintenance = await botIsInMaintenance();
             if (isGlobalMaintenance && !ctx.isAdmin) {
                 await ctx.reply('🚧 Service is under maintenance. Please try again later.', {
                     reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
