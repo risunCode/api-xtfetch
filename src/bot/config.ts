@@ -120,5 +120,10 @@ export function botConfigIsValid(): boolean {
 
 /** Check if user is admin */
 export function botIsAdmin(userId: number): boolean {
-  return TELEGRAM_ADMIN_IDS.includes(userId);
+  const isAdmin = TELEGRAM_ADMIN_IDS.includes(userId);
+  // Debug log for troubleshooting
+  if (!isAdmin && TELEGRAM_ADMIN_IDS.length > 0) {
+    console.log(`[botIsAdmin] User ${userId} not in admin list: [${TELEGRAM_ADMIN_IDS.join(', ')}]`);
+  }
+  return isAdmin;
 }
