@@ -23,8 +23,15 @@ export function isServerShuttingDown(): boolean {
 /**
  * Setup graceful shutdown handlers for SIGTERM and SIGINT signals
  * Should be called once during application initialization
+ * 
+ * NOTE: This only works in Node.js runtime, not Edge Runtime (middleware)
  */
 export function setupGracefulShutdown(): void {
+    // Skip in Edge Runtime (middleware) - process.on is not available
+    if (typeof process === 'undefined' || typeof process.on !== 'function') {
+        return;
+    }
+
     // Prevent duplicate registration
     if (shutdownHandlersRegistered) {
         return;
