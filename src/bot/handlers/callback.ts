@@ -506,25 +506,98 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
             const user = statusResult?.user;
             const apiKey = statusResult?.apiKey;
             const isPremium = !!apiKey;
-            const dailyUsed = user?.daily_downloads || 0;
-            const dailyLimit = 10;
-            const remaining = isPremium ? '∞' : String(Math.max(0, dailyLimit - dailyUsed));
             
-            const message = lang === 'id' 
-                ? `📊 *Status Anda*\n\n` +
-                  `👤 User ID: \`${userId}\`\n` +
-                  `💎 Status: ${isPremium ? 'Premium ✓' : 'Free'}\n` +
-                  `📥 Download hari ini: ${dailyUsed}${isPremium ? '' : `/${dailyLimit}`}\n` +
-                  `📊 Total download: ${totalDownloads}\n` +
-                  `⏳ Sisa: ${remaining}`
-                : `📊 *Your Status*\n\n` +
-                  `👤 User ID: \`${userId}\`\n` +
-                  `💎 Status: ${isPremium ? 'Premium ✓' : 'Free'}\n` +
-                  `📥 Downloads today: ${dailyUsed}${isPremium ? '' : `/${dailyLimit}`}\n` +
-                  `📊 Total downloads: ${totalDownloads}\n` +
-                  `⏳ Remaining: ${remaining}`;
-            
-            await ctx.reply(message, { parse_mode: 'Markdown' });
+            if (!isPremium) {
+                // Free user
+                const dailyUsed = user?.daily_downloads || 0;
+                const dailyLimit = 10;
+                const memberSince = user?.created_at 
+                    ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    : 'Unknown';
+                
+                const message = lang === 'id'
+                    ? `📊 *Status Anda*\n\n` +
+                      `*Akun:* Free Tier\n` +
+                      `*Username:* ${user?.username ? '@' + user.username : 'Tidak diset'}\n` +
+                      `*Member sejak:* ${memberSince}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `*Download:*\n` +
+                      `• Hari ini: ${dailyUsed} / ${dailyLimit}\n` +
+                      `• Total: ${totalDownloads}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `💡 Upgrade ke Premium untuk download tanpa batas!`
+                    : `📊 *Your Status*\n\n` +
+                      `*Account:* Free Tier\n` +
+                      `*Username:* ${user?.username ? '@' + user.username : 'Not set'}\n` +
+                      `*Member since:* ${memberSince}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `*Downloads:*\n` +
+                      `• Today: ${dailyUsed} / ${dailyLimit}\n` +
+                      `• Total: ${totalDownloads}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `💡 Upgrade to Premium for unlimited downloads!`;
+                
+                await ctx.reply(message, { parse_mode: 'Markdown' });
+            } else {
+                // Premium user - show full details
+                let expiryText = '♾️ Never';
+                let statusEmoji = '✅';
+                
+                if (apiKey.expires_at) {
+                    const expiryDate = new Date(apiKey.expires_at);
+                    const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                    
+                    if (daysLeft <= 0) {
+                        expiryText = lang === 'id' ? '❌ Kadaluarsa' : '❌ Expired';
+                        statusEmoji = '❌';
+                    } else if (daysLeft <= 7) {
+                        const dateStr = expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                        expiryText = lang === 'id' 
+                            ? `⚠️ ${dateStr} (${daysLeft} hari lagi)`
+                            : `⚠️ ${dateStr} (${daysLeft} days left)`;
+                        statusEmoji = '⚠️';
+                    } else {
+                        const dateStr = expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                        expiryText = lang === 'id'
+                            ? `${dateStr} (${daysLeft} hari lagi)`
+                            : `${dateStr} (${daysLeft} days left)`;
+                    }
+                }
+                
+                const keyStatus = apiKey.enabled 
+                    ? `${statusEmoji} ${lang === 'id' ? 'Aktif' : 'Active'}`
+                    : `❌ ${lang === 'id' ? 'Nonaktif' : 'Disabled'}`;
+                
+                const successRate = apiKey.total_requests > 0 
+                    ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) 
+                    : 100;
+                
+                const message = lang === 'id'
+                    ? `👑 *Status Premium*\n\n` +
+                      `*API Key:* \`${apiKey.key_preview}\`\n` +
+                      `*Terdaftar:* ${apiKey.name || 'N/A'}\n` +
+                      `*Status:* ${keyStatus}\n` +
+                      `*Masa Aktif:* ${expiryText}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `*Download:*\n` +
+                      `• Hari ini: ${user?.daily_downloads || 0} (Unlimited)\n` +
+                      `• Total: ${totalDownloads}\n` +
+                      `• API Requests: ${apiKey.total_requests}\n\n` +
+                      `*Success Rate:* ${successRate}%`
+                    : `👑 *Premium Status*\n\n` +
+                      `*API Key:* \`${apiKey.key_preview}\`\n` +
+                      `*Registered to:* ${apiKey.name || 'N/A'}\n` +
+                      `*Status:* ${keyStatus}\n` +
+                      `*Expires:* ${expiryText}\n\n` +
+                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                      `*Downloads:*\n` +
+                      `• Today: ${user?.daily_downloads || 0} (Unlimited)\n` +
+                      `• Total: ${totalDownloads}\n` +
+                      `• API Requests: ${apiKey.total_requests}\n\n` +
+                      `*Success Rate:* ${successRate}%`;
+                
+                await ctx.reply(message, { parse_mode: 'Markdown' });
+            }
             break;
         }
         
@@ -634,6 +707,44 @@ export function registerCallbackHandler(bot: Bot<BotContext>): void {
         } catch (error) {
             logger.error('telegram', error, 'DOWNLOAD_CALLBACK');
             await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
+        }
+    });
+
+    // Report cookie issue to admin: report_cookie:{platform}
+    bot.callbackQuery(/^report_cookie:(.+)$/, async (ctx) => {
+        const platform = ctx.match?.[1];
+        if (!platform) return;
+
+        await ctx.answerCallbackQuery({ text: '📢 Reporting to admin...' });
+
+        try {
+            // Get admin IDs from config
+            const { TELEGRAM_ADMIN_IDS } = await import('../config');
+            const userId = ctx.from?.id;
+            const username = ctx.from?.username;
+            
+            const reportMessage = `🚨 *Cookie Issue Report*
+
+*Platform:* ${platform.toUpperCase()}
+*Reported by:* ${username ? `@${username}` : `User ${userId}`}
+*User ID:* \`${userId}\`
+*Time:* ${new Date().toISOString()}
+
+A user reported that ${platform} downloads are failing due to cookie issues.`;
+
+            // Send to all admins
+            for (const adminId of TELEGRAM_ADMIN_IDS) {
+                try {
+                    await ctx.api.sendMessage(adminId, reportMessage, { parse_mode: 'Markdown' });
+                } catch {
+                    // Admin might have blocked the bot
+                }
+            }
+
+            await ctx.reply('✅ Report sent to admin. Thank you for reporting!');
+        } catch (error) {
+            logger.error('telegram', error, 'REPORT_COOKIE');
+            await ctx.reply('❌ Failed to send report. Please try again later.');
         }
     });
 

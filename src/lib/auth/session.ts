@@ -66,14 +66,11 @@ export interface AuthResult {
 export async function authVerifySession(request: NextRequest): Promise<AuthResult> {
     const authHeader = request.headers.get('Authorization');
     
-    console.log(`[Auth] Header present: ${!!authHeader}, starts with Bearer: ${authHeader?.startsWith('Bearer ')}`);
-    
     if (!authHeader?.startsWith('Bearer ')) {
         return { valid: false, error: 'No authorization token' };
     }
     
     const token = authHeader.slice(7);
-    console.log(`[Auth] Token length: ${token.length}`);
     
     try {
         // Call Supabase Auth API directly to verify token
@@ -85,13 +82,10 @@ export async function authVerifySession(request: NextRequest): Promise<AuthResul
         });
         
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`[Auth] Supabase API error: ${response.status} - ${errorText}`);
             return { valid: false, error: 'Invalid or expired token' };
         }
         
         const user = await response.json();
-        console.log(`[Auth] User verified: ${user.id}`);
         
         // Get user profile with role
         if (!authClient) {

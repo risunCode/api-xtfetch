@@ -22,7 +22,7 @@ import { recordDownloadStat } from '@/lib/database';
 import type { BotContext, DownloadResult } from '../types';
 import { BOT_MESSAGES, detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { errorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectQualities } from '../keyboards';
+import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectQualities } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 
 // ============================================================================
@@ -269,11 +269,14 @@ async function sendSinglePhoto(
     const images = result.formats?.filter(f => f.type === 'image') || [];
     if (images.length === 0) return false;
 
+    // Deduplicate images by itemId - keep only highest quality per item
+    const bestImages = deduplicateImages(images);
+    
     const caption = buildCaption(result, lang);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
     try {
-        await ctx.replyWithPhoto(new InputFile({ url: images[0].url }), {
+        await ctx.replyWithPhoto(new InputFile({ url: bestImages[0].url }), {
             caption,
             parse_mode: 'Markdown',
             reply_markup: keyboard,
@@ -283,6 +286,55 @@ async function sendSinglePhoto(
         logger.error('telegram', error, 'SEND_PHOTO');
         return false;
     }
+}
+
+/**
+ * Deduplicate images - keep only highest quality per itemId
+ * Twitter sends both 4K and large for same image, we only want 4K
+ */
+function deduplicateImages(images: Array<{ url: string; quality: string; type: string; itemId?: string }>): typeof images {
+    // Quality priority (higher = better)
+    const qualityPriority: Record<string, number> = {
+        '4k': 100,
+        'orig': 90,
+        'original': 90,
+        '4096': 85,
+        '2048': 80,
+        'large': 70,
+        'medium': 50,
+        'small': 30,
+        'thumb': 10,
+    };
+    
+    const getQualityScore = (quality: string): number => {
+        const q = quality.toLowerCase();
+        for (const [key, score] of Object.entries(qualityPriority)) {
+            if (q.includes(key)) return score;
+        }
+        // Check for resolution numbers
+        const match = q.match(/(\d{3,4})/);
+        if (match) return parseInt(match[1]) / 10;
+        return 50; // default
+    };
+    
+    // Group by itemId
+    const byItemId = new Map<string, typeof images[0]>();
+    
+    for (const img of images) {
+        const itemId = img.itemId || img.url; // fallback to url if no itemId
+        const existing = byItemId.get(itemId);
+        
+        if (!existing) {
+            byItemId.set(itemId, img);
+        } else {
+            // Keep higher quality
+            if (getQualityScore(img.quality) > getQualityScore(existing.quality)) {
+                byItemId.set(itemId, img);
+            }
+        }
+    }
+    
+    return Array.from(byItemId.values());
 }
 
 /**
@@ -297,9 +349,12 @@ async function sendPhotoAlbum(
     const images = result.formats?.filter(f => f.type === 'image') || [];
     if (images.length === 0) return false;
 
+    // Deduplicate images - keep only highest quality per item
+    const bestImages = deduplicateImages(images);
+    
     const caption = buildCaption(result, lang);
 
-    const mediaGroup: InputMediaPhoto[] = images.slice(0, 10).map((img, index) => ({
+    const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
         type: 'photo' as const,
         media: img.url,
         caption: index === 0 ? caption : undefined,
@@ -381,13 +436,31 @@ async function deleteMessage(ctx: BotContext, messageId: number): Promise<void> 
     }
 }
 
-async function editToError(ctx: BotContext, messageId: number, error: string, url: string): Promise<void> {
+async function editToError(ctx: BotContext, messageId: number, error: string, url: string, errorCode?: string, platform?: string): Promise<void> {
+    const lang = detectLanguage(ctx.from?.language_code);
+    
+    // Check if it's a cookie-related error
+    const isCookieError = errorCode && ['COOKIE_REQUIRED', 'COOKIE_EXPIRED', 'CHECKPOINT_REQUIRED', 'AGE_RESTRICTED', 'PRIVATE_CONTENT'].includes(errorCode);
+    
+    let displayError = error;
+    let keyboard;
+    
+    if (isCookieError && platform) {
+        // Simpler message for cookie errors
+        displayError = lang === 'id'
+            ? `⚠️ Konten ini tidak tersedia saat ini.\n\nMungkin memerlukan login atau cookie sedang bermasalah.`
+            : `⚠️ This content is currently unavailable.\n\nIt may require login or cookies are having issues.`;
+        keyboard = cookieErrorKeyboard(url, platform);
+    } else {
+        keyboard = errorKeyboard(url);
+    }
+    
     try {
-        await ctx.api.editMessageText(ctx.chat!.id, messageId, `❌ ${error}`, {
-            reply_markup: errorKeyboard(url),
+        await ctx.api.editMessageText(ctx.chat!.id, messageId, `❌ ${displayError}`, {
+            reply_markup: keyboard,
         });
     } catch {
-        await ctx.reply(`❌ ${error}`, { reply_markup: errorKeyboard(url) });
+        await ctx.reply(`❌ ${displayError}`, { reply_markup: keyboard });
     }
 }
 
@@ -456,7 +529,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                 });
             }
         } else {
-            await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url);
+            await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
         }
     });
 }

@@ -8,7 +8,10 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import fs from 'fs/promises';
+import os from 'os';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
+import { cookiePoolGetRotating, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { logger } from '../shared/logger';
 
 const execAsync = promisify(exec);
@@ -93,6 +96,9 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         return createError(ScraperErrorCode.INVALID_URL, 'Invalid YouTube URL');
     }
 
+    let cookieFilePath: string | null = null;
+    let usedCookie = false;
+
     try {
         // Clean URL - remove playlist parameter to speed up extraction
         const cleanUrl = cleanYouTubeUrl(url);
@@ -106,16 +112,30 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         // Execute Python script (use 'python' on Windows, 'python3' on Linux/Mac)
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         
+        // Try to get cookie from pool for age-restricted/private videos
+        const poolCookie = await cookiePoolGetRotating('youtube');
+        if (poolCookie) {
+            // Write cookie to temp file for yt-dlp
+            const tempDir = os.tmpdir();
+            cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
+            await fs.writeFile(cookieFilePath, poolCookie, 'utf-8');
+            usedCookie = true;
+            logger.debug('youtube', 'Using cookie from pool');
+        }
+        
         logger.debug('youtube', `Extracting with yt-dlp: ${cleanUrl}`);
         const startTime = Date.now();
 
-        const { stdout, stderr } = await execAsync(
-            `${pythonCmd} "${scriptPath}" "${escapedUrl}"`,
-            { 
-                timeout: 90000, // 90s timeout (YouTube can be slow)
-                maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-            }
-        );
+        // Build command with optional cookie file
+        let cmd = `${pythonCmd} "${scriptPath}" "${escapedUrl}"`;
+        if (cookieFilePath) {
+            cmd += ` "${cookieFilePath}"`;
+        }
+
+        const { stdout, stderr } = await execAsync(cmd, { 
+            timeout: 90000, // 90s timeout (YouTube can be slow)
+            maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        });
         
         const extractTime = Date.now() - startTime;
         logger.debug('youtube', `yt-dlp extraction took ${extractTime}ms`);
@@ -128,7 +148,19 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         const ytdlpResult: YtdlpResult = JSON.parse(stdout);
 
         if (!ytdlpResult.success || !ytdlpResult.data) {
+            // Check for cookie-related errors
+            const errorMsg = ytdlpResult.error?.toLowerCase() || '';
+            if (usedCookie && (errorMsg.includes('sign in') || errorMsg.includes('login') || errorMsg.includes('cookie'))) {
+                cookiePoolMarkExpired('YouTube cookie expired or invalid').catch(() => {});
+            } else if (usedCookie) {
+                cookiePoolMarkError(ytdlpResult.error).catch(() => {});
+            }
             return createError(ScraperErrorCode.PARSE_ERROR, ytdlpResult.error || 'Failed to extract video');
+        }
+
+        // Mark cookie as successful if used
+        if (usedCookie) {
+            cookiePoolMarkSuccess().catch(() => {});
         }
 
         const { data } = ytdlpResult;
@@ -357,7 +389,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                     views: data.view_count,
                     likes: data.like_count,
                 },
-                usedCookie: false, // YouTube doesn't use cookies for public videos
+                usedCookie,
             },
         };
 
@@ -367,6 +399,17 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
 
     } catch (error: unknown) {
         const err = error as { code?: string; killed?: boolean; message?: string };
+        
+        // Mark cookie error if used
+        if (usedCookie) {
+            const msg = err.message?.toLowerCase() || '';
+            if (msg.includes('sign in') || msg.includes('login') || msg.includes('cookie')) {
+                cookiePoolMarkExpired('YouTube cookie expired').catch(() => {});
+            } else {
+                cookiePoolMarkError(err.message).catch(() => {});
+            }
+        }
+        
         // Handle specific errors
         if (err.code === 'ETIMEDOUT' || err.killed) {
             return createError(ScraperErrorCode.TIMEOUT, 'YouTube extraction timed out');
@@ -389,6 +432,11 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         }
 
         return createError(ScraperErrorCode.UNKNOWN, err.message || 'Unknown error');
+    } finally {
+        // Cleanup temp cookie file
+        if (cookieFilePath) {
+            fs.unlink(cookieFilePath).catch(() => {});
+        }
     }
 }
 

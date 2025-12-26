@@ -9,7 +9,7 @@
 // TYPES & INTERFACES
 // ============================================================================
 
-export type CookiePlatform = 'facebook' | 'instagram' | 'weibo' | 'twitter';
+export type CookiePlatform = 'facebook' | 'instagram' | 'weibo' | 'twitter' | 'youtube';
 
 interface CookieObject {
     name?: string;
@@ -36,6 +36,7 @@ const DOMAIN_PATTERNS: Record<CookiePlatform, string[]> = {
     instagram: ['.instagram.com', 'instagram.com'],
     weibo: ['.weibo.com', 'weibo.com', '.weibo.cn'],
     twitter: ['.twitter.com', 'twitter.com', '.x.com', 'x.com'],
+    youtube: ['.youtube.com', 'youtube.com', '.google.com', 'google.com'],
 };
 
 const REQUIRED_COOKIES: Record<CookiePlatform, string[]> = {
@@ -43,6 +44,7 @@ const REQUIRED_COOKIES: Record<CookiePlatform, string[]> = {
     instagram: ['sessionid'],
     weibo: ['SUB'],
     twitter: ['auth_token'],
+    youtube: ['LOGIN_INFO'],  // Or SID, HSID - LOGIN_INFO is most important
 };
 
 // ============================================================================
@@ -123,6 +125,14 @@ function extractCookieInfo(
         case 'twitter': {
             const authToken = pairs.find(p => p.name === 'auth_token');
             if (authToken) info.sessionId = authToken.value.substring(0, 20) + '...';
+            break;
+        }
+        case 'youtube': {
+            const loginInfo = pairs.find(p => p.name === 'LOGIN_INFO');
+            const sid = pairs.find(p => p.name === 'SID');
+            const hsid = pairs.find(p => p.name === 'HSID');
+            if (loginInfo) info.sessionId = loginInfo.value.substring(0, 20) + '...';
+            if (sid) info.userId = sid.value.substring(0, 10) + '...';
             break;
         }
     }

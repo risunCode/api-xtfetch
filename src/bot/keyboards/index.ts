@@ -224,6 +224,20 @@ export function errorKeyboard(url: string): InlineKeyboard {
 }
 
 /**
+ * Cookie error keyboard - simpler message with report to admin
+ */
+export function cookieErrorKeyboard(url: string, platform: string): InlineKeyboard {
+    const encodedUrl = url.length > 50 ? url.substring(0, 50) : url;
+
+    return new InlineKeyboard()
+        .text('🔄 Retry', `retry:${encodedUrl}`)
+        .row()
+        .text('📢 Report to Admin', `report_cookie:${platform}`)
+        .row()
+        .url('🔗 Open in Browser', url);
+}
+
+/**
  * Download success keyboard
  */
 export function downloadSuccessKeyboard(url: string): InlineKeyboard {
