@@ -52,22 +52,26 @@ export function botAdminIsAuthorized(userId: number): boolean {
 // ADMIN COMPOSER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Main admin composer that combines all admin commands
- * Apply admin middleware to all routes in this composer
- */
-export const adminComposer = new Composer<Context>();
-
-// Apply admin middleware to all commands in this composer
-adminComposer.use(adminMiddleware());
-
-// Import and use admin command composers
+// Import admin command composers
 import { statsComposer } from './stats';
 import { broadcastComposer } from './broadcast';
 import { banComposer } from './ban';
 import { givepremiumComposer } from './givepremium';
 import { maintenanceComposer } from './maintenance';
 
+/**
+ * Main admin composer that combines all admin commands
+ * Each command has its own admin check - NO global middleware
+ */
+export const adminComposer = new Composer<Context>();
+
+// Admin commands list for filtering
+const adminCommands = ['stats', 'broadcast', 'ban', 'unban', 'givepremium', 'maintenance'];
+
+// Only intercept admin commands with admin check
+adminComposer.command(adminCommands, adminMiddleware());
+
+// Register admin command handlers (they will only run if admin check passes)
 adminComposer.use(statsComposer);
 adminComposer.use(broadcastComposer);
 adminComposer.use(banComposer);
