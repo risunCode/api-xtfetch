@@ -112,7 +112,13 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
     const startTime = Date.now();
 
     try {
-        const urlResult = await prepareUrl(url);
+        // Get cookie first for URL resolution (Facebook share links need cookie to resolve)
+        const platform = platformDetect(url);
+        const tier = isPremium ? 'private' : 'public';
+        const poolCookie = platform ? await cookiePoolGetRotating(platform, tier) : null;
+        
+        // Pass cookie to prepareUrl for proper URL resolution
+        const urlResult = await prepareUrl(url, { cookie: poolCookie || undefined });
         
         if (!urlResult.assessment.isValid || !urlResult.platform) {
             return {
@@ -122,36 +128,38 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
             };
         }
 
-        const platform = urlResult.platform;
-        logger.request(platform, 'telegram' as 'web');
+        const resolvedPlatform = urlResult.platform;
+        logger.request(resolvedPlatform, 'telegram' as 'web');
 
-        const tier = isPremium ? 'private' : 'public';
-        const poolCookie = await cookiePoolGetRotating(platform, tier);
+        // Get cookie for resolved platform if different from original
+        const scraperCookie = resolvedPlatform !== platform 
+            ? await cookiePoolGetRotating(resolvedPlatform, tier) 
+            : poolCookie;
 
-        const result = await runScraper(platform, urlResult.resolvedUrl, {
-            cookie: poolCookie || undefined,
+        const result = await runScraper(resolvedPlatform, urlResult.resolvedUrl, {
+            cookie: scraperCookie || undefined,
         });
 
         const responseTime = Date.now() - startTime;
-        recordDownloadStat(platform, result.success, responseTime, undefined, 'telegram').catch(() => {});
+        recordDownloadStat(resolvedPlatform, result.success, responseTime, undefined, 'telegram').catch(() => {});
 
         if (result.success && result.data) {
-            logger.complete(platform, responseTime);
+            logger.complete(resolvedPlatform, responseTime);
             return {
                 success: true,
-                platform,
+                platform: resolvedPlatform,
                 title: result.data.title,
                 thumbnail: result.data.thumbnail,
                 author: result.data.author,
                 formats: result.data.formats,
-                usedCookie: !!poolCookie,  // Track whether cookie was used
+                usedCookie: !!scraperCookie,  // Track whether cookie was used
             };
         }
 
-        logger.scrapeError(platform, result.errorCode || 'UNKNOWN', result.error);
+        logger.scrapeError(resolvedPlatform, result.errorCode || 'UNKNOWN', result.error);
         return {
             success: false,
-            platform,
+            platform: resolvedPlatform,
             error: result.error || 'Failed to download',
             errorCode: result.errorCode,
         };

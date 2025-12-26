@@ -382,6 +382,7 @@ export async function cookiePoolGetRotating(
 
 /**
  * Mark the last used cookie as successful
+ * Resets error count and login_fail_count on success
  */
 export async function cookiePoolMarkSuccess(): Promise<void> {
     if (!lastUsedCookieId) return;
@@ -401,7 +402,8 @@ export async function cookiePoolMarkSuccess(): Promise<void> {
                 success_count: data.success_count + 1,
                 use_count: data.use_count + 1,
                 last_error: null,
-                status: 'healthy'
+                status: 'healthy',
+                cooldown_until: null
             })
             .eq('id', lastUsedCookieId);
     }
@@ -409,6 +411,13 @@ export async function cookiePoolMarkSuccess(): Promise<void> {
 
 /**
  * Mark the last used cookie as having an error
+ * 
+ * Error handling logic:
+ * - Normal errors: increment error_count
+ * - After 5 errors: cooldown 1 minute
+ * - After 10 errors (5 more): mark as expired
+ * - Checkpoint errors: immediately expired
+ * - Login redirect: track separately, 2x = expired
  */
 export async function cookiePoolMarkError(error?: string): Promise<void> {
     if (!lastUsedCookieId) return;
@@ -417,20 +426,48 @@ export async function cookiePoolMarkError(error?: string): Promise<void> {
     
     const { data } = await db
         .from('admin_cookie_pool')
-        .select('error_count, platform, label')
+        .select('error_count, platform, label, status')
         .eq('id', lastUsedCookieId)
         .single();
     
-    const newErrorCount = (data?.error_count || 0) + 1;
+    if (!data) return;
     
-    if (newErrorCount % 10 === 0) {
-        let cooldownMinutes = 30;
-        try {
-            const { sysConfigCookieCooldownMinutes } = await import('@/lib/config');
-            cooldownMinutes = sysConfigCookieCooldownMinutes();
-        } catch { /* use default */ }
+    const errorMsg = error?.toLowerCase() || '';
+    const newErrorCount = (data.error_count || 0) + 1;
+    
+    // Checkpoint = immediately expired (no recovery)
+    if (errorMsg.includes('checkpoint')) {
+        await db
+            .from('admin_cookie_pool')
+            .update({
+                error_count: newErrorCount,
+                last_error: error || 'Checkpoint required',
+                status: 'expired'
+            })
+            .eq('id', lastUsedCookieId);
         
-        const cooldownUntil = new Date(Date.now() + cooldownMinutes * 60000).toISOString();
+        sendCookieAlert('expired', data.platform, data.label, 'Checkpoint required').catch(() => {});
+        return;
+    }
+    
+    // After 10 errors total = expired
+    if (newErrorCount >= 10) {
+        await db
+            .from('admin_cookie_pool')
+            .update({
+                error_count: newErrorCount,
+                last_error: error || 'Too many errors',
+                status: 'expired'
+            })
+            .eq('id', lastUsedCookieId);
+        
+        sendCookieAlert('expired', data.platform, data.label, `${newErrorCount} errors - ${error || 'Too many errors'}`).catch(() => {});
+        return;
+    }
+    
+    // After 5 errors = cooldown 1 minute
+    if (newErrorCount >= 5 && data.status !== 'cooldown') {
+        const cooldownUntil = new Date(Date.now() + 1 * 60000).toISOString(); // 1 minute
         
         await db
             .from('admin_cookie_pool')
@@ -442,19 +479,18 @@ export async function cookiePoolMarkError(error?: string): Promise<void> {
             })
             .eq('id', lastUsedCookieId);
         
-        // Send alert when cookie goes into cooldown due to errors
-        if (data) {
-            sendCookieAlert('cooldown', data.platform, data.label, `${newErrorCount} errors - ${error || 'Multiple errors'}`).catch(() => {});
-        }
-    } else {
-        await db
-            .from('admin_cookie_pool')
-            .update({
-                error_count: newErrorCount,
-                last_error: error || 'Request failed'
-            })
-            .eq('id', lastUsedCookieId);
+        sendCookieAlert('cooldown', data.platform, data.label, `${newErrorCount} errors - 1min cooldown`).catch(() => {});
+        return;
     }
+    
+    // Normal error - just increment count
+    await db
+        .from('admin_cookie_pool')
+        .update({
+            error_count: newErrorCount,
+            last_error: error || 'Request failed'
+        })
+        .eq('id', lastUsedCookieId);
 }
 
 /**
@@ -471,7 +507,7 @@ export async function cookiePoolMarkCooldown(minutes?: number, error?: string): 
             const { sysConfigCookieCooldownMinutes } = await import('@/lib/config');
             cooldownMinutes = sysConfigCookieCooldownMinutes();
         } catch {
-            cooldownMinutes = 30;
+            cooldownMinutes = 1; // Default 1 minute
         }
     }
     
@@ -495,14 +531,91 @@ export async function cookiePoolMarkCooldown(minutes?: number, error?: string): 
 }
 
 /**
- * Mark the last used cookie as expired
+ * Mark the last used cookie as expired due to login redirect
+ * 
+ * Logic: 2 login redirects = expired (might be false positive on first)
+ */
+export async function cookiePoolMarkLoginRedirect(error?: string): Promise<void> {
+    if (!lastUsedCookieId) return;
+    const db = getSupabase();
+    if (!db) return;
+    
+    // Get current state
+    const { data } = await db
+        .from('admin_cookie_pool')
+        .select('error_count, platform, label, last_error')
+        .eq('id', lastUsedCookieId)
+        .single();
+    
+    if (!data) return;
+    
+    const newErrorCount = (data.error_count || 0) + 1;
+    const wasLoginError = data.last_error?.includes('login') || data.last_error?.includes('Login');
+    
+    // Second login redirect = expired
+    if (wasLoginError) {
+        await db
+            .from('admin_cookie_pool')
+            .update({
+                error_count: newErrorCount,
+                last_error: error || 'Login redirect (2nd time)',
+                status: 'expired'
+            })
+            .eq('id', lastUsedCookieId);
+        
+        sendCookieAlert('expired', data.platform, data.label, 'Login redirect 2x').catch(() => {});
+        return;
+    }
+    
+    // First login redirect = just record it, might be false positive
+    await db
+        .from('admin_cookie_pool')
+        .update({
+            error_count: newErrorCount,
+            last_error: error || 'Login redirect (1st time)'
+        })
+        .eq('id', lastUsedCookieId);
+}
+
+/**
+ * Mark the last used cookie as expired (for checkpoint or confirmed session death)
  */
 export async function cookiePoolMarkExpired(error?: string): Promise<void> {
     if (!lastUsedCookieId) return;
     const db = getSupabase();
     if (!db) return;
     
-    // Get cookie info for notification
+    const errorMsg = error?.toLowerCase() || '';
+    
+    // Check if this is a checkpoint error - always expire immediately
+    if (errorMsg.includes('checkpoint')) {
+        const { data: cookieInfo } = await db
+            .from('admin_cookie_pool')
+            .select('platform, label')
+            .eq('id', lastUsedCookieId)
+            .single();
+        
+        await db
+            .from('admin_cookie_pool')
+            .update({
+                status: 'expired',
+                last_error: error || 'Checkpoint required'
+            })
+            .eq('id', lastUsedCookieId);
+        
+        if (cookieInfo) {
+            sendCookieAlert('expired', cookieInfo.platform, cookieInfo.label, error).catch(() => {});
+        }
+        return;
+    }
+    
+    // Check if this is a login redirect - use special handling
+    if (errorMsg.includes('login')) {
+        await cookiePoolMarkLoginRedirect(error);
+        return;
+    }
+    
+    // Other expired cases - mark directly
     const { data: cookieInfo } = await db
         .from('admin_cookie_pool')
         .select('platform, label, tier')
@@ -517,7 +630,6 @@ export async function cookiePoolMarkExpired(error?: string): Promise<void> {
         })
         .eq('id', lastUsedCookieId);
     
-    // Send webhook notification (non-blocking)
     if (cookieInfo) {
         sendCookieAlert('expired', cookieInfo.platform, cookieInfo.label, error).catch(() => {});
     }

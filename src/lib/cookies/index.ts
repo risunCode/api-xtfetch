@@ -24,6 +24,7 @@ export {
     cookiePoolMarkError,
     cookiePoolMarkCooldown,
     cookiePoolMarkExpired,
+    cookiePoolMarkLoginRedirect,
     cookiePoolGetByPlatform,
     cookiePoolGetStats,
     cookiePoolAdd,

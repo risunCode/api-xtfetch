@@ -9,7 +9,7 @@
 import { MediaFormat } from '@/lib/types';
 import { utilDecodeHtml, utilExtractMeta } from '@/lib/utils';
 import { httpGet, httpGetRotatingHeaders, httpTrackRequest } from '@/lib/http';
-import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired, cookiePoolMarkCooldown } from '@/lib/cookies';
+import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired, cookiePoolMarkCooldown, cookiePoolMarkLoginRedirect } from '@/lib/cookies';
 import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from '../shared/logger';
@@ -101,7 +101,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             if (res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?')) {
                 logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
                 if (useCookie) {
-                    cookiePoolMarkExpired('Login redirect - cookie expired').catch(() => {});
+                    cookiePoolMarkLoginRedirect('Login redirect - cookie may be expired').catch(() => {});
                     return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired atau tidak valid. Silakan update cookie di admin panel.');
                 }
                 return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');

@@ -146,9 +146,18 @@ function extractCookieInfo(
 
 /**
  * Parse cookie input from various formats into a standard cookie string
- * Note: For YouTube, returns original JSON to preserve metadata for Netscape conversion
+ * 
+ * @param input - Cookie input (string, array, or object)
+ * @param platform - Target platform for domain filtering
+ * @param options - Parse options
+ * @param options.preserveJson - If true, return original JSON for YouTube (used by yt-dlp)
+ * @returns Cookie string in "name=value; name=value" format, or JSON if preserveJson=true
  */
-export function cookieParse(input: unknown, platform?: CookiePlatform): string | null {
+export function cookieParse(
+    input: unknown, 
+    platform?: CookiePlatform,
+    options?: { preserveJson?: boolean }
+): string | null {
     if (!input) return null;
     
     let pairs: { name: string; value: string }[] = [];
@@ -161,22 +170,28 @@ export function cookieParse(input: unknown, platform?: CookiePlatform): string |
             try {
                 const arr = JSON.parse(trimmed) as CookieObject[];
                 if (Array.isArray(arr)) {
-                    // For YouTube, return original JSON to preserve metadata (domain, expiry, secure)
+                    // For YouTube with preserveJson flag, return original JSON
                     // This allows convertToNetscapeFormat to properly create the cookie file
-                    if (platform === 'youtube') {
+                    if (platform === 'youtube' && options?.preserveJson) {
                         return trimmed;
                     }
+                    // Otherwise, convert to standard cookie string format
                     pairs = filterAndExtract(arr, platform);
                 }
             } catch {
-                return trimmed;
+                // Not valid JSON, return as-is if it looks like a cookie string
+                if (trimmed.includes('=')) {
+                    return trimmed;
+                }
+                return null;
             }
         } else {
+            // Already a cookie string format
             return trimmed;
         }
     } else if (Array.isArray(input)) {
-        // For YouTube, convert array back to JSON string to preserve metadata
-        if (platform === 'youtube') {
+        // For YouTube with preserveJson flag, convert array back to JSON string
+        if (platform === 'youtube' && options?.preserveJson) {
             return JSON.stringify(input);
         }
         pairs = filterAndExtract(input as CookieObject[], platform);
