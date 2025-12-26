@@ -206,6 +206,7 @@ function checkKeyRateLimit(keyId: string, limit: number): { allowed: boolean; re
 export async function apiKeyCreate(
     name: string,
     options?: {
+        userId?: string;  // Required for DB insert
         rateLimit?: number;
         expiresInDays?: number;
         isTest?: boolean;
@@ -231,6 +232,7 @@ export async function apiKeyCreate(
     if (db) {
         const { error } = await db.from('api_keys').insert({
             id,
+            user_id: options?.userId,  // Required field!
             name,
             key_hash: hashedKey,
             key_preview: keyPreview,
@@ -242,7 +244,10 @@ export async function apiKeyCreate(
             success_count: 0,
             error_count: 0
         });
-        if (error) return { key: {} as ApiKey, plainKey: '' };
+        if (error) {
+            console.error('[apiKeyCreate] Insert error:', error.message);
+            throw new Error(error.message);
+        }
     }
     lastCacheTime = 0;
     return {

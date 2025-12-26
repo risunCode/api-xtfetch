@@ -8,6 +8,7 @@
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
 import { httpGet, BROWSER_HEADERS } from '@/lib/http';
+import { cookiePoolMarkSuccess, cookiePoolMarkError } from '@/lib/cookies';
 import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from '../shared/logger';
@@ -188,6 +189,8 @@ export async function scrapeTwitter(url: string, options?: ScraperOptions): Prom
                 const engagement: EngagementStats | undefined = gqlData.engagement ? { views: gqlData.engagement.views, likes: gqlData.engagement.likes, comments: gqlData.engagement.replies, shares: gqlData.engagement.retweets, bookmarks: gqlData.engagement.bookmarks, replies: gqlData.engagement.replies } : undefined;
                 
                 const result: ScraperResult = { success: true, data: { title, thumbnail, author: gqlData.user?.screen_name || username, authorName: gqlData.user?.name, description, postedAt: gqlData.created_at, engagement, formats: unique, url, usedCookie: true, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
+                // Mark cookie success
+                cookiePoolMarkSuccess().catch(() => {});
                 return result;
             }
         }

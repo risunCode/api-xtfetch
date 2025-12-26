@@ -9,6 +9,7 @@ import * as cheerio from 'cheerio';
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
 import { httpGet, httpPost, DESKTOP_HEADERS } from '@/lib/http';
+import { cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from '../shared/logger';
@@ -93,7 +94,10 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                 }
             }
 
-            if (!formats.length) return createError(ScraperErrorCode.COOKIE_EXPIRED);
+            if (!formats.length) {
+                cookiePoolMarkExpired('TV URL returned no formats').catch(() => {});
+                return createError(ScraperErrorCode.COOKIE_EXPIRED);
+            }
         }
 
 
@@ -121,6 +125,8 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             logger.media('weibo', { videos: unique.length });
             logger.complete('weibo', Date.now() - startTime);
             // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
+            // Mark cookie success
+            cookiePoolMarkSuccess().catch(() => {});
             const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video', usedCookie: true } };
             return result;
         }
@@ -218,7 +224,10 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             } catch { /* API failed */ }
         }
 
-        if (!formats.length) return createError(ScraperErrorCode.COOKIE_EXPIRED);
+        if (!formats.length) {
+            cookiePoolMarkExpired('No formats found').catch(() => {});
+            return createError(ScraperErrorCode.COOKIE_EXPIRED);
+        }
 
         const seen = new Set<string>(), unique = formats.filter(f => { if (seen.has(f.url)) return false; seen.add(f.url); return true; });
         const hasVideo = unique.some(f => f.type === 'video');
@@ -228,10 +237,13 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         logger.complete('weibo', Date.now() - startTime);
 
         // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
+        // Mark cookie success
+        cookiePoolMarkSuccess().catch(() => {});
         const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image'), usedCookie: true } };
         return result;
     } catch (e) {
         logger.error('weibo', e);
+        cookiePoolMarkError(e instanceof Error ? e.message : 'Failed to fetch').catch(() => {});
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Failed to fetch');
     }
 }

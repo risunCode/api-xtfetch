@@ -65,6 +65,76 @@ const ENCRYPTED_PREFIX = 'enc:';
 
 let supabase: SupabaseClient | null = null;
 let lastUsedCookieId: string | null = null;
+let lastAlertTime: Record<string, number> = {}; // Rate limit alerts per platform
+
+// ============================================================================
+// WEBHOOK ALERT HELPER
+// ============================================================================
+
+/**
+ * Send cookie alert to Discord webhook (if configured)
+ * Rate limited to 1 alert per platform per 5 minutes
+ */
+async function sendCookieAlert(
+    type: 'expired' | 'cooldown' | 'error',
+    platform: string,
+    label?: string | null,
+    error?: string
+): Promise<void> {
+    // Rate limit: 1 alert per platform per 5 minutes
+    const key = `${platform}:${type}`;
+    const now = Date.now();
+    if (lastAlertTime[key] && now - lastAlertTime[key] < 5 * 60 * 1000) {
+        return; // Skip - already alerted recently
+    }
+    lastAlertTime[key] = now;
+
+    try {
+        const db = getSupabase();
+        if (!db) return;
+
+        // Get alert config
+        const { data: config } = await db
+            .from('alert_config')
+            .select('notify_discord, discord_webhook_url, alert_cookie_low')
+            .single();
+
+        if (!config?.notify_discord || !config?.discord_webhook_url) {
+            return; // Discord notifications not configured
+        }
+
+        const emoji = type === 'expired' ? '🔴' : type === 'cooldown' ? '🟡' : '⚠️';
+        const title = type === 'expired' ? 'Cookie Expired' : type === 'cooldown' ? 'Cookie Cooldown' : 'Cookie Error';
+        const color = type === 'expired' ? 0xff0000 : type === 'cooldown' ? 0xffaa00 : 0xff6600;
+
+        const embed = {
+            title: `${emoji} ${title}`,
+            description: `A cookie for **${platform.toUpperCase()}** has been marked as ${type}.`,
+            color,
+            fields: [
+                { name: 'Platform', value: platform, inline: true },
+                { name: 'Label', value: label || 'N/A', inline: true },
+                { name: 'Status', value: type.toUpperCase(), inline: true },
+            ],
+            timestamp: new Date().toISOString(),
+            footer: { text: 'DownAria Cookie Monitor' },
+        };
+
+        if (error) {
+            embed.fields.push({ name: 'Error', value: error.substring(0, 200), inline: false });
+        }
+
+        await fetch(config.discord_webhook_url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ embeds: [embed] }),
+        });
+
+        logger.debug('cookies', `Alert sent for ${platform} cookie ${type}`);
+    } catch (e) {
+        logger.warn('cookies', `Failed to send cookie alert: ${e}`);
+    }
+}
 
 // ============================================================================
 // INTERNAL HELPERS - Supabase
@@ -323,7 +393,7 @@ export async function cookiePoolMarkError(error?: string): Promise<void> {
     
     const { data } = await db
         .from('admin_cookie_pool')
-        .select('error_count')
+        .select('error_count, platform, label')
         .eq('id', lastUsedCookieId)
         .single();
     
@@ -347,6 +417,11 @@ export async function cookiePoolMarkError(error?: string): Promise<void> {
                 cooldown_until: cooldownUntil
             })
             .eq('id', lastUsedCookieId);
+        
+        // Send alert when cookie goes into cooldown due to errors
+        if (data) {
+            sendCookieAlert('cooldown', data.platform, data.label, `${newErrorCount} errors - ${error || 'Multiple errors'}`).catch(() => {});
+        }
     } else {
         await db
             .from('admin_cookie_pool')
@@ -403,6 +478,13 @@ export async function cookiePoolMarkExpired(error?: string): Promise<void> {
     const db = getSupabase();
     if (!db) return;
     
+    // Get cookie info for notification
+    const { data: cookieInfo } = await db
+        .from('admin_cookie_pool')
+        .select('platform, label, tier')
+        .eq('id', lastUsedCookieId)
+        .single();
+    
     await db
         .from('admin_cookie_pool')
         .update({
@@ -410,6 +492,11 @@ export async function cookiePoolMarkExpired(error?: string): Promise<void> {
             last_error: error || 'Session expired'
         })
         .eq('id', lastUsedCookieId);
+    
+    // Send webhook notification (non-blocking)
+    if (cookieInfo) {
+        sendCookieAlert('expired', cookieInfo.platform, cookieInfo.label, error).catch(() => {});
+    }
 }
 
 /**

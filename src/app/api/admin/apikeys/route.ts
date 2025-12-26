@@ -67,13 +67,14 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'Name required' }, { status: 400 });
                 }
                 const result = await apiKeyCreate(name, { 
+                    userId: auth.userId!, // Pass user ID from auth
                     rateLimit, 
                     expiresInDays: validityDays, 
                     isTest,
                     keyLength: keyLength || 32,
                     keyFormat: keyFormat || 'alphanumeric',
                     prefix: prefix || undefined,
-                    keyType: keyType || 'public' // NEW: default to 'public'
+                    keyType: keyType || 'public'
                 });
                 return NextResponse.json({ 
                     success: true, 

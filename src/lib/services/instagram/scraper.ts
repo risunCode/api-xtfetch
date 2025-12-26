@@ -8,7 +8,7 @@
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat, utilDecodeUrl } from '@/lib/utils';
 import { httpGet, INSTAGRAM_HEADERS } from '@/lib/http';
-import { cookieParse } from '@/lib/cookies';
+import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from '../shared/logger';
@@ -151,12 +151,18 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
     try {
         const userId = await getUserId(username, cookie);
         // Better error detection for cookie issues vs user not found
-        if (!userId) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie may be expired or user not found. Please update your cookie.');
+        if (!userId) {
+            cookiePoolMarkExpired('User ID fetch failed - cookie may be expired').catch(() => {});
+            return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie may be expired or user not found. Please update your cookie.');
+        }
         
         const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
         const timeout = sysConfigScraperTimeout('instagram');
         const res = await httpGet(apiUrl, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie }, timeout });
-        if (res.status === 401 || res.status === 403) return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired. Please update your cookie.');
+        if (res.status === 401 || res.status === 403) {
+            cookiePoolMarkExpired('HTTP 401/403 - cookie expired').catch(() => {});
+            return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired. Please update your cookie.');
+        }
         if (res.status !== 200) return createError(ScraperErrorCode.API_ERROR, `Story API error: ${res.status}`);
         
         const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
@@ -191,8 +197,11 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
         
         if (formats.length === 0) return createError(ScraperErrorCode.NO_MEDIA, 'Could not extract story media');
         // ✅ FIX: Mark usedCookie for stories (always uses cookie)
+        // Mark cookie success for stories
+        cookiePoolMarkSuccess().catch(() => {});
         return { success: true, data: { title: `${username}'s Story`, thumbnail, author: `@${username}`, description: `${items.length} story${items.length > 1 ? 's' : ''} available`, formats, url, usedCookie: true } };
     } catch (e) {
+        cookiePoolMarkError(e instanceof Error ? e.message : 'Story fetch failed').catch(() => {});
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Story fetch failed');
     }
 }
@@ -226,9 +235,13 @@ export async function scrapeInstagram(url: string, options?: ScraperOptions): Pr
             if (result.success) {
                 // ✅ FIX: Mark usedCookie when cookie was used for auth
                 result.data!.usedCookie = true;
+                // Mark cookie success
+                cookiePoolMarkSuccess().catch(() => {});
             }
             return result;
         }
+        // Cookie didn't help - mark error
+        cookiePoolMarkError('GraphQL failed with cookie').catch(() => {});
         return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Post is private or has been deleted');
     }
     

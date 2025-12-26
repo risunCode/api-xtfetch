@@ -9,7 +9,7 @@
 import { MediaFormat } from '@/lib/types';
 import { utilDecodeHtml, utilExtractMeta } from '@/lib/utils';
 import { httpGet, httpGetRotatingHeaders, httpTrackRequest } from '@/lib/http';
-import { cookieParse } from '@/lib/cookies';
+import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired, cookiePoolMarkCooldown } from '@/lib/cookies';
 import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
 import { logger } from '../shared/logger';
@@ -85,6 +85,10 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             const res = await httpGet(inputUrl, { headers, timeout });
 
             if (res.finalUrl.includes('/checkpoint/')) {
+                // Cookie hit checkpoint - mark as expired
+                if (useCookie) {
+                    cookiePoolMarkExpired('Checkpoint required').catch(() => {});
+                }
                 throw new Error('CHECKPOINT_REQUIRED');
             }
 
@@ -97,6 +101,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             if (res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?')) {
                 logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
                 if (useCookie) {
+                    cookiePoolMarkExpired('Login redirect - cookie expired').catch(() => {});
                     return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired atau tidak valid. Silakan update cookie di admin panel.');
                 }
                 return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
@@ -297,6 +302,11 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             });
             logger.complete('facebook', Date.now() - startTime);
 
+            // Mark cookie as successful if used
+            if (useCookie) {
+                cookiePoolMarkSuccess().catch(() => {});
+            }
+
             return {
                 success: true,
                 data: {
@@ -317,6 +327,10 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             const msg = e instanceof Error ? e.message : 'Failed to fetch';
             if (msg === 'CHECKPOINT_REQUIRED') {
                 return createError(ScraperErrorCode.CHECKPOINT_REQUIRED);
+            }
+            // Mark cookie error for network failures
+            if (useCookie) {
+                cookiePoolMarkError(msg).catch(() => {});
             }
             return createError(ScraperErrorCode.NETWORK_ERROR, msg);
         }
