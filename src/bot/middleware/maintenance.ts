@@ -16,6 +16,7 @@ import {
     serviceConfigGetMaintenanceMessage,
     serviceConfigGetMaintenanceType,
 } from '@/lib/config';
+import { redis } from '@/lib/database';
 import { botIsAdmin } from '../config';
 
 // ============================================================================
@@ -78,4 +79,22 @@ export function botIsInMaintenance(): boolean {
 export function botGetMaintenanceMessage(): string {
     return serviceConfigGetMaintenanceMessage() || 
         '🔧 DownAria is currently under maintenance. Please try again later.';
+}
+
+// ============================================================================
+// Global Maintenance Check (Redis)
+// ============================================================================
+
+/**
+ * Check if global maintenance mode is enabled (from Redis)
+ * This syncs with frontend's maintenance status
+ */
+export async function botIsGlobalMaintenance(): Promise<boolean> {
+    if (!redis) return false;
+    try {
+        const value = await redis.get('global:maintenance');
+        return value === 'true' || value === '1';
+    } catch {
+        return false;
+    }
 }

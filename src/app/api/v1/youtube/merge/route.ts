@@ -125,20 +125,37 @@ function scheduleCleanup(folder: string, delayMs: number = 10 * 60 * 1000): void
 }
 
 // ============================================================================
-// YouTube URL Validation
+// YouTube URL Validation (Strict - RCE Prevention)
 // ============================================================================
 
-const YOUTUBE_URL_PATTERNS = [
-    /^https?:\/\/(www\.)?youtube\.com\/watch\?v=[\w-]+/,
-    /^https?:\/\/youtu\.be\/[\w-]+/,
-    /^https?:\/\/(www\.)?youtube\.com\/shorts\/[\w-]+/,
-    /^https?:\/\/m\.youtube\.com\/watch\?v=[\w-]+/,
-    /^https?:\/\/music\.youtube\.com\/watch\?v=[\w-]+/,
-];
-
+/**
+ * Strict YouTube URL validation to prevent command injection
+ * Only allows legitimate YouTube domains and safe URL characters
+ */
 function isValidYouTubeUrl(url: string): boolean {
-    return YOUTUBE_URL_PATTERNS.some(pattern => pattern.test(url));
+    try {
+        const parsed = new URL(url);
+        const validHosts = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com', 'music.youtube.com'];
+        if (!validHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+            return false;
+        }
+        // Only allow safe characters in path and query string
+        const safePattern = /^[a-zA-Z0-9\-_=&?\/%.]+$/;
+        return safePattern.test(parsed.pathname + parsed.search);
+    } catch {
+        return false;
+    }
 }
+
+// ============================================================================
+// Parameter Validation (Security)
+// ============================================================================
+
+// Valid video heights for quality parameter
+const VALID_HEIGHTS = [144, 240, 360, 480, 720, 1080, 1440, 2160];
+
+// Valid audio formats
+const VALID_AUDIO_FORMATS = ['mp3', 'm4a'];
 
 // ============================================================================
 // Quality to Height Mapping
@@ -148,8 +165,8 @@ function qualityToHeight(quality: string): number {
     const q = quality.toLowerCase().replace('p', '');
     const height = parseInt(q, 10);
     
-    // Valid heights
-    if ([2160, 1440, 1080, 720, 480, 360, 240, 144].includes(height)) {
+    // Only allow valid heights from whitelist
+    if (VALID_HEIGHTS.includes(height)) {
         return height;
     }
     
@@ -348,13 +365,15 @@ export async function POST(req: NextRequest) {
         // Validate URL
         if (!youtubeUrl) {
             return NextResponse.json({ 
+                success: false,
                 error: 'Missing url parameter' 
             }, { status: 400 });
         }
         
         if (!isValidYouTubeUrl(youtubeUrl)) {
             return NextResponse.json({ 
-                error: 'Invalid YouTube URL' 
+                success: false,
+                error: 'Invalid YouTube URL format' 
             }, { status: 400 });
         }
         
@@ -387,12 +406,27 @@ export async function POST(req: NextRequest) {
                                   quality.toLowerCase().includes('kbps') ? 'm4a' :
                                   'mp3';
         
+        // Validate audio format (RCE prevention)
+        if (isAudioOnly && !VALID_AUDIO_FORMATS.includes(audioOutputFormat)) {
+            return NextResponse.json(
+                { success: false, error: 'Invalid audio format' },
+                { status: 400 }
+            );
+        }
+        
         // Parse quality - for video, extract height
         let targetValue: number;
         if (isAudioOnly) {
             targetValue = 320; // Placeholder, not used for audio
         } else {
             targetValue = qualityToHeight(quality);
+            // Validate height parameter (RCE prevention)
+            if (!VALID_HEIGHTS.includes(targetValue)) {
+                return NextResponse.json(
+                    { success: false, error: 'Invalid height parameter' },
+                    { status: 400 }
+                );
+            }
         }
         
         console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}, AudioOnly: ${isAudioOnly}`);

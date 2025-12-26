@@ -1,6 +1,6 @@
 /**
  * Telegram Bot Rate Limiting Middleware
- * Checks download limits (per 3 hours) and cooldown periods
+ * Checks download limits (daily reset at midnight WIB) and cooldown periods
  * 
  * Grammy middleware pattern - blocks requests that exceed limits
  */
@@ -9,33 +9,108 @@ import { MiddlewareFn } from 'grammy';
 import { redis } from '@/lib/database';
 import { logger } from '@/lib/services/shared/logger';
 import type { BotContext, BotUser } from '../types';
-import { RATE_LIMITS, BOT_MESSAGES } from '../types';
 import { 
     botUserCheckDailyReset,
     botUserIncrementDownloads,
 } from '../services/userService';
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/** Free tier daily download limit */
+const FREE_DAILY_LIMIT = 8;
+
+/** Free tier cooldown between downloads (milliseconds) */
+const FREE_COOLDOWN_MS = 4000;
+
+/** Donator cooldown (no cooldown) */
+const DONATOR_COOLDOWN_MS = 0;
+
+/** Free tier cooldown in seconds (for display) */
+const FREE_COOLDOWN_SECONDS = FREE_COOLDOWN_MS / 1000;
+
+// ============================================================================
+// WIB TIMEZONE HELPERS
+// ============================================================================
+
+/**
+ * Get the next midnight reset time in WIB (UTC+7)
+ * Returns a Date object representing the next 00:00 WIB
+ */
+export function botRateLimitGetResetTime(): Date {
+    const now = new Date();
+    
+    // WIB is UTC+7, so midnight WIB = 17:00 UTC previous day
+    // Calculate next midnight WIB
+    const nextMidnight = new Date(now);
+    
+    // Midnight WIB = 17:00 UTC
+    if (now.getUTCHours() >= 17) {
+        // Already past 17:00 UTC (midnight WIB), so next reset is tomorrow
+        nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
+    }
+    
+    // Set to 17:00 UTC (00:00 WIB)
+    nextMidnight.setUTCHours(17, 0, 0, 0);
+    
+    return nextMidnight;
+}
+
+/**
+ * Check if daily downloads should be reset (midnight WIB has passed since last reset)
+ */
+function shouldResetDaily(lastResetAt: string | null): boolean {
+    if (!lastResetAt) return true;
+    
+    const lastReset = new Date(lastResetAt);
+    const now = new Date();
+    
+    // Get the most recent midnight WIB before now
+    const currentMidnightWIB = new Date(now);
+    if (now.getUTCHours() < 17) {
+        // Before 17:00 UTC, so current WIB day started yesterday at 17:00 UTC
+        currentMidnightWIB.setUTCDate(currentMidnightWIB.getUTCDate() - 1);
+    }
+    currentMidnightWIB.setUTCHours(17, 0, 0, 0);
+    
+    // If last reset was before the most recent midnight WIB, we need to reset
+    return lastReset < currentMidnightWIB;
+}
+
+/**
+ * Get time remaining until reset in hours and minutes
+ */
+function getTimeUntilReset(): { hours: number; minutes: number } {
+    const resetTime = botRateLimitGetResetTime();
+    const now = Date.now();
+    const diffMs = resetTime.getTime() - now;
+    
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    
+    return { hours: Math.max(0, hours), minutes: Math.max(0, minutes) };
+}
+
+// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
 /**
- * Check if downloads need to be reset (every 3 hours)
+ * Check if downloads need to be reset (midnight WIB passed)
  */
 function botRateLimitNeedsReset(user: BotUser): boolean {
-    if (!user.last_download_reset) {
-        console.log(`[RateLimit] User ${user.id}: No last_download_reset, needs reset`);
+    const lastResetAt = user.last_download_reset;
+    
+    if (!lastResetAt) {
+        console.log(`[RateLimit] User ${user.id}: No last reset timestamp, needs reset`);
         return true;
     }
 
-    const resetDate = new Date(user.last_download_reset);
-    const now = new Date();
-    const hoursDiff = (now.getTime() - resetDate.getTime()) / (1000 * 60 * 60);
+    const needsReset = shouldResetDaily(lastResetAt);
+    console.log(`[RateLimit] User ${user.id}: last_reset=${lastResetAt}, needsReset=${needsReset}`);
 
-    console.log(`[RateLimit] User ${user.id}: last_download_reset=${user.last_download_reset}, hoursDiff=${hoursDiff.toFixed(2)}, needsReset=${hoursDiff >= RATE_LIMITS.FREE_RESET_HOURS}`);
-
-    // Reset if more than 3 hours have passed
-    return hoursDiff >= RATE_LIMITS.FREE_RESET_HOURS;
+    return needsReset;
 }
 
 /**
@@ -90,6 +165,41 @@ async function botRateLimitIncrementDownloads(telegramId: number): Promise<void>
     }
 }
 
+/**
+ * Detect user language from context
+ */
+function getUserLanguage(ctx: BotContext): 'id' | 'en' {
+    const langCode = ctx.from?.language_code || ctx.botUser?.language_code || 'en';
+    return langCode === 'id' ? 'id' : 'en';
+}
+
+/**
+ * Generate limit exceeded message with reset time
+ */
+function getLimitExceededMessage(used: number, lang: 'id' | 'en'): string {
+    const { hours, minutes } = getTimeUntilReset();
+    
+    if (lang === 'id') {
+        return `❌ Batas harian tercapai (${used}/${FREE_DAILY_LIMIT})\n\n` +
+            `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
+            `💝 Upgrade ke Paket Donasi mulai Rp5.000/30 hari!`;
+    }
+    
+    return `❌ Daily limit reached (${used}/${FREE_DAILY_LIMIT})\n\n` +
+        `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
+        `💝 Upgrade to Donation Plan from Rp5,000/30 days!`;
+}
+
+/**
+ * Generate cooldown message
+ */
+function getCooldownMessage(seconds: number, lang: 'id' | 'en'): string {
+    if (lang === 'id') {
+        return `⏳ Tunggu ${seconds} detik sebelum download berikutnya.`;
+    }
+    return `⏳ Wait ${seconds} seconds before next download.`;
+}
+
 // ============================================================================
 // MIDDLEWARE
 // ============================================================================
@@ -124,33 +234,32 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
 
     const user = ctx.botUser;
     const telegramId = user.id;
+    const lang = getUserLanguage(ctx);
 
-    // Premium users bypass all limits
+    // Donators/Premium users bypass all limits
     if (ctx.isPremium) {
         ctx.rateLimit = {
             remaining: Infinity,
+            cooldownSeconds: DONATOR_COOLDOWN_MS / 1000,
         };
         return next();
     }
 
-    // Check if count needs reset (every 3 hours)
+    // Check if count needs reset (midnight WIB passed)
     if (botRateLimitNeedsReset(user)) {
         await botRateLimitResetDaily(telegramId);
         user.daily_downloads = 0; // Update local copy
     }
 
     // Check download limit
-    const downloadLimit = RATE_LIMITS.FREE_DOWNLOAD_LIMIT;
-    if (user.daily_downloads >= downloadLimit) {
-        const message = BOT_MESSAGES.ERROR_LIMIT_REACHED
-            .replace('{limit}', String(downloadLimit))
-            .replace('{hours}', String(RATE_LIMITS.FREE_RESET_HOURS));
+    if (user.daily_downloads >= FREE_DAILY_LIMIT) {
+        const message = getLimitExceededMessage(user.daily_downloads, lang);
         
         await ctx.reply(message, {
             reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
             reply_markup: {
                 inline_keyboard: [[
-                    { text: '🔑 Get API Key', callback_data: 'have_api_key' },
+                    { text: lang === 'id' ? '💝 Paket Donasi' : '💝 Donation Plan', callback_data: 'have_api_key' },
                 ]],
             },
         });
@@ -160,7 +269,7 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
     // Check cooldown
     const cooldownRemaining = await botRateLimitGetCooldown(telegramId);
     if (cooldownRemaining > 0) {
-        const message = BOT_MESSAGES.ERROR_RATE_LIMIT.replace('{seconds}', String(cooldownRemaining));
+        const message = getCooldownMessage(cooldownRemaining, lang);
         
         await ctx.reply(message, {
             reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
@@ -170,8 +279,9 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
 
     // Attach rate limit info to context
     ctx.rateLimit = {
-        remaining: downloadLimit - user.daily_downloads,
-        cooldownSeconds: RATE_LIMITS.FREE_COOLDOWN_SECONDS,
+        remaining: FREE_DAILY_LIMIT - user.daily_downloads,
+        resetAt: botRateLimitGetResetTime(),
+        cooldownSeconds: FREE_COOLDOWN_SECONDS,
     };
 
     // Continue to next middleware/handler
@@ -187,9 +297,9 @@ export async function botRateLimitRecordDownload(ctx: BotContext): Promise<void>
 
     const telegramId = ctx.botUser.id;
 
-    // Premium users don't have cooldown
+    // Donators/Premium users don't have cooldown
     if (!ctx.isPremium) {
-        await botRateLimitSetCooldown(telegramId, RATE_LIMITS.FREE_COOLDOWN_SECONDS);
+        await botRateLimitSetCooldown(telegramId, FREE_COOLDOWN_SECONDS);
     }
 
     // Increment download count
@@ -201,9 +311,14 @@ export async function botRateLimitRecordDownload(ctx: BotContext): Promise<void>
 // ============================================================================
 
 export {
+    FREE_DAILY_LIMIT,
+    FREE_COOLDOWN_MS,
+    FREE_COOLDOWN_SECONDS,
+    DONATOR_COOLDOWN_MS,
     botRateLimitNeedsReset,
     botRateLimitResetDaily,
     botRateLimitGetCooldown,
     botRateLimitSetCooldown,
     botRateLimitIncrementDownloads,
+    getTimeUntilReset,
 };

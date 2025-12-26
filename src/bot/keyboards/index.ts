@@ -1,532 +1,314 @@
 /**
- * Bot Keyboards
- * Reusable inline keyboards for Telegram bot
+ * Bot Keyboards - Simplified & Organized
+ * 
+ * Usage:
+ * import { MENU, DOWNLOAD, DONATE, NAV } from '@/bot/keyboards';
+ * await ctx.reply(msg, { reply_markup: MENU.main() });
+ * 
+ * Groups:
+ * - NAV: Navigation keyboards (back, refresh)
+ * - MENU: Main menu keyboards (start, main, help, privacy)
+ * - DOWNLOAD: Download-related keyboards (success, fallback, error)
+ * - DONATE: Donate feature keyboards (info, status, unlink)
+ * - STATUS: User status keyboards (free, history)
+ * - ADMIN: Admin keyboards (confirm, premium duration)
+ * 
+ * Callback patterns:
+ * - donate_link: User wants to link API key
+ * - donate_unlink: User wants to unlink API key
+ * - donate_unlink_confirm: Confirm unlink action
+ * - donate_enter_key: User ready to enter API key
  */
 
 import { InlineKeyboard } from 'grammy';
 import { ADMIN_CONTACT_USERNAME } from '../config';
-import { formatFilesize } from '../i18n';
-import type { DownloadResult } from '../types';
 
-// ============================================================================
-// Quality Detection
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
 
-export interface QualityInfo {
-    hasHD: boolean;
-    hasSD: boolean;
-    hasAudio: boolean;
-}
+const WEBSITE_URL = 'https://downaria.vercel.app';
 
-export interface QualityOption {
-    available: boolean;
-    label: string;      // "720p", "1080p", "480p", etc
-    filesize?: number;  // bytes
-}
+/** Maximum filesize Telegram can send directly (40MB) */
+export const MAX_TELEGRAM_FILESIZE = 40 * 1024 * 1024; // 40MB
 
-export interface DetailedQualityInfo {
-    hd: QualityOption;
-    sd: QualityOption;
-    audio: QualityOption;
-}
+// ═══════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════
 
-/**
- * Extract resolution label from quality string
- * Returns formatted label like "720p", "1080p", etc.
- */
-function extractResolutionLabel(quality: string): string {
-    const q = quality.toLowerCase();
+export const NAV = {
+    /** Back to main menu */
+    backToMenu: () => new InlineKeyboard().text('« Menu', 'cmd:menu'),
     
-    // Check for specific resolutions
-    if (q.includes('1080')) return '1080p';
-    if (q.includes('720')) return '720p';
-    if (q.includes('480')) return '480p';
-    if (q.includes('360')) return '360p';
-    if (q.includes('240')) return '240p';
-    if (q.includes('4k') || q.includes('2160')) return '4K';
-    if (q.includes('fullhd')) return '1080p';
-    if (q.includes('hd')) return 'HD';
-    if (q.includes('sd')) return 'SD';
-    if (q.includes('high')) return 'High';
-    if (q.includes('medium')) return 'Medium';
-    if (q.includes('low')) return 'Low';
-    if (q.includes('original')) return 'Original';
+    /** Generic back button */
+    back: (label: string, callback: string) => new InlineKeyboard().text(`« ${label}`, callback),
     
-    return '';
-}
-
-/**
- * Detect detailed qualities from download result with resolution labels and filesizes
- */
-export function detectDetailedQualities(result: DownloadResult): DetailedQualityInfo {
-    const videos = result.formats?.filter(f => f.type === 'video') || [];
-    const audios = result.formats?.filter(f => f.type === 'audio') || [];
+    /** Refresh button */
+    refresh: (callback: string) => new InlineKeyboard().text('🔄 Refresh', callback),
     
-    // Find HD video (1080p, 720p, hd, fullhd, high, original)
-    const hdVideo = videos.find(v => {
-        const q = v.quality.toLowerCase();
-        return q.includes('1080') || 
-               q.includes('720') || 
-               q.includes('hd') ||
-               q.includes('fullhd') ||
-               q.includes('high') ||
-               q.includes('original');
-    });
+    /** Close/dismiss button */
+    close: () => new InlineKeyboard().text('✖️ Close', 'close'),
+};
+
+// ═══════════════════════════════════════════════════════════════
+// MENU KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
+
+export const MENU = {
+    /** Main menu - /menu */
+    main: () => new InlineKeyboard()
+        .text('📊 My Status', 'cmd:mystatus').text('📜 History', 'cmd:history').row()
+        .text('💝 Donasi', 'cmd:donate').text('🔒 Privacy', 'cmd:privacy').row()
+        .url('🌐 Website', WEBSITE_URL).text('❓ Help', 'cmd:help'),
     
-    // Find SD video (480p, 360p, sd, low, medium)
-    const sdVideo = videos.find(v => {
-        const q = v.quality.toLowerCase();
-        return q.includes('480') || 
-               q.includes('360') || 
-               q.includes('sd') ||
-               q.includes('low') ||
-               q.includes('medium');
-    }) || (videos.length > 0 && !hdVideo ? videos[videos.length - 1] : undefined);
+    /** Start menu - /start (slightly different from main) */
+    start: () => new InlineKeyboard()
+        .text('📊 My Stats', 'cmd:mystatus').text('💝 Donasi', 'cmd:donate').row()
+        .text('❓ Help', 'cmd:help').url('🌐 Website', WEBSITE_URL),
     
-    // Find audio format
-    const audioFormat = audios[0] || (videos.length > 0 ? videos[0] : undefined);
+    /** Help menu - /help */
+    help: () => new InlineKeyboard()
+        .text('📖 How to Use', 'help_usage').text('🌐 Platforms', 'help_platforms').row()
+        .text('💝 Donasi', 'cmd:donate').row()
+        .text('« Back to Menu', 'cmd:menu'),
     
-    return {
-        hd: {
-            available: !!hdVideo,
-            label: hdVideo ? extractResolutionLabel(hdVideo.quality) : '',
-            filesize: hdVideo?.filesize,
-        },
-        sd: {
-            available: !!sdVideo,
-            label: sdVideo ? extractResolutionLabel(sdVideo.quality) : '',
-            filesize: sdVideo?.filesize,
-        },
-        audio: {
-            available: audios.length > 0 || videos.length > 0,
-            label: audios.length > 0 ? 'MP3' : '',
-            filesize: audioFormat?.filesize,
-        },
-    };
-}
-
-/**
- * Detect available qualities from download result
- * Checks various quality string formats from different scrapers
- * @deprecated Use detectDetailedQualities for more info
- */
-export function detectQualities(result: DownloadResult): QualityInfo {
-    const videos = result.formats?.filter(f => f.type === 'video') || [];
-    const audios = result.formats?.filter(f => f.type === 'audio') || [];
+    /** Privacy menu - /privacy */
+    privacy: () => new InlineKeyboard()
+        .url('🌐 Website', WEBSITE_URL).text('📋 Menu', 'cmd:menu'),
     
-    // Check for HD quality - various formats from different scrapers
-    const hasHD = videos.some(v => {
-        const q = v.quality.toLowerCase();
-        return q.includes('1080') || 
-               q.includes('720') || 
-               q.includes('hd') ||
-               q.includes('fullhd') ||
-               q.includes('high') ||
-               q.includes('original');
-    });
+    /** Settings menu */
+    settings: (currentLang: string = 'en') => new InlineKeyboard()
+        .text(`🌐 Language: ${currentLang.toUpperCase()}`, 'settings_language').row()
+        .text('« Back to Menu', 'cmd:menu'),
     
-    // Check for SD quality - various formats
-    const hasSD = videos.some(v => {
-        const q = v.quality.toLowerCase();
-        return q.includes('480') || 
-               q.includes('360') || 
-               q.includes('sd') ||
-               q.includes('low') ||
-               q.includes('medium');
-    }) || (videos.length > 0 && !hasHD);
+    /** Language selection */
+    language: () => new InlineKeyboard()
+        .text('🇺🇸 English', 'lang_en').text('🇮🇩 Indonesia', 'lang_id').row()
+        .text('« Back', 'settings'),
+};
+
+// ═══════════════════════════════════════════════════════════════
+// DOWNLOAD KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
+
+export const DOWNLOAD = {
+    /** Video sent successfully - only Original URL */
+    success: (originalUrl: string) => new InlineKeyboard()
+        .url('🔗 Original', originalUrl),
     
-    // Has audio if explicit audio format or any video (can extract audio)
-    const hasAudio = audios.length > 0 || videos.length > 0;
+    /** Video fallback (HD > 40MB, sent SD) - HD link + Original */
+    fallback: (hdUrl: string, originalUrl: string) => new InlineKeyboard()
+        .url('🎬 HD', hdUrl).url('🔗 Original', originalUrl),
     
-    return { hasHD, hasSD, hasAudio };
-}
-
-// ============================================================================
-// Video/YouTube Keyboards
-// ============================================================================
-
-/**
- * Build quality button label with optional resolution and filesize
- * Examples: "🎬 HD (720p) 15MB", "🎬 HD (720p)", "🎬 HD 15MB", "🎬 HD"
- */
-function buildQualityButtonLabel(
-    icon: string,
-    type: string,
-    label?: string,
-    filesize?: number
-): string {
-    let text = `${icon} ${type}`;
+    /** Photo - only Original URL */
+    photo: (originalUrl: string) => new InlineKeyboard()
+        .url('🔗 Original', originalUrl),
     
-    if (label && filesize) {
-        // Has resolution + filesize: "🎬 HD (720p) 15MB"
-        text += ` (${label}) ${formatFilesize(filesize)}`;
-    } else if (label) {
-        // Has resolution only: "🎬 HD (720p)"
-        text += ` (${label})`;
-    } else if (filesize) {
-        // Has filesize only: "🎬 HD 15MB"
-        text += ` ${formatFilesize(filesize)}`;
-    }
-    // Neither: just "🎬 HD"
+    /** Download success with stats link */
+    successWithStats: (url: string) => new InlineKeyboard()
+        .url('🔗 Original Link', url).row()
+        .text('📊 My Stats', 'cmd:mystatus'),
     
-    return text;
-}
-
-/**
- * Build keyboard for video content with quality options
- * Supports both QualityInfo (legacy) and DetailedQualityInfo
- */
-export function buildVideoKeyboard(
-    originalUrl: string,
-    visitorId: string,
-    qualities: QualityInfo | DetailedQualityInfo
-): InlineKeyboard {
-    const keyboard = new InlineKeyboard();
+    /** Processing - shows cancel option */
+    processing: () => new InlineKeyboard()
+        .text('❌ Cancel', 'cancel_download'),
     
-    // Check if it's DetailedQualityInfo
-    const isDetailed = 'hd' in qualities && typeof qualities.hd === 'object';
+    /** Error with retry */
+    error: (url: string) => {
+        const encodedUrl = url.length > 50 ? url.substring(0, 50) : url;
+        return new InlineKeyboard()
+            .text('🔄 Retry', `retry:${encodedUrl}`).row()
+            .url('💬 Report Issue', `https://t.me/${ADMIN_CONTACT_USERNAME}`);
+    },
     
-    if (isDetailed) {
-        const detailed = qualities as DetailedQualityInfo;
-        
-        // Row 1: Quality options with labels and filesizes
-        if (detailed.hd.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎬', 'HD', detailed.hd.label, detailed.hd.filesize),
-                `dl:hd:${visitorId}`
-            );
-        }
-        if (detailed.sd.available) {
-            keyboard.text(
-                buildQualityButtonLabel('📹', 'SD', detailed.sd.label, detailed.sd.filesize),
-                `dl:sd:${visitorId}`
-            );
-        }
-        if (detailed.audio.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎵', 'Audio', detailed.audio.label, detailed.audio.filesize),
-                `dl:audio:${visitorId}`
-            );
-        }
-    } else {
-        const simple = qualities as QualityInfo;
-        
-        // Row 1: Quality options (legacy)
-        if (simple.hasHD) keyboard.text('🎬 HD', `dl:hd:${visitorId}`);
-        if (simple.hasSD) keyboard.text('📹 SD', `dl:sd:${visitorId}`);
-        if (simple.hasAudio) keyboard.text('🎵 Audio', `dl:audio:${visitorId}`);
-    }
+    /** Cookie error - retry + report + browser link */
+    cookieError: (url: string, platform: string) => {
+        const encodedUrl = url.length > 50 ? url.substring(0, 50) : url;
+        return new InlineKeyboard()
+            .text('🔄 Retry', `retry:${encodedUrl}`).row()
+            .text('📢 Report to Admin', `report_cookie:${platform}`).row()
+            .url('🔗 Open in Browser', url);
+    },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// DONATE KEYBOARDS (was PREMIUM)
+// ═══════════════════════════════════════════════════════════════
+
+export const DONATE = {
+    /** Non-donator user - donate or enter key */
+    info: () => new InlineKeyboard()
+        .text('🔑 Punya API Key', 'donate_link').row()
+        .url('💬 Hubungi Admin', `https://t.me/${ADMIN_CONTACT_USERNAME}`).row()
+        .text('« Menu', 'cmd:menu'),
     
-    // Row 2: Original URL
-    keyboard.row();
-    keyboard.url('🔗 Original', originalUrl);
+    /** Donator status */
+    status: () => new InlineKeyboard()
+        .text('📊 Status', 'cmd:mystatus').text('🔓 Unlink', 'donate_unlink').row()
+        .text('« Menu', 'cmd:menu'),
     
-    return keyboard;
-}
-
-/**
- * Build keyboard for YouTube content (preview with cancel option)
- * Supports both QualityInfo (legacy) and DetailedQualityInfo
- */
-export function buildYouTubeKeyboard(
-    originalUrl: string,
-    visitorId: string,
-    qualities: QualityInfo | DetailedQualityInfo
-): InlineKeyboard {
-    const keyboard = new InlineKeyboard();
+    /** Confirm unlink */
+    confirmUnlink: () => new InlineKeyboard()
+        .text('✅ Ya, Unlink', 'donate_unlink_confirm').text('❌ Batal', 'cmd:donate'),
     
-    // Check if it's DetailedQualityInfo
-    const isDetailed = 'hd' in qualities && typeof qualities.hd === 'object';
+    /** Cancel API key input */
+    cancel: () => new InlineKeyboard()
+        .text('❌ Batal', 'cmd:donate'),
     
-    if (isDetailed) {
-        const detailed = qualities as DetailedQualityInfo;
-        
-        // Row 1: Quality options with labels and filesizes
-        if (detailed.hd.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎬', 'HD', detailed.hd.label, detailed.hd.filesize),
-                `dl:hd:${visitorId}`
-            );
-        }
-        if (detailed.sd.available) {
-            keyboard.text(
-                buildQualityButtonLabel('📹', 'SD', detailed.sd.label, detailed.sd.filesize),
-                `dl:sd:${visitorId}`
-            );
-        }
-        if (detailed.audio.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎵', 'Audio', detailed.audio.label, detailed.audio.filesize),
-                `dl:audio:${visitorId}`
-            );
-        }
-    } else {
-        const simple = qualities as QualityInfo;
-        
-        // Row 1: Quality options (legacy)
-        if (simple.hasHD) keyboard.text('🎬 HD', `dl:hd:${visitorId}`);
-        if (simple.hasSD) keyboard.text('📹 SD', `dl:sd:${visitorId}`);
-        if (simple.hasAudio) keyboard.text('🎵 Audio', `dl:audio:${visitorId}`);
-    }
+    /** Contact admin for donation */
+    contact: () => new InlineKeyboard()
+        .url('💬 Hubungi Admin', `https://t.me/${ADMIN_CONTACT_USERNAME}`).row()
+        .text('✅ Sudah Donasi', 'donate_enter_key').row()
+        .text('« Back', 'cmd:donate'),
     
-    // Row 2: Original URL + Cancel
-    keyboard.row();
-    keyboard.url('🔗 Original', originalUrl);
-    keyboard.text('❌ Cancel', `dl:cancel:${visitorId}`);
+    /** Limit exceeded - show donate option */
+    limitExceeded: (resetTimeStr: string) => new InlineKeyboard()
+        .text('💝 Donasi', 'cmd:donate').url('🌐 Website', WEBSITE_URL),
+};
+
+
+
+// ═══════════════════════════════════════════════════════════════
+// STATUS KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
+
+export const STATUS = {
+    /** Free user stats */
+    free: () => new InlineKeyboard()
+        .text('📈 Detailed Stats', 'stats_detailed').row()
+        .text('📜 Download History', 'stats_history').row()
+        .text('« Back to Menu', 'cmd:menu'),
     
-    return keyboard;
-}
+    /** History with refresh */
+    history: () => new InlineKeyboard()
+        .text('🔄 Refresh', 'history_refresh'),
+    
+    /** History with pagination */
+    historyPaginated: (page: number, hasMore: boolean) => {
+        const kb = new InlineKeyboard();
+        if (page > 1) kb.text('« Previous', `history_page:${page - 1}`);
+        if (hasMore) kb.text('Next »', `history_page:${page + 1}`);
+        kb.row().text('« Back to Stats', 'cmd:mystatus');
+        return kb;
+    },
+    
+    /** Service status with refresh */
+    service: () => new InlineKeyboard()
+        .text('🔄 Refresh', 'status_refresh'),
+};
 
-/**
- * Build keyboard for photo content (just Original URL)
- */
-export function buildPhotoKeyboard(originalUrl: string): InlineKeyboard {
-    return new InlineKeyboard().url('🔗 Original', originalUrl);
-}
+// ═══════════════════════════════════════════════════════════════
+// ADMIN KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
 
-// ============================================================================
-// Main Menu Keyboards
-// ============================================================================
+export const ADMIN = {
+    /** Admin main menu */
+    menu: () => new InlineKeyboard()
+        .text('📊 Bot Stats', 'admin_stats').text('👥 Users', 'admin_users').row()
+        .text('📥 Recent Downloads', 'admin_downloads').row()
+        .text('📢 Broadcast', 'admin_broadcast'),
+    
+    /** Confirm action */
+    confirm: (action: string) => new InlineKeyboard()
+        .text('✅ Confirm', `admin_confirm:${action}`).text('❌ Cancel', 'admin'),
+    
+    /** Give premium duration selection */
+    premiumDuration: (userId: number) => new InlineKeyboard()
+        .text('7 Days', `gp_give_${userId}_7`).text('30 Days', `gp_give_${userId}_30`).row()
+        .text('90 Days', `gp_give_${userId}_90`).text('365 Days', `gp_give_${userId}_365`).row()
+        .text('♾️ Lifetime', `gp_give_${userId}_-1`),
+    
+    /** Yes/No confirmation */
+    yesNo: (yesCallback: string, noCallback: string = 'menu') => new InlineKeyboard()
+        .text('✅ Yes', yesCallback).text('❌ No', noCallback),
+};
 
-/**
- * Start/Main menu keyboard
- */
-export function startKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📊 My Stats', 'cmd:mystatus')
-        .text('⭐ Premium', 'cmd:premium')
-        .row()
-        .text('❓ Help', 'cmd:help')
-        .url('🌐 Website', 'https://downaria.vercel.app');
-}
+// ═══════════════════════════════════════════════════════════════
+// RE-EXPORT LEGACY FUNCTIONS
+// These are used in url.ts and other handlers
+// ═══════════════════════════════════════════════════════════════
 
-/**
- * Help menu keyboard
- */
-export function helpKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📖 How to Use', 'help_usage')
-        .text('🌐 Platforms', 'help_platforms')
-        .row()
-        .text('⭐ Premium Features', 'help_premium')
-        .row()
-        .text('« Back to Menu', 'cmd:menu');
-}
+export { 
+    detectDetailedQualities, 
+    detectQualities,
+    buildVideoKeyboard, 
+    buildYouTubeKeyboard,
+    type QualityInfo,
+    type QualityOption,
+    type DetailedQualityInfo,
+} from './legacy';
 
-/**
- * Menu keyboard
- */
-export function menuKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📊 My Status', 'cmd:mystatus')
-        .text('📜 History', 'cmd:history')
-        .row()
-        .text('💎 Premium', 'cmd:premium')
-        .text('🔒 Privacy', 'cmd:privacy')
-        .row()
-        .url('🌐 Website', 'https://downaria.vercel.app')
-        .text('❓ Help', 'cmd:help');
-}
+// ═══════════════════════════════════════════════════════════════
+// LEGACY EXPORTS (for backward compatibility during migration)
+// TODO: Remove after all commands are updated to use grouped exports
+// ═══════════════════════════════════════════════════════════════
 
-/**
- * Settings keyboard
- */
-export function settingsKeyboard(currentLang: string = 'en'): InlineKeyboard {
-    return new InlineKeyboard()
-        .text(`🌐 Language: ${currentLang.toUpperCase()}`, 'settings_language')
-        .row()
-        .text('« Back to Menu', 'cmd:menu');
-}
+/** @deprecated Use MENU.start() */
+export const startKeyboard = MENU.start;
 
-/**
- * Language selection keyboard
- */
-export function languageKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('🇺🇸 English', 'lang_en')
-        .text('🇮🇩 Indonesia', 'lang_id')
-        .row()
-        .text('« Back', 'settings');
-}
+/** @deprecated Use MENU.main() */
+export const menuKeyboard = MENU.main;
 
-// ============================================================================
-// Premium Keyboards
-// ============================================================================
+/** @deprecated Use MENU.help() */
+export const helpKeyboard = MENU.help;
 
-/**
- * Premium info keyboard
- */
-export function premiumKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('🔑 I Have an API Key', 'premium_link')
-        .row()
-        .url(`💬 Contact Admin`, `https://t.me/${ADMIN_CONTACT_USERNAME}`)
-        .row()
-        .text('« Back to Menu', 'cmd:menu');
-}
+/** @deprecated Use MENU.settings() */
+export const settingsKeyboard = MENU.settings;
 
-/**
- * Premium status keyboard (for premium users)
- * Simplified layout: [📊 My Status] [🔓 Unlink] / [« Back to Menu]
- */
-export function premiumStatusKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📊 My Status', 'cmd:mystatus')
-        .text('🔓 Unlink', 'premium_unlink')
-        .row()
-        .text('« Back to Menu', 'cmd:menu');
-}
+/** @deprecated Use MENU.language() */
+export const languageKeyboard = MENU.language;
 
-/**
- * Confirm unlink keyboard
- */
-export function confirmUnlinkKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('✅ Yes, Unlink', 'premium_unlink_confirm')
-        .text('❌ Cancel', 'cmd:premium');
-}
+/** Alias for DONATE.status() - used in donate command */
+export const donatorStatusKeyboard = DONATE.status;
 
-/**
- * API key input cancel keyboard
- */
-export function cancelKeyboard(): InlineKeyboard {
-    return new InlineKeyboard().text('❌ Cancel', 'cmd:premium');
-}
+/** @deprecated Use DONATE.confirmUnlink() */
+export const confirmUnlinkKeyboard = DONATE.confirmUnlink;
 
-// ============================================================================
-// Download Keyboards
-// ============================================================================
+/** @deprecated Use DONATE.cancel() */
+export const cancelKeyboard = DONATE.cancel;
 
-/**
- * Error keyboard with retry option
- */
-export function errorKeyboard(url: string): InlineKeyboard {
-    const encodedUrl = url.length > 50 ? url.substring(0, 50) : url;
+/** @deprecated Use DONATE.limitExceeded() */
+export const donateKeyboard = DONATE.limitExceeded;
 
-    return new InlineKeyboard()
-        .text('🔄 Retry', `retry:${encodedUrl}`)
-        .row()
-        .url(`💬 Report Issue`, `https://t.me/${ADMIN_CONTACT_USERNAME}`);
-}
+/** @deprecated Use DOWNLOAD.error() */
+export const errorKeyboard = DOWNLOAD.error;
 
-/**
- * Cookie error keyboard - simpler message with report to admin
- */
-export function cookieErrorKeyboard(url: string, platform: string): InlineKeyboard {
-    const encodedUrl = url.length > 50 ? url.substring(0, 50) : url;
+/** @deprecated Use DOWNLOAD.cookieError() */
+export const cookieErrorKeyboard = DOWNLOAD.cookieError;
 
-    return new InlineKeyboard()
-        .text('🔄 Retry', `retry:${encodedUrl}`)
-        .row()
-        .text('📢 Report to Admin', `report_cookie:${platform}`)
-        .row()
-        .url('🔗 Open in Browser', url);
-}
+/** @deprecated Use DOWNLOAD.photo() */
+export const buildPhotoKeyboard = DOWNLOAD.photo;
 
-/**
- * Download success keyboard
- */
-export function downloadSuccessKeyboard(url: string): InlineKeyboard {
-    return new InlineKeyboard()
-        .url('🔗 Original Link', url)
-        .row()
-        .text('📊 My Stats', 'cmd:mystatus');
-}
+/** @deprecated Use DOWNLOAD.success() */
+export const buildVideoSuccessKeyboard = DOWNLOAD.success;
 
-/**
- * Processing keyboard (shows cancel option)
- */
-export function processingKeyboard(): InlineKeyboard {
-    return new InlineKeyboard().text('❌ Cancel', 'cancel_download');
-}
+/** @deprecated Use DOWNLOAD.fallback() */
+export const buildVideoFallbackKeyboard = DOWNLOAD.fallback;
 
-// ============================================================================
-// Stats Keyboards
-// ============================================================================
+/** @deprecated Use DOWNLOAD.successWithStats() */
+export const downloadSuccessKeyboard = DOWNLOAD.successWithStats;
 
-/**
- * Stats keyboard
- */
-export function statsKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📈 Detailed Stats', 'stats_detailed')
-        .row()
-        .text('📜 Download History', 'stats_history')
-        .row()
-        .text('« Back to Menu', 'cmd:menu');
-}
+/** @deprecated Use DOWNLOAD.processing() */
+export const processingKeyboard = DOWNLOAD.processing;
 
-/**
- * History navigation keyboard
- */
-export function historyKeyboard(page: number, hasMore: boolean): InlineKeyboard {
-    const keyboard = new InlineKeyboard();
+/** @deprecated Use STATUS.free() */
+export const statsKeyboard = STATUS.free;
 
-    if (page > 1) {
-        keyboard.text('« Previous', `history_page:${page - 1}`);
-    }
+/** @deprecated Use STATUS.historyPaginated() */
+export const historyKeyboard = STATUS.historyPaginated;
 
-    if (hasMore) {
-        keyboard.text('Next »', `history_page:${page + 1}`);
-    }
+/** @deprecated Use ADMIN.menu() */
+export const adminKeyboard = ADMIN.menu;
 
-    keyboard.row().text('« Back to Stats', 'cmd:mystatus');
+/** @deprecated Use ADMIN.confirm() */
+export const adminConfirmKeyboard = ADMIN.confirm;
 
-    return keyboard;
-}
+/** @deprecated Use NAV.back() */
+export const backKeyboard = (callbackData: string = 'menu') => 
+    new InlineKeyboard().text('« Back', callbackData);
 
-// ============================================================================
-// Admin Keyboards
-// ============================================================================
+/** @deprecated Use NAV.close() */
+export const closeKeyboard = NAV.close;
 
-/**
- * Admin menu keyboard
- */
-export function adminKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('📊 Bot Stats', 'admin_stats')
-        .text('👥 Users', 'admin_users')
-        .row()
-        .text('📥 Recent Downloads', 'admin_downloads')
-        .row()
-        .text('📢 Broadcast', 'admin_broadcast');
-}
-
-/**
- * Admin confirm action keyboard
- */
-export function adminConfirmKeyboard(action: string): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('✅ Confirm', `admin_confirm:${action}`)
-        .text('❌ Cancel', 'admin');
-}
-
-// ============================================================================
-// Utility Keyboards
-// ============================================================================
-
-/**
- * Simple back button
- */
-export function backKeyboard(callbackData: string = 'menu'): InlineKeyboard {
-    return new InlineKeyboard().text('« Back', callbackData);
-}
-
-/**
- * Close/dismiss keyboard
- */
-export function closeKeyboard(): InlineKeyboard {
-    return new InlineKeyboard().text('✖️ Close', 'close');
-}
-
-/**
- * Yes/No confirmation keyboard
- */
-export function confirmKeyboard(
-    yesCallback: string,
-    noCallback: string = 'menu'
-): InlineKeyboard {
-    return new InlineKeyboard()
-        .text('✅ Yes', yesCallback)
-        .text('❌ No', noCallback);
-}
+/** @deprecated Use ADMIN.yesNo() */
+export const confirmKeyboard = ADMIN.yesNo;

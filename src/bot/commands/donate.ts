@@ -1,13 +1,13 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * BOT COMMAND - /premium
+ * BOT COMMAND - /donate
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * Shows premium benefits and handles API key linking.
+ * Shows donation benefits and handles API key linking.
  * Two buttons: [💬 Contact Admin] [🔑 I Have API Key]
  * Handles API key input and validation, links API key to Telegram user.
  * 
- * @module bot/commands/premium
+ * @module bot/commands/donate
  */
 
 import { Composer, InlineKeyboard } from 'grammy';
@@ -29,11 +29,19 @@ const AWAITING_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const ADMIN_USERNAME = process.env.TELEGRAM_ADMIN_USERNAME || 'risunCode';
+const ADMIN_CONTACT_USERNAME = process.env.TELEGRAM_ADMIN_USERNAME || 'risunCode';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Detect user language from Telegram context
+ */
+function getUserLanguage(ctx: Context): 'id' | 'en' {
+    const langCode = ctx.from?.language_code;
+    return langCode === 'id' ? 'id' : 'en';
+}
 
 /**
  * Link API key to Telegram user
@@ -63,11 +71,11 @@ async function botUserLinkApiKey(userId: number, apiKeyId: string): Promise<bool
 }
 
 /**
- * Check if user already has premium
+ * Check if user already has donator status (premium)
  */
-async function botUserHasPremium(userId: number): Promise<{ hasPremium: boolean; apiKeyId: string | null }> {
+async function botUserHasDonatorStatus(userId: number): Promise<{ hasDonatorStatus: boolean; apiKeyId: string | null }> {
     const db = supabaseAdmin;
-    if (!db) return { hasPremium: false, apiKeyId: null };
+    if (!db) return { hasDonatorStatus: false, apiKeyId: null };
 
     try {
         const { data, error } = await db
@@ -77,18 +85,21 @@ async function botUserHasPremium(userId: number): Promise<{ hasPremium: boolean;
             .single();
 
         if (error || !data) {
-            return { hasPremium: false, apiKeyId: null };
+            return { hasDonatorStatus: false, apiKeyId: null };
         }
 
         return {
-            hasPremium: !!data.api_key_id,
+            hasDonatorStatus: !!data.api_key_id,
             apiKeyId: data.api_key_id
         };
     } catch (error) {
-        console.error('[botUserHasPremium] Error:', error);
-        return { hasPremium: false, apiKeyId: null };
+        console.error('[botUserHasDonatorStatus] Error:', error);
+        return { hasDonatorStatus: false, apiKeyId: null };
     }
 }
+
+// Keep old function name for backward compatibility
+const botUserHasPremium = botUserHasDonatorStatus;
 
 /**
  * Cleanup expired awaiting entries
@@ -106,46 +117,79 @@ function cleanupAwaitingEntries(): void {
 // COMMAND HANDLER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const premiumComposer = new Composer<Context>();
+const donateComposer = new Composer<Context>();
 
-premiumComposer.command('premium', async (ctx: Context) => {
+// Handle /donate command
+donateComposer.command('donate', async (ctx: Context) => {
     const userId = ctx.from?.id;
     if (!userId) {
         await ctx.reply('❌ Unable to identify user.');
         return;
     }
 
-    // Check if user already has premium
-    const { hasPremium } = await botUserHasPremium(userId);
+    const lang = getUserLanguage(ctx);
+
+    // Check if user already has donator status
+    const { hasDonatorStatus } = await botUserHasDonatorStatus(userId);
     
-    if (hasPremium) {
+    if (hasDonatorStatus) {
         const keyboard = new InlineKeyboard()
             .text('📊 My Status', 'cmd:mystatus')
-            .text('🔓 Unlink Key', 'premium_unlink');
+            .text('🔓 Unlink Key', 'donate_unlink');
 
-        await ctx.reply(
-            `👑 *You Already Have Premium!*
+        const message = lang === 'id'
+            ? `👑 *Kamu Sudah Menjadi Donatur!*
+
+Akunmu sudah terhubung dengan API key.
+Gunakan /mystatus untuk melihat detail donatur.`
+            : `👑 *You Are Already a Donator!*
 
 Your account is linked to an API key.
-Use /mystatus to see your premium details.`,
-            { parse_mode: 'Markdown', reply_markup: keyboard }
-        );
+Use /mystatus to see your donator details.`;
+
+        await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
         return;
     }
 
-    // Show premium benefits with simpler flow
+    // Show donation benefits
     const keyboard = new InlineKeyboard()
-        .text('🛒 Buy Premium', `premium_contact`)
+        .text('🛒 Donasi Sekarang', `donate_contact`)
         .row()
-        .text('🔑 I Have API Key', 'premium_enter_key');
+        .text('🔑 Saya Punya API Key', 'donate_enter_key');
 
-    const message = `💎 *DownAria Premium*
+    const message = lang === 'id'
+        ? `💝 *Paket Donasi DownAria*
 
-*Benefits:*
-• Unlimited downloads
+Dengan berdonasi, kamu mendukung pengembangan bot!
+
+✨ *Keuntungan Donatur:*
+• Download sesuai limit API key
+• Tanpa cooldown
+• Multi-URL (max 5/pesan)
+• Prioritas support
+
+💰 *Harga:*
+• Rp5.000 / 30 hari (PROMO!)
+
+📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+Sudah punya API key? Klik "Saya Punya API Key" untuk aktivasi.`
+        : `💝 *DownAria Donation Plan*
+
+By donating, you support bot development!
+
+✨ *Donator Benefits:*
+• Downloads based on API key limit
 • No cooldown
-• HD quality
+• Multi-URL (max 5/message)
 • Priority support
+
+💰 *Price:*
+• Rp5,000 / 30 days (PROMO!)
+
+📱 Contact @${ADMIN_CONTACT_USERNAME} to donate
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -157,31 +201,40 @@ Already have an API key? Click "I Have API Key" to activate.`;
     });
 });
 
-// Handle contact admin button (Buy Premium)
-premiumComposer.callbackQuery('premium_contact', async (ctx: Context) => {
+// Handle contact admin button (Donate Now)
+donateComposer.callbackQuery('donate_contact', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
+    const lang = getUserLanguage(ctx);
+    
     const keyboard = new InlineKeyboard()
-        .url(`💬 Chat with Admin`, `https://t.me/${ADMIN_USERNAME}`)
+        .url(`💬 Chat with Admin`, `https://t.me/${ADMIN_CONTACT_USERNAME}`)
         .row()
-        .text('✅ Already Bought', 'premium_enter_key')
+        .text('✅ Sudah Donasi', 'donate_enter_key')
         .row()
-        .text('« Back', 'cmd:premium');
+        .text('« Kembali', 'cmd:donate');
 
-    await ctx.editMessageText(
-        `🛒 *Buy Premium*
+    const message = lang === 'id'
+        ? `🛒 *Donasi Sekarang*
 
-Contact admin to purchase:
-👤 @${ADMIN_USERNAME}
+Hubungi admin untuk donasi:
+👤 @${ADMIN_CONTACT_USERNAME}
 
-After payment, you'll receive an API key.
-Click "Already Bought" to enter your key.`,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-    );
+Setelah donasi, kamu akan menerima API key.
+Klik "Sudah Donasi" untuk memasukkan key.`
+        : `🛒 *Donate Now*
+
+Contact admin to donate:
+👤 @${ADMIN_CONTACT_USERNAME}
+
+After donation, you'll receive an API key.
+Click "Already Donated" to enter your key.`;
+
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard });
 });
 
 // Handle enter API key button
-premiumComposer.callbackQuery('premium_enter_key', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_enter_key', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -190,22 +243,31 @@ premiumComposer.callbackQuery('premium_enter_key', async (ctx: Context) => {
         return;
     }
 
+    const lang = getUserLanguage(ctx);
+
     // Cleanup old entries
     cleanupAwaitingEntries();
 
     const keyboard = new InlineKeyboard()
-        .text('❌ Cancel', 'cmd:premium');
+        .text('❌ Batal', 'cmd:donate');
 
-    const msg = await ctx.reply(
-        `🔑 *Enter Your API Key*
+    const message = lang === 'id'
+        ? `🔑 *Masukkan API Key*
+
+Kirim API key kamu di pesan berikutnya.
+
+_Format:_ \`xtf_live_xxxxx...\`
+
+⚠️ Kadaluarsa dalam 5 menit.`
+        : `🔑 *Enter Your API Key*
 
 Send your API key in the next message.
 
 _Format:_ \`xtf_live_xxxxx...\`
 
-⚠️ Expires in 5 minutes.`,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-    );
+⚠️ Expires in 5 minutes.`;
+
+    const msg = await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
 
     // Track that we're waiting for this user's API key
     awaitingApiKey.set(userId, {
@@ -215,7 +277,7 @@ _Format:_ \`xtf_live_xxxxx...\`
 });
 
 // Handle unlink button
-premiumComposer.callbackQuery('premium_unlink', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_unlink', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -224,21 +286,27 @@ premiumComposer.callbackQuery('premium_unlink', async (ctx: Context) => {
         return;
     }
 
-    const keyboard = new InlineKeyboard()
-        .text('✅ Yes, Unlink', 'premium_unlink_confirm')
-        .text('❌ Cancel', 'premium_unlink_cancel');
+    const lang = getUserLanguage(ctx);
 
-    await ctx.reply(
-        `⚠️ *Unlink API Key?*
+    const keyboard = new InlineKeyboard()
+        .text('✅ Ya, Lepaskan', 'donate_unlink_confirm')
+        .text('❌ Batal', 'donate_unlink_cancel');
+
+    const message = lang === 'id'
+        ? `⚠️ *Lepaskan API Key?*
+
+Apakah kamu yakin ingin melepaskan API key?
+Kamu akan kehilangan keuntungan donatur sampai menghubungkan key baru.`
+        : `⚠️ *Unlink API Key?*
 
 Are you sure you want to unlink your API key?
-You will lose premium benefits until you link a new key.`,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-    );
+You will lose donator benefits until you link a new key.`;
+
+    await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
 });
 
 // Handle unlink confirmation
-premiumComposer.callbackQuery('premium_unlink_confirm', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_unlink_confirm', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -247,6 +315,7 @@ premiumComposer.callbackQuery('premium_unlink_confirm', async (ctx: Context) => 
         return;
     }
 
+    const lang = getUserLanguage(ctx);
     const db = supabaseAdmin;
     if (!db) {
         await ctx.reply('❌ Database unavailable. Please try again later.');
@@ -267,27 +336,31 @@ premiumComposer.callbackQuery('premium_unlink_confirm', async (ctx: Context) => 
             return;
         }
 
-        await ctx.editMessageText(
-            `✅ *API Key Unlinked*
+        const message = lang === 'id'
+            ? `✅ *API Key Dilepaskan*
 
-Your premium access has been removed.
-Use /premium to link a new API key.`,
-            { parse_mode: 'Markdown' }
-        );
+Akses donatur kamu telah dihapus.
+Gunakan /donate untuk menghubungkan API key baru.`
+            : `✅ *API Key Unlinked*
+
+Your donator access has been removed.
+Use /donate to link a new API key.`;
+
+        await ctx.editMessageText(message, { parse_mode: 'Markdown' });
     } catch (error) {
-        console.error('[premium_unlink_confirm] Error:', error);
+        console.error('[donate_unlink_confirm] Error:', error);
         await ctx.editMessageText('❌ Error unlinking API key. Please try again.');
     }
 });
 
 // Handle unlink cancel
-premiumComposer.callbackQuery('premium_unlink_cancel', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_unlink_cancel', async (ctx: Context) => {
     await ctx.answerCallbackQuery('Cancelled');
     await ctx.deleteMessage();
 });
 
-// Handle premium refresh button
-premiumComposer.callbackQuery('premium_refresh', async (ctx: Context) => {
+// Handle donate refresh button
+donateComposer.callbackQuery('donate_refresh', async (ctx: Context) => {
     await ctx.answerCallbackQuery('Refreshing...');
     
     const userId = ctx.from?.id;
@@ -296,33 +369,44 @@ premiumComposer.callbackQuery('premium_refresh', async (ctx: Context) => {
         return;
     }
 
+    const lang = getUserLanguage(ctx);
+
     try {
         // Import dynamically to avoid circular dependency
         const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('./mystatus');
-        const { premiumStatusKeyboard } = await import('../keyboards');
+        const { donatorStatusKeyboard } = await import('../keyboards');
         
         const { user, apiKey } = await botUserGetPremiumStatus(userId);
         const totalDownloads = await botUserGetTotalDownloads(userId);
 
         if (!user || !apiKey) {
-            // User is no longer premium
+            // User is no longer a donator
             const keyboard = new InlineKeyboard()
-                .text('🛒 Buy Premium', 'premium_contact')
+                .text('🛒 Donasi Sekarang', 'donate_contact')
                 .row()
-                .text('🔑 I Have API Key', 'premium_enter_key');
+                .text('🔑 Saya Punya API Key', 'donate_enter_key');
 
-            await ctx.editMessageText(
-                `💎 *DownAria Premium*
+            const message = lang === 'id'
+                ? `💝 *Paket Donasi DownAria*
 
-Your premium status has expired or been unlinked.
+Status donatur kamu telah kadaluarsa atau dilepaskan.
 
-*Benefits:*
-• Unlimited downloads
+✨ *Keuntungan Donatur:*
+• Download sesuai limit API key
+• Tanpa cooldown
+• Multi-URL (max 5/pesan)
+• Prioritas support`
+                : `💝 *DownAria Donation Plan*
+
+Your donator status has expired or been unlinked.
+
+✨ *Donator Benefits:*
+• Downloads based on API key limit
 • No cooldown
-• HD quality
-• Priority support`,
-                { parse_mode: 'Markdown', reply_markup: keyboard }
-            );
+• Multi-URL (max 5/message)
+• Priority support`;
+
+            await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard });
             return;
         }
 
@@ -347,8 +431,22 @@ Your premium status has expired or been unlinked.
 
         const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
 
-        await ctx.editMessageText(
-            `👑 *Premium Status*
+        const message = lang === 'id'
+            ? `👑 *Status Donatur*
+
+*API Key:* \`${apiKey.key_preview}\`
+*Status:* ${keyStatus}
+*Kadaluarsa:* ${expiryText}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*Download:*
+• Hari ini: ${user.daily_downloads} (Unlimited)
+• Total: ${totalDownloads}
+• API Requests: ${apiKey.total_requests}
+
+*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`
+            : `👑 *Donator Status*
 
 *API Key:* \`${apiKey.key_preview}\`
 *Status:* ${keyStatus}
@@ -361,17 +459,17 @@ Your premium status has expired or been unlinked.
 • Total: ${totalDownloads}
 • API Requests: ${apiKey.total_requests}
 
-*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`,
-            { parse_mode: 'Markdown', reply_markup: premiumStatusKeyboard() }
-        );
+*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`;
+
+        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: donatorStatusKeyboard() });
     } catch (error) {
-        console.error('[premium_refresh callback] Error:', error);
+        console.error('[donate_refresh callback] Error:', error);
         await ctx.answerCallbackQuery('Error refreshing status');
     }
 });
 
 // Handle text messages (for API key input)
-premiumComposer.on('message:text', async (ctx: Context, next: () => Promise<void>) => {
+donateComposer.on('message:text', async (ctx: Context, next: () => Promise<void>) => {
     const userId = ctx.from?.id;
     if (!userId) {
         return next();
@@ -399,6 +497,8 @@ premiumComposer.on('message:text', async (ctx: Context, next: () => Promise<void
     // Remove from awaiting
     awaitingApiKey.delete(userId);
 
+    const lang = getUserLanguage(ctx);
+
     // Delete the user's message containing the API key (for security)
     try {
         await ctx.deleteMessage();
@@ -406,21 +506,51 @@ premiumComposer.on('message:text', async (ctx: Context, next: () => Promise<void
         // Ignore if can't delete
     }
 
+    // Delete the "Enter your API key" prompt message
+    try {
+        await ctx.api.deleteMessage(ctx.chat!.id, awaiting.messageId);
+    } catch {
+        // Ignore if can't delete (already deleted or expired)
+    }
+
     // Validate the API key
-    const loadingMsg = await ctx.reply('⏳ Validating your API key...');
+    const loadingMsg = await ctx.reply(lang === 'id' ? '⏳ Memvalidasi API key...' : '⏳ Validating your API key...');
 
     try {
         const validation = await apiKeyValidate(apiKey);
 
         if (!validation.valid || !validation.key) {
-            await ctx.api.editMessageText(
-                ctx.chat!.id,
-                loadingMsg.message_id,
-                `❌ *Invalid API Key*
+            // Check if it's a rate limit error (brute force protection)
+            const isRateLimited = validation.error?.includes('Too many validation attempts');
+            
+            const errorMessage = isRateLimited
+                ? (lang === 'id'
+                    ? `⏳ *Terlalu Banyak Percobaan*
+
+Kamu sudah mencoba terlalu banyak. Tunggu sebentar lalu coba lagi.
+
+${validation.error}`
+                    : `⏳ *Too Many Attempts*
+
+You've tried too many times. Please wait a moment and try again.
+
+${validation.error}`)
+                : (lang === 'id'
+                    ? `❌ *API Key Tidak Valid*
+
+${validation.error || 'API key tidak valid atau sudah kadaluarsa.'}
+
+Gunakan /donate untuk mencoba lagi.`
+                    : `❌ *Invalid API Key*
 
 ${validation.error || 'The API key is invalid or expired.'}
 
-Use /premium to try again.`,
+Use /donate to try again.`);
+
+            await ctx.api.editMessageText(
+                ctx.chat!.id,
+                loadingMsg.message_id,
+                errorMessage,
                 { parse_mode: 'Markdown' }
             );
             return;
@@ -433,14 +563,16 @@ Use /premium to try again.`,
             await ctx.api.editMessageText(
                 ctx.chat!.id,
                 loadingMsg.message_id,
-                '❌ Error linking API key. Please try again later.',
+                lang === 'id' 
+                    ? '❌ Error menghubungkan API key. Silakan coba lagi nanti.'
+                    : '❌ Error linking API key. Please try again later.',
                 { parse_mode: 'Markdown' }
             );
             return;
         }
 
         // Format expiry date
-        let expiryText = 'Never';
+        let expiryText = lang === 'id' ? 'Tidak pernah' : 'Never';
         if (validation.key.expiresAt) {
             const expiryDate = new Date(validation.key.expiresAt);
             const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
@@ -448,34 +580,47 @@ Use /premium to try again.`,
                 month: 'long', 
                 day: 'numeric', 
                 year: 'numeric' 
-            })} (${daysLeft} days left)`;
+            })} (${daysLeft} ${lang === 'id' ? 'hari lagi' : 'days left'})`;
         }
 
         const keyboard = new InlineKeyboard()
             .text('📊 My Status', 'cmd:mystatus');
 
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            loadingMsg.message_id,
-            `✅ *Premium Activated!*
+        const successMessage = lang === 'id'
+            ? `✅ *Donatur Diaktifkan!*
 
-Your account is now linked to a premium API key.
+Akunmu sekarang terhubung dengan API key donatur.
+
+*API Key:* \`${validation.key.key}\`
+*Kadaluarsa:* ${expiryText}
+
+Nikmati download tanpa batas! 🎉`
+            : `✅ *Donator Activated!*
+
+Your account is now linked to a donator API key.
 
 *API Key:* \`${validation.key.key}\`
 *Expires:* ${expiryText}
 
-Enjoy unlimited downloads! 🎉`,
-            { parse_mode: 'Markdown', reply_markup: keyboard }
-        );
-    } catch (error) {
-        console.error('[premium API key validation] Error:', error);
+Enjoy unlimited downloads! 🎉`;
+
         await ctx.api.editMessageText(
             ctx.chat!.id,
             loadingMsg.message_id,
-            '❌ Error validating API key. Please try again later.',
+            successMessage,
+            { parse_mode: 'Markdown', reply_markup: keyboard }
+        );
+    } catch (error) {
+        console.error('[donate API key validation] Error:', error);
+        await ctx.api.editMessageText(
+            ctx.chat!.id,
+            loadingMsg.message_id,
+            lang === 'id'
+                ? '❌ Error memvalidasi API key. Silakan coba lagi nanti.'
+                : '❌ Error validating API key. Please try again later.',
             { parse_mode: 'Markdown' }
         );
     }
 });
 
-export { premiumComposer, botUserLinkApiKey, botUserHasPremium };
+export { donateComposer, botUserLinkApiKey, botUserHasPremium, botUserHasDonatorStatus };

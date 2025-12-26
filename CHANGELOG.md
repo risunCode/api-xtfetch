@@ -2,6 +2,65 @@
 
 All notable changes to the XTFetch Backend API will be documented in this file.
 
+## [December 26, 2025] - Security Hardening & Bot Improvements
+
+### 🔒 Security Fixes (Critical)
+- **CORS Bypass Fix** - `ALLOWED_ORIGINS` now REQUIRED, blocks all requests if empty (was allowing `*`)
+- **Telegram Webhook Secret** - `TELEGRAM_WEBHOOK_SECRET` now MANDATORY (was optional)
+- **SQL Injection Prevention** - Platform validation in cookie pool queries
+- **API Key Brute Force Protection** - Rate limiting: 10 attempts/minute per IP
+- **Log Sanitization** - Removed API key from response logs in premium endpoint
+
+### 🤖 Bot Enhancements
+- **Command Rename** - `/givepremium` → `/givevip`, `/revokepremium` → `/revokevip`
+- **Admin Panel Button** - `/menu` now shows "🔧 Admin Panel" for admins only
+- **Donate Flow Improved** - Deletes "Enter API Key" prompt after user sends key
+- **Rate Limit Error Handling** - User-friendly messages for API key rate limits
+
+### 📝 Documentation
+- Created `Proposal/complete/security-performance-audit-proposal.md`
+- Created `Proposal/complete/bot-command-reference.md`
+- Updated `.env.example` with security warnings
+
+### ⚠️ Breaking Changes
+- `ALLOWED_ORIGINS` env var is now REQUIRED (set to your frontend domain)
+- `TELEGRAM_WEBHOOK_SECRET` env var is now MANDATORY for bot webhook
+
+---
+
+## [December 26, 2025] - Security Fixes & Bot Enhancement (Earlier)
+
+### Security Fixes (Penetration Test Mitigation)
+- **RCE Prevention** - YouTube scraper now validates format strings, blocks shell metacharacters
+- **SSRF Hardening** - Proxy endpoint validates URLs against private IP ranges (10.x, 172.16-31.x, 192.168.x, localhost, metadata endpoints)
+- **Admin Auth Hardening** - Playground endpoint now requires proper admin session verification
+- **Log Sanitization** - All user inputs sanitized before logging (prevents log injection)
+
+### Key Rotation
+- Rotated all compromised secrets (ENCRYPTION_KEY, JWT_SECRET, TELEGRAM_WEBHOOK_SECRET)
+- New Supabase project created with fresh credentials
+- Created `KEY-ROTATION-GUIDE.md` for future reference
+
+### Bot Enhancements
+- **Maintenance Mode Sync** - Bot now checks Redis `global:maintenance` flag (syncs with frontend)
+- **Smart Quality Logic** - Non-YouTube videos: HD auto-sent if ≤40MB, fallback to SD if >40MB with HD link
+- **YouTube Flow Fix** - Preview message deleted after quality selection, video sent with only `[🔗 Original]` button
+- **Keyboard Simplification** - Reorganized into grouped exports: `NAV`, `MENU`, `DOWNLOAD`, `PREMIUM`, `STATUS`, `ADMIN`
+- **Legacy Compatibility** - Old keyboard functions moved to `keyboards/legacy.ts` with deprecation notices
+
+### Files Changed
+- `src/lib/services/youtube/scraper.ts` - Format validation
+- `src/app/api/v1/youtube/merge/route.ts` - Input sanitization
+- `src/app/api/v1/proxy/route.ts` - SSRF protection
+- `src/app/api/v1/playground/route.ts` - Admin auth fix
+- `src/bot/keyboards/index.ts` - Grouped keyboard system
+- `src/bot/keyboards/legacy.ts` - Legacy functions (new file)
+- `src/bot/handlers/url.ts` - Smart quality + maintenance check
+- `src/bot/handlers/callback.ts` - YouTube flow fix
+- `src/bot/middleware/maintenance.ts` - Global maintenance check
+
+---
+
 ## [December 25, 2025] - Telegram Bot Integration
 
 ### Added

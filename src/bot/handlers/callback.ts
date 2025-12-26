@@ -25,7 +25,7 @@
  * - cmd:menu - Trigger /menu
  */
 
-import { Bot, InputFile } from 'grammy';
+import { Bot, InputFile, InlineKeyboard } from 'grammy';
 
 import { logger } from '@/lib/services/shared/logger';
 
@@ -34,7 +34,7 @@ import { botUrlCallScraper, botUrlGetPlatformName } from './url';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
 import { 
     startKeyboard, 
-    premiumKeyboard,
+    DONATE,
     backKeyboard,
     errorKeyboard,
 } from '../keyboards';
@@ -138,7 +138,7 @@ Don't have a key? Get one at downaria.com/api`;
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
-        reply_markup: premiumKeyboard(),
+        reply_markup: DONATE.info(),
     });
 }
 
@@ -205,10 +205,37 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
         } catch (error) {
             logger.error('telegram', error, 'RETRY_SEND_MEDIA');
             
-            // Fallback: send URL
-            await ctx.reply(`📥 Download link:\n\n${format.url}\n\n${caption}`, {
-                link_preview_options: { is_disabled: true },
-            });
+            // Fallback: Send thumbnail with download buttons instead of raw link
+            const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
+            const fallbackCaption = lang === 'id'
+                ? `📥 *${platformName}*\n\n` +
+                  `${result.title ? result.title.substring(0, 200) + '\n' : ''}` +
+                  `${result.author ? result.author + '\n' : ''}\n` +
+                  `⚠️ Video terlalu besar untuk dikirim langsung.`
+                : `📥 *${platformName}*\n\n` +
+                  `${result.title ? result.title.substring(0, 200) + '\n' : ''}` +
+                  `${result.author ? result.author + '\n' : ''}\n` +
+                  `⚠️ Video too large to send directly.`;
+            
+            const fallbackKeyboard = new InlineKeyboard()
+                .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), format.url)
+                .url('🔗 Original', url);
+            
+            // Try to send thumbnail with buttons
+            if (result.thumbnail) {
+                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+                    caption: fallbackCaption,
+                    parse_mode: 'Markdown',
+                    reply_markup: fallbackKeyboard,
+                });
+            } else {
+                // No thumbnail, send text message with buttons
+                await ctx.reply(fallbackCaption, {
+                    parse_mode: 'Markdown',
+                    reply_markup: fallbackKeyboard,
+                    link_preview_options: { is_disabled: true },
+                });
+            }
         }
     } else {
         // Edit to show error
@@ -420,7 +447,7 @@ async function botCallbackDownloadQuality(
     }
 
     try {
-        // Build caption (don't delete preview message - user might want other qualities)
+        // Build caption
         let caption = '';
         if (pending.result.title) {
             caption = pending.result.title.substring(0, 200);
@@ -431,31 +458,35 @@ async function botCallbackDownloadQuality(
         }
         caption += '\n\n📥 via @DownAriaBot';
 
-        // Send the media (don't delete preview - user might want other qualities)
+        // Create simple keyboard with only Original URL button
+        const simpleKeyboard = new InlineKeyboard().url('🔗 Original', pending.url);
+
+        // Delete the preview message (thumbnail with quality buttons)
+        try {
+            await ctx.deleteMessage();
+        } catch {
+            // Ignore if can't delete
+        }
+
+        // Send the media with only Original URL button
         if (quality === 'audio') {
             await ctx.replyWithAudio(new InputFile({ url: formatToSend.url }), {
                 caption,
                 title: pending.result.title?.substring(0, 64),
+                reply_markup: simpleKeyboard,
             });
         } else {
             await ctx.replyWithVideo(new InputFile({ url: formatToSend.url }), {
                 caption,
+                reply_markup: simpleKeyboard,
             });
         }
 
         // Record successful download
         await botRateLimitRecordDownload(ctx);
 
-        // Update preview message to show success (don't delete - user might want other qualities)
-        try {
-            const successCaption = `✅ ${qualityLabel} downloaded!\n\nSelect another quality or cancel:`;
-            await ctx.editMessageCaption({ caption: successCaption });
-        } catch {
-            // If can't edit, just leave it
-        }
-
-        // DON'T clear session - user might want to download other qualities
-        // ctx.session.pendingDownload = undefined;
+        // Clear session after successful download
+        ctx.session.pendingDownload = undefined;
 
         logger.debug('telegram', `Download sent: ${quality} quality for ${pending.platform}`);
     } catch (error) {
@@ -627,22 +658,29 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
             break;
         }
         
-        case 'premium': {
+        case 'donate': {
+            // Both /premium and /donate show the same donation info
             const message = lang === 'id'
-                ? `💎 *Premium DownAria*\n\n` +
-                  `Keuntungan Premium:\n` +
-                  `• Download tanpa batas\n` +
+                ? `💝 *Paket Donasi DownAria*\n\n` +
+                  `Dengan berdonasi, kamu mendukung pengembangan bot!\n\n` +
+                  `✨ *Keuntungan Donatur:*\n` +
+                  `• Download sesuai limit API key\n` +
                   `• Tanpa cooldown\n` +
-                  `• Prioritas support\n` +
-                  `• Kualitas lebih tinggi\n\n` +
-                  `Hubungi @suntaw untuk info lebih lanjut.`
-                : `💎 *DownAria Premium*\n\n` +
-                  `Premium benefits:\n` +
-                  `• Unlimited downloads\n` +
+                  `• Multi-URL (max 5/pesan)\n` +
+                  `• Prioritas support\n\n` +
+                  `💰 *Harga:*\n` +
+                  `• Rp5.000 / 30 hari (PROMO!)\n\n` +
+                  `📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi`
+                : `💝 *DownAria Donation Plan*\n\n` +
+                  `By donating, you support bot development!\n\n` +
+                  `✨ *Donator Benefits:*\n` +
+                  `• Downloads based on API key limit\n` +
                   `• No cooldown\n` +
-                  `• Priority support\n` +
-                  `• Higher quality options\n\n` +
-                  `Contact @suntaw for more info.`;
+                  `• Multi-URL (max 5/message)\n` +
+                  `• Priority support\n\n` +
+                  `💰 *Price:*\n` +
+                  `• Rp5,000 / 30 days (PROMO!)\n\n` +
+                  `📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
             
             await ctx.reply(message, { parse_mode: 'Markdown' });
             break;

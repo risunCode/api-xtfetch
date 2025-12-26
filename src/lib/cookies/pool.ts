@@ -59,6 +59,22 @@ export interface CookiePoolStats {
 
 const ENCRYPTED_PREFIX = 'enc:';
 
+/**
+ * Valid platform identifiers - whitelist for SQL injection prevention
+ */
+const VALID_PLATFORMS = ['facebook', 'instagram', 'twitter', 'tiktok', 'weibo', 'youtube'] as const;
+type ValidPlatform = typeof VALID_PLATFORMS[number];
+
+/**
+ * Validate platform parameter against whitelist
+ * @throws Error if platform is invalid
+ */
+function validatePlatform(platform: string): asserts platform is ValidPlatform {
+    if (!VALID_PLATFORMS.includes(platform as ValidPlatform)) {
+        throw new Error(`Invalid platform: ${platform}. Must be one of: ${VALID_PLATFORMS.join(', ')}`);
+    }
+}
+
 // ============================================================================
 // INTERNAL STATE
 // ============================================================================
@@ -222,6 +238,14 @@ export async function cookiePoolGetRotating(
     platform: string,
     tier: CookieTier = 'public'
 ): Promise<string | null> {
+    // Validate platform against whitelist to prevent SQL injection
+    try {
+        validatePlatform(platform);
+    } catch (e) {
+        logger.error('cookies', `Invalid platform parameter: ${platform}`);
+        return null;
+    }
+
     const db = getSupabase();
     if (!db) {
         logger.warn('cookies', `No database configured for cookie pool`);
@@ -503,6 +527,14 @@ export async function cookiePoolMarkExpired(error?: string): Promise<void> {
  * Get all cookies for a platform from the pool
  */
 export async function cookiePoolGetByPlatform(platform: string): Promise<PooledCookie[]> {
+    // Validate platform against whitelist to prevent SQL injection
+    try {
+        validatePlatform(platform);
+    } catch (e) {
+        logger.error('cookies', `Invalid platform parameter: ${platform}`);
+        return [];
+    }
+
     const db = getSupabase();
     if (!db) return [];
 
@@ -540,6 +572,9 @@ export async function cookiePoolAdd(
     cookie: string,
     options?: { label?: string; note?: string; max_uses_per_hour?: number; tier?: CookieTier }
 ): Promise<PooledCookie | null> {
+    // Validate platform against whitelist to prevent SQL injection
+    validatePlatform(platform);
+
     const db = getSupabase();
     if (!db) throw new Error('Database not configured');
 

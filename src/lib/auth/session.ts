@@ -28,14 +28,13 @@ const authClient = supabaseUrl && supabaseServiceKey
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null;
 
-// Log auth client status on startup (only once)
+// Log auth client status on startup (only errors)
 if (!authClient) {
     console.error('[Auth] ⚠️ Auth client NOT initialized!');
     console.error(`[Auth] SUPABASE_URL: ${supabaseUrl ? 'SET' : 'MISSING'}`);
     console.error(`[Auth] SERVICE_ROLE_KEY: ${supabaseServiceKey ? 'SET' : 'MISSING'}`);
-} else {
-    console.log('[Auth] ✓ Auth client initialized');
 }
+// Success log removed - was too noisy during build (7+ times)
 
 // Debug flag - set to true for verbose auth logging
 const DEBUG_AUTH = process.env.LOG_LEVEL === 'debug';

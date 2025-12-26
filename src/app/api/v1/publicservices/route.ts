@@ -21,8 +21,8 @@ import { cookiePoolGetRotating } from '@/lib/cookies';
 import { platformDetect } from '@/core/config';
 import { utilFetchFilesizes } from '@/lib/utils';
 import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
-import { 
-    cacheGetQuick, 
+import {
+    cacheGetQuick,
     cacheGetWithFallback,
     cacheSetWithAlias,
     type ContentType
@@ -35,48 +35,67 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
     .map(o => o.trim().toLowerCase())
     .filter(Boolean);
 
-// Bridge secret key
-const BRIDGE_SECRET = process.env.BRIDGE_SECRET || '';
+
+
+/**
+ * Parse and extract hostname from origin/URL string
+ * Returns null if parsing fails
+ */
+function parseOriginHostname(origin: string): string | null {
+    try {
+        const url = new URL(origin);
+        return url.hostname.toLowerCase();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Check if origin hostname matches an allowed origin (exact match only)
+ * No subdomain wildcards - must be exact hostname match
+ */
+function isOriginAllowed(originHostname: string, allowedOrigins: string[]): boolean {
+    return allowedOrigins.some(allowed => {
+        const allowedHostname = parseOriginHostname(allowed);
+        if (!allowedHostname) {
+            // If allowed origin is just a hostname without protocol, compare directly
+            return originHostname === allowed.toLowerCase();
+        }
+        // Exact hostname match only - no subdomain matching
+        return originHostname === allowedHostname;
+    });
+}
 
 function isRequestAllowed(request: NextRequest): boolean {
-    // Check bridge secret first (server-to-server)
-    const bridgeSecret = request.headers.get('x-bridge-secret');
-    
-    // Debug log
-    console.log('[publicservices] Bridge secret check:', {
-        hasEnvSecret: !!BRIDGE_SECRET,
-        hasHeaderSecret: !!bridgeSecret,
-        match: BRIDGE_SECRET && bridgeSecret === BRIDGE_SECRET
-    });
-    
-    if (BRIDGE_SECRET && bridgeSecret === BRIDGE_SECRET) {
-        return true;
+    // SECURITY: Require explicit whitelist in production
+    // If no whitelist configured, block all requests (fail-safe)
+    if (ALLOWED_ORIGINS.length === 0) {
+        return false;
     }
-    
-    // If no whitelist configured, allow all (dev mode)
-    if (ALLOWED_ORIGINS.length === 0) return true;
-    
-    const origin = request.headers.get('origin')?.toLowerCase();
-    const referer = request.headers.get('referer')?.toLowerCase();
-    
+
+    const origin = request.headers.get('origin');
+    const referer = request.headers.get('referer');
+
     // Check origin header (browser requests)
     if (origin) {
-        return ALLOWED_ORIGINS.some(allowed => 
-            origin === allowed || origin.endsWith(`.${allowed.replace(/^https?:\/\//, '')}`)
-        );
+        const originHostname = parseOriginHostname(origin);
+        if (!originHostname) return false;
+        return isOriginAllowed(originHostname, ALLOWED_ORIGINS);
     }
-    
-    // Fallback to referer
+
+    // Fallback to referer (for same-origin requests without Origin header)
     if (referer) {
-        return ALLOWED_ORIGINS.some(allowed => referer.startsWith(allowed));
+        const refererHostname = parseOriginHostname(referer);
+        if (!refererHostname) return false;
+        return isOriginAllowed(refererHostname, ALLOWED_ORIGINS);
     }
-    
+
     // No origin/referer = direct API call (block in production)
     return false;
 }
 
 export async function POST(request: NextRequest) {
-    // Origin/Bridge secret check
+    // Origin check
     if (!isRequestAllowed(request)) {
         return NextResponse.json(
             { success: false, error: 'Unauthorized origin' },
@@ -99,12 +118,12 @@ export async function POST(request: NextRequest) {
         // Step 1: Quick platform detection (no HTTP)
         const quickParse = prepareUrlSync(url);
         const detectedPlatform = quickParse.platform || platformDetect(url);
-        
+
         // Log incoming request
         if (detectedPlatform) {
             logger.request(detectedPlatform, 'web');
         }
-        
+
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)
         // Skip cache if skipCache flag is set
         if (detectedPlatform && !skipCache) {
@@ -117,11 +136,11 @@ export async function POST(request: NextRequest) {
             if (quickCache.hit && quickCache.data?.success) {
                 logger.cache(detectedPlatform, true);
                 const responseTime = Date.now() - startTime;
-                
+
                 // Track cache hit as successful request
                 const country = getCountryFromHeaders(request.headers);
-                recordDownloadStat(detectedPlatform, true, responseTime, country, 'web').catch(() => {});
-                
+                recordDownloadStat(detectedPlatform, true, responseTime, country, 'web').catch(() => { });
+
                 return NextResponse.json({
                     success: true,
                     data: quickCache.data.data ? { ...quickCache.data.data, responseTime } : quickCache.data.data,
@@ -170,13 +189,13 @@ export async function POST(request: NextRequest) {
             }
             if (resolvedCache.hit && resolvedCache.data?.success) {
                 logger.cache(urlResult.platform, true);
-                
+
                 const responseTime = Date.now() - startTime;
-                
+
                 // Track cache hit as successful request
                 const country = getCountryFromHeaders(request.headers);
-                recordDownloadStat(urlResult.platform, true, responseTime, country, 'web').catch(() => {});
-                
+                recordDownloadStat(urlResult.platform, true, responseTime, country, 'web').catch(() => { });
+
                 return NextResponse.json({
                     success: true,
                     data: resolvedCache.data.data ? { ...resolvedCache.data.data, responseTime } : resolvedCache.data.data,
@@ -236,10 +255,10 @@ export async function POST(request: NextRequest) {
         }
 
         const responseTime = Date.now() - startTime;
-        
+
         // Track download stat (async, don't wait)
         const country = getCountryFromHeaders(request.headers);
-        recordDownloadStat(urlResult.platform, result.success, responseTime, country, 'web').catch(() => {});
+        recordDownloadStat(urlResult.platform, result.success, responseTime, country, 'web').catch(() => { });
 
         return NextResponse.json({
             success: result.success,
@@ -258,8 +277,8 @@ export async function POST(request: NextRequest) {
         console.error('[API v1 PublicServices] Error:', error);
 
         return NextResponse.json(
-            { 
-                success: false, 
+            {
+                success: false,
                 error: error instanceof Error ? error.message : 'Internal server error',
                 meta: {
                     tier: 'free',

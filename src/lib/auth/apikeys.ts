@@ -67,6 +67,13 @@ let lastCleanup = Date.now();
 let keysCache: ApiKey[] = [];
 let lastCacheTime = 0;
 
+// Brute force protection: rate limit validation attempts BEFORE DB query
+const validationAttemptMap = new Map<string, { count: number; resetAt: number }>();
+const MAX_VALIDATION_ATTEMPTS = 10; // Max attempts per minute per key prefix
+const VALIDATION_WINDOW_MS = 60000; // 1 minute window
+const MAX_VALIDATION_ENTRIES = 5000; // Max entries to prevent memory issues
+let lastValidationCleanup = Date.now();
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INTERNAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -99,6 +106,65 @@ function cleanupRateLimits(): void {
         const toRemove = entries.slice(0, rateLimitMap.size - MAX_RATE_LIMIT_ENTRIES);
         toRemove.forEach(([key]) => rateLimitMap.delete(key));
     }
+}
+
+/**
+ * Cleanup expired validation attempt entries
+ * Prevents memory leaks from brute force protection map
+ */
+function cleanupValidationAttempts(): void {
+    const now = Date.now();
+
+    // Only cleanup every minute to avoid performance overhead
+    if (now - lastValidationCleanup < CLEANUP_INTERVAL) {
+        return;
+    }
+    lastValidationCleanup = now;
+
+    // Remove expired entries
+    for (const [key, value] of validationAttemptMap.entries()) {
+        if (value.resetAt < now) {
+            validationAttemptMap.delete(key);
+        }
+    }
+
+    // If still too many entries, remove oldest ones
+    if (validationAttemptMap.size > MAX_VALIDATION_ENTRIES) {
+        const entries = Array.from(validationAttemptMap.entries())
+            .sort((a, b) => a[1].resetAt - b[1].resetAt);
+
+        const toRemove = entries.slice(0, validationAttemptMap.size - MAX_VALIDATION_ENTRIES);
+        toRemove.forEach(([key]) => validationAttemptMap.delete(key));
+    }
+}
+
+/**
+ * Check if validation attempt is allowed (brute force protection)
+ * Uses key prefix (first 8 chars) as identifier to rate limit attempts BEFORE DB query
+ * @returns true if allowed, false if rate limited
+ */
+function checkValidationAttemptLimit(keyPrefix: string): { allowed: boolean; resetIn: number } {
+    const now = Date.now();
+    
+    // Periodic cleanup
+    cleanupValidationAttempts();
+    
+    const entry = validationAttemptMap.get(keyPrefix);
+    
+    // No existing entry or expired - create new window
+    if (!entry || entry.resetAt < now) {
+        validationAttemptMap.set(keyPrefix, { count: 1, resetAt: now + VALIDATION_WINDOW_MS });
+        return { allowed: true, resetIn: VALIDATION_WINDOW_MS };
+    }
+    
+    // Check if limit exceeded
+    if (entry.count >= MAX_VALIDATION_ATTEMPTS) {
+        return { allowed: false, resetIn: entry.resetAt - now };
+    }
+    
+    // Increment count
+    entry.count++;
+    return { allowed: true, resetIn: entry.resetAt - now };
 }
 
 async function getCacheTTL(): Promise<number> {
@@ -318,11 +384,25 @@ export async function apiKeyDelete(id: string): Promise<boolean> {
 /**
  * Validate API key (full validation with rate limiting)
  * NOTE: Uses admin client because api_keys table has RLS that blocks anon access
+ * 
+ * SECURITY: Rate limits validation attempts BEFORE DB query to prevent brute force attacks
  */
 export async function apiKeyValidate(plainKey: string): Promise<ApiKeyValidateResult> {
     if (!plainKey || plainKey.length < 10 || !plainKey.includes('_')) {
         return { valid: false, error: 'Invalid API key format' };
     }
+    
+    // SECURITY: Rate limit validation attempts BEFORE DB query to prevent brute force
+    // Use first 8 chars of key as identifier (includes prefix like "xtf_live" or "xtf_test")
+    const keyPrefix = plainKey.slice(0, 8);
+    const attemptCheck = checkValidationAttemptLimit(keyPrefix);
+    if (!attemptCheck.allowed) {
+        return { 
+            valid: false, 
+            error: `Too many validation attempts. Try again in ${Math.ceil(attemptCheck.resetIn / 1000)}s` 
+        };
+    }
+    
     const hashedInput = hashKey(plainKey);
     // Must use admin client - api_keys table has RLS blocking anon access
     const db = getWriteClient();

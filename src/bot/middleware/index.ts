@@ -24,5 +24,6 @@ export {
 export { 
     maintenanceMiddleware, 
     botIsInMaintenance, 
-    botGetMaintenanceMessage 
+    botGetMaintenanceMessage,
+    botIsGlobalMaintenance,
 } from './maintenance';

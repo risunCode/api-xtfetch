@@ -4,6 +4,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { isIP } from 'net';
+import dns from 'dns/promises';
 import { type PlatformId } from '@/core/config';
 import { httpGetRotatingHeaders as getRotatingHeaders } from '@/lib/http';
 
@@ -20,26 +22,87 @@ const ALLOWED_PROXY_DOMAINS = [
     'sinaimg.cn', 'weibocdn.com',
     // YouTube CDN (covers all *.googlevideo.com including manifest, rr1---, etc.)
     'googlevideo.com', 'ytimg.com', 'ggpht.com',
-    // YouTube external download API
-    'ccproject.serv00.net',
 ];
 
-function isAllowedProxyUrl(url: string): boolean {
+// Comprehensive private IP detection
+function isPrivateIP(ip: string): boolean {
+    // IPv4 private/reserved ranges
+    const ipv4Patterns = [
+        /^127\./,                              // Loopback
+        /^10\./,                               // Class A private
+        /^172\.(1[6-9]|2\d|3[01])\./,          // Class B private
+        /^192\.168\./,                         // Class C private
+        /^169\.254\./,                         // Link-local
+        /^0\./,                                // Current network
+        /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // Carrier-grade NAT
+        /^192\.0\.0\./,                        // IETF Protocol
+        /^192\.0\.2\./,                        // TEST-NET-1
+        /^198\.51\.100\./,                     // TEST-NET-2
+        /^203\.0\.113\./,                      // TEST-NET-3
+        /^224\./,                              // Multicast
+        /^240\./,                              // Reserved
+        /^255\.255\.255\.255$/,                // Broadcast
+    ];
+
+    // IPv6 private/reserved ranges
+    const ipv6Patterns = [
+        /^::1$/i,                              // Loopback
+        /^fe80:/i,                             // Link-local
+        /^fc00:/i,                             // Unique local
+        /^fd00:/i,                             // Unique local
+        /^ff00:/i,                             // Multicast
+        /^::$/,                                // Unspecified
+        /^::ffff:(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.)/i, // IPv4-mapped private
+    ];
+
+    return [...ipv4Patterns, ...ipv6Patterns].some(pattern => pattern.test(ip));
+}
+
+// SSRF-safe URL validation with DNS resolution
+async function isAllowedProxyUrl(url: string): Promise<boolean> {
     try {
         const parsed = new URL(url);
         const hostname = parsed.hostname.toLowerCase();
 
-        // Block private IPs and localhost
-        if (/^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.|localhost|::1)/i.test(hostname)) {
-            return false;
-        }
-
-        // Block non-http(s) protocols
+        // 1. Block non-http(s) protocols
         if (!['http:', 'https:'].includes(parsed.protocol)) {
             return false;
         }
 
-        // Check against allowed CDN domains
+        // 2. Block obvious localhost variations
+        if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+            return false;
+        }
+
+        // 3. Resolve DNS to get actual IPs (prevents DNS rebinding)
+        let resolvedIPs: string[] = [];
+
+        if (isIP(hostname)) {
+            // Direct IP address
+            resolvedIPs = [hostname];
+        } else {
+            // Resolve hostname to IPs
+            try {
+                const ipv4 = await dns.resolve4(hostname).catch(() => []);
+                const ipv6 = await dns.resolve6(hostname).catch(() => []);
+                resolvedIPs = [...ipv4, ...ipv6];
+            } catch {
+                return false; // DNS resolution failed
+            }
+        }
+
+        // 4. Check ALL resolved IPs - block if ANY is private
+        if (resolvedIPs.length === 0) {
+            return false;
+        }
+
+        for (const ip of resolvedIPs) {
+            if (isPrivateIP(ip)) {
+                return false;
+            }
+        }
+
+        // 5. Check against allowed CDN domains whitelist
         return ALLOWED_PROXY_DOMAINS.some(domain =>
             hostname === domain || hostname.endsWith('.' + domain)
         );
@@ -52,7 +115,7 @@ function isAllowedProxyUrl(url: string): boolean {
 function fullyDecodeUrl(url: string): string {
     let decoded = url;
     let maxDecodes = 10;
-    
+
     // Keep decoding until stable
     while (maxDecodes-- > 0) {
         try {
@@ -65,7 +128,7 @@ function fullyDecodeUrl(url: string): string {
             break;
         }
     }
-    
+
     // Extra pass: replace any remaining %25XX sequences (triple+ encoded)
     let extraPass = 5;
     while (extraPass-- > 0 && decoded.includes('%25')) {
@@ -76,7 +139,7 @@ function fullyDecodeUrl(url: string): string {
             break;
         }
     }
-    
+
     return decoded;
 }
 
@@ -84,16 +147,16 @@ function fullyDecodeUrl(url: string): string {
 function rewriteM3u8Playlist(content: string, baseUrl: string, platform: string, proxyBaseUrl: string): string {
     const lines = content.split('\n');
     const rewritten: string[] = [];
-    
+
     for (const line of lines) {
         const trimmed = line.trim();
-        
+
         // Skip empty lines and comments (but keep them in output)
         if (!trimmed || trimmed.startsWith('#')) {
             rewritten.push(line);
             continue;
         }
-        
+
         // This is a segment URL - make it absolute and wrap in proxy
         let segmentUrl = trimmed;
         if (!segmentUrl.startsWith('http')) {
@@ -106,12 +169,12 @@ function rewriteM3u8Playlist(content: string, baseUrl: string, platform: string,
                 segmentUrl = baseDir + segmentUrl;
             }
         }
-        
+
         // Wrap in proxy URL
         const proxiedSegment = `${proxyBaseUrl}?url=${encodeURIComponent(segmentUrl)}&platform=${platform}&inline=1`;
         rewritten.push(proxiedSegment);
     }
-    
+
     return rewritten.join('\n');
 }
 
@@ -125,7 +188,7 @@ export async function GET(request: NextRequest) {
         const hlsRewrite = request.nextUrl.searchParams.get('hls') === '1'; // Rewrite m3u8 for native HLS
 
         if (!url) {
-            return NextResponse.json({ 
+            return NextResponse.json({
                 success: false,
                 error: 'URL parameter is required',
                 meta: {
@@ -139,8 +202,8 @@ export async function GET(request: NextRequest) {
         url = fullyDecodeUrl(url);
 
         // SSRF Prevention
-        if (!isAllowedProxyUrl(url)) {
-            return NextResponse.json({ 
+        if (!await isAllowedProxyUrl(url)) {
+            return NextResponse.json({
                 success: false,
                 error: 'URL not allowed - only CDN domains are supported',
                 meta: {
@@ -153,7 +216,7 @@ export async function GET(request: NextRequest) {
         // Build headers - use YouTube-specific headers for googlevideo.com
         const isYouTubeCDN = url.includes('googlevideo.com') || url.includes('youtube.com');
         let headers: Record<string, string>;
-        
+
         if (isYouTubeCDN) {
             // YouTube - use iOS/macOS Safari headers + cookie for better compatibility
             headers = {
@@ -178,22 +241,22 @@ export async function GET(request: NextRequest) {
             try {
                 const headRes = await fetch(url, { method: 'HEAD', headers, redirect: 'follow' });
                 const size = headRes.headers.get('content-length') || '0';
-                return new NextResponse(null, { 
-                    status: 200, 
-                    headers: { 
+                return new NextResponse(null, {
+                    status: 200,
+                    headers: {
                         'x-file-size': size,
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Expose-Headers': 'x-file-size',
-                    } 
+                    }
                 });
             } catch {
-                return new NextResponse(null, { 
-                    status: 200, 
-                    headers: { 
+                return new NextResponse(null, {
+                    status: 200,
+                    headers: {
                         'x-file-size': '0',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Expose-Headers': 'x-file-size',
-                    } 
+                    }
                 });
             }
         }
@@ -204,10 +267,10 @@ export async function GET(request: NextRequest) {
             headers['Range'] = rangeHeader;
         }
 
-        const response = await fetch(url, { headers, redirect: 'follow' });
+        const response = await fetch(url, { headers, redirect: 'error' });
 
         if (!response.ok) {
-            return NextResponse.json({ 
+            return NextResponse.json({
                 success: false,
                 error: `Download failed: ${response.status}`,
                 meta: {
@@ -226,13 +289,13 @@ export async function GET(request: NextRequest) {
         // This enables native HLS playback on iOS which doesn't support HLS.js
         if (hlsRewrite && (url.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('x-mpegURL'))) {
             const m3u8Content = await response.text();
-            
+
             // Get the proxy base URL from request
             const proxyBaseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}/api/v1/proxy`;
-            
+
             // Rewrite the playlist
             const rewrittenContent = rewriteM3u8Playlist(m3u8Content, url, platform, proxyBaseUrl);
-            
+
             return new NextResponse(rewrittenContent, {
                 status: 200,
                 headers: {
@@ -268,7 +331,7 @@ export async function GET(request: NextRequest) {
         const status = response.status === 206 ? 206 : 200;
         return new NextResponse(response.body, { status, headers: responseHeaders });
     } catch (error) {
-        return NextResponse.json({ 
+        return NextResponse.json({
             success: false,
             error: error instanceof Error ? error.message : 'Download failed',
             meta: {

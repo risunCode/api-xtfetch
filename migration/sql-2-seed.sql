@@ -699,7 +699,7 @@ INSERT INTO service_config (platform, enabled, rate_limit, require_cookie, requi
 -- Insert default system_config settings (JSONB format)
 -- service_global: Main config used by serviceConfigLoad() and serviceConfigSaveGlobal()
 INSERT INTO system_config (key, value, description) VALUES
-    ('service_global', '{"maintenanceMode":false,"maintenanceType":"off","maintenanceMessage":"🔧 XTFetch is under maintenance. Please try again later.","globalRateLimit":15,"playgroundEnabled":true,"playgroundRateLimit":5,"geminiRateLimit":60,"geminiRateWindow":1,"apiKeyRequired":false,"lastUpdated":"2025-01-01T00:00:00.000Z"}', 'Global service configuration');
+    ('service_global', '{"maintenanceMode":false,"maintenanceType":"off","maintenanceMessage":"🔧 DownAria is under maintenance. Please try again later.","globalRateLimit":10,"playgroundEnabled":true,"playgroundRateLimit":3,"geminiRateLimit":60,"geminiRateWindow":1,"apiKeyRequired":false,"lastUpdated":"2025-01-01T00:00:00.000Z"}', 'Global service configuration');
 
 -- ============================================================================
 -- SECTION I: GRANTS

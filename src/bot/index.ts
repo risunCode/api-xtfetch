@@ -20,7 +20,7 @@ import {
     helpComposer, 
     statusComposer, 
     historyComposer, 
-    premiumComposer,
+    donateComposer,
     mystatusComposer,
     menuComposer,
     privacyComposer,
@@ -73,7 +73,7 @@ function getBotInstance(): Bot<BotContext> {
         botInstance.use(helpComposer);
         botInstance.use(statusComposer);
         botInstance.use(historyComposer);
-        botInstance.use(premiumComposer);
+        botInstance.use(donateComposer);  // Handles both /donate and /premium
         botInstance.use(mystatusComposer);
         botInstance.use(menuComposer);
         botInstance.use(privacyComposer);

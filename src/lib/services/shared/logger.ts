@@ -7,6 +7,41 @@ import { PlatformId } from '@/core/config';
 
 type LogLevel = 'info' | 'error' | 'debug';
 
+// ═══════════════════════════════════════════════════════════════
+// SECURITY: Patterns to detect and redact sensitive data in logs
+// ═══════════════════════════════════════════════════════════════
+
+const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+    // JWT tokens (Supabase, custom)
+    { pattern: /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, replacement: '[JWT_REDACTED]' },
+    // Telegram bot tokens (format: 123456789:ABCdefGHI...)
+    { pattern: /\d{8,10}:[A-Za-z0-9_-]{35}/g, replacement: '[BOT_TOKEN_REDACTED]' },
+    // API keys (sk_, pk_, key_, api_, etc.)
+    { pattern: /\b(sk_|pk_|key_|api_)[a-zA-Z0-9]{20,}/gi, replacement: '[API_KEY_REDACTED]' },
+    // Supabase service role key pattern
+    { pattern: /service_role['":\s]+[a-zA-Z0-9._-]+/gi, replacement: 'service_role:[REDACTED]' },
+    // Redis URLs with credentials
+    { pattern: /rediss?:\/\/[^@]+@[^\s]+/gi, replacement: '[REDIS_URL_REDACTED]' },
+    // Generic secrets in env format
+    { pattern: /(SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL)['"=:\s]+[^\s'"]+/gi, replacement: '$1=[REDACTED]' },
+    // Email addresses (partial redaction)
+    { pattern: /([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, replacement: '[EMAIL_REDACTED]@$2' },
+];
+
+/**
+ * Sanitize log message to prevent secret leakage
+ * Redacts JWT tokens, API keys, bot tokens, and other sensitive data
+ */
+function sanitizeLogMessage(message: string): string {
+    if (!message || typeof message !== 'string') return message;
+    
+    let sanitized = message;
+    for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
+        sanitized = sanitized.replace(pattern, replacement);
+    }
+    return sanitized;
+}
+
 const COLORS = {
     info: '\x1b[36m',
     error: '\x1b[31m',
@@ -47,17 +82,17 @@ export const logger = {
     },
 
     url: (platform: PlatformId | string, url: string) => {
-        if (shouldLog('info')) console.log(`${COLORS.info}${tag(platform)}${COLORS.reset} URL: ${url}`);
+        if (shouldLog('info')) console.log(`${COLORS.info}${tag(platform)}${COLORS.reset} URL: ${sanitizeLogMessage(url)}`);
     },
 
     resolve: (platform: PlatformId | string, originalUrl: string, resolvedUrl: string) => {
         if (shouldLog('info') && originalUrl !== resolvedUrl) {
-            console.log(`${COLORS.info}${tag(platform, 'Resolve')}${COLORS.reset} → ${resolvedUrl}`);
+            console.log(`${COLORS.info}${tag(platform, 'Resolve')}${COLORS.reset} → ${sanitizeLogMessage(resolvedUrl)}`);
         }
     },
 
     type: (platform: PlatformId | string, contentType: string) => {
-        if (shouldLog('info')) console.log(`${COLORS.info}${tag(platform, 'Type')}${COLORS.reset} Detected: ${contentType}`);
+        if (shouldLog('info')) console.log(`${COLORS.info}${tag(platform, 'Type')}${COLORS.reset} Detected: ${sanitizeLogMessage(contentType)}`);
     },
 
     media: (platform: PlatformId | string, counts: { videos?: number; images?: number; audio?: number }) => {
@@ -88,7 +123,7 @@ export const logger = {
     redis: (platform: PlatformId | string, hit: boolean, key?: string) => {
         if (shouldLog('info')) {
             const status = hit ? '✓ Redis hit' : '○ Redis miss';
-            const keyInfo = key ? ` [${key.substring(0, 50)}${key.length > 50 ? '...' : ''}]` : '';
+            const keyInfo = key ? ` [${sanitizeLogMessage(key.substring(0, 50))}${key.length > 50 ? '...' : ''}]` : '';
             console.log(`${COLORS.info}${tag(platform, 'Redis')}${COLORS.reset} ${status}${keyInfo}`);
         }
     },
@@ -96,9 +131,9 @@ export const logger = {
     meta: (platform: PlatformId | string, data: { title?: string; author?: string; type?: string; formats?: number }) => {
         if (!shouldLog('info')) return;
         const parts: string[] = [];
-        if (data.title) parts.push(`"${data.title.substring(0, 40)}${data.title.length > 40 ? '...' : ''}"`);
-        if (data.author) parts.push(`@${data.author.replace('@', '')}`);
-        if (data.type) parts.push(data.type);
+        if (data.title) parts.push(`"${sanitizeLogMessage(data.title.substring(0, 40))}${data.title.length > 40 ? '...' : ''}"`);
+        if (data.author) parts.push(`@${sanitizeLogMessage(data.author.replace('@', ''))}`);
+        if (data.type) parts.push(sanitizeLogMessage(data.type));
         if (data.formats !== undefined) parts.push(`${data.formats} format(s)`);
         if (parts.length) console.log(`${COLORS.info}${tag(platform, 'Meta')}${COLORS.reset} ${parts.join(' | ')}`);
     },
@@ -110,20 +145,20 @@ export const logger = {
     error: (platform: PlatformId | string, error: unknown, errorType?: string) => {
         const msg = error instanceof Error ? error.message : String(error);
         const typeTag = errorType ? ` [${errorType}]` : '';
-        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗${typeTag} ${msg}`);
+        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗${typeTag} ${sanitizeLogMessage(msg)}`);
     },
 
     // Specific error type logging
     scrapeError: (platform: PlatformId | string, errorCode: string, message?: string) => {
         const msg = message || errorCode;
-        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗ [SCRAPE] ${msg}`);
+        console.error(`${COLORS.error}${tag(platform)}${COLORS.reset} ✗ [SCRAPE] ${sanitizeLogMessage(msg)}`);
     },
 
     warn: (platform: PlatformId | string, message: string) => {
-        if (shouldLog('info')) console.log(`${COLORS.warn}${tag(platform)}${COLORS.reset} ⚠ ${message}`);
+        if (shouldLog('info')) console.log(`${COLORS.warn}${tag(platform)}${COLORS.reset} ⚠ ${sanitizeLogMessage(message)}`);
     },
 
     debug: (platform: PlatformId | string, message: string) => {
-        if (shouldLog('debug')) console.log(`${COLORS.debug}${tag(platform)}${COLORS.reset} ${message}`);
+        if (shouldLog('debug')) console.log(`${COLORS.debug}${tag(platform)}${COLORS.reset} ${sanitizeLogMessage(message)}`);
     },
 };

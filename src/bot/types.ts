@@ -143,6 +143,7 @@ export interface DownloadResult {
     }>;
     error?: string;
     errorCode?: string;
+    usedCookie?: boolean;  // true if cookie was used to fetch content
 }
 
 // ============================================================================
@@ -151,14 +152,19 @@ export interface DownloadResult {
 
 /** Rate limit constants */
 export const RATE_LIMITS = {
-    /** Max downloads per reset period for free users */
-    FREE_DOWNLOAD_LIMIT: 10,
-    /** Reset period in hours for free users */
-    FREE_RESET_HOURS: 6,
+    /** Max downloads per day for free users (resets at midnight WIB) */
+    FREE_DOWNLOAD_LIMIT: 8,
     /** Cooldown between downloads for free users (seconds) */
-    FREE_COOLDOWN_SECONDS: 5,
-    /** Premium users have no limits */
+    FREE_COOLDOWN_SECONDS: 4,
+    /** Cooldown between downloads for free users (milliseconds) */
+    FREE_COOLDOWN_MS: 4000,
+    /** Donator users have no limits */
+    DONATOR_DOWNLOAD_LIMIT: Infinity,
+    DONATOR_COOLDOWN_SECONDS: 0,
+    DONATOR_COOLDOWN_MS: 0,
+    /** @deprecated Use DONATOR_* instead */
     PREMIUM_DOWNLOAD_LIMIT: Infinity,
+    /** @deprecated Use DONATOR_* instead */
     PREMIUM_COOLDOWN_SECONDS: 0,
 } as const;
 
@@ -169,7 +175,7 @@ export const BOT_MESSAGES = {
     ERROR_GENERIC: 'Download failed.',
     ERROR_UNSUPPORTED: 'Unsupported link.',
     ERROR_RATE_LIMIT: 'Wait {seconds}s.',
-    ERROR_LIMIT_REACHED: 'Limit reached ({limit}/{hours}h). Resets in {reset}.',
+    ERROR_LIMIT_REACHED: 'Daily limit reached. Resets at 00:00 WIB.',
     ERROR_BANNED: 'Account suspended.',
     WELCOME: 'DownAria Bot\n\nPaste any video link.\n\nSupported: YouTube, Instagram, TikTok, X, Facebook, Weibo',
 } as const;

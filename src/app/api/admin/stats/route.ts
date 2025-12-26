@@ -43,13 +43,12 @@ export async function GET(request: NextRequest) {
     // Debug: Log incoming request headers
     const authHeader = request.headers.get('Authorization');
     const origin = request.headers.get('origin');
-    const bridgeSecret = request.headers.get('x-bridge-secret');
-    console.log(`[Stats] Auth: ${authHeader ? 'Present' : 'Missing'}, Origin: ${origin || 'none'}, Bridge: ${bridgeSecret ? 'Yes' : 'No'}`);
-    
+    console.log(`[Stats] Auth: ${authHeader ? 'Present' : 'Missing'}, Origin: ${origin || 'none'}`);
+
     try {
         const auth = await authVerifyAdminSession(request);
         console.log(`[Stats] Auth result: valid=${auth.valid}, error=${auth.error}, role=${auth.role}`);
-        
+
         if (!auth.valid) {
             return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
         }
@@ -132,7 +131,7 @@ export async function GET(request: NextRequest) {
             ip_address: e.ip_address || e.ip_hash || null,
             timestamp: e.timestamp || e.created_at,
         }));
-        
+
         errors.forEach(e => {
             errorsByCode[e.error_code] = (errorsByCode[e.error_code] || 0) + 1;
         });

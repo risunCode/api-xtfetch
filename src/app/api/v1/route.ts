@@ -111,7 +111,6 @@ export async function GET(request: NextRequest) {
                     meta: {
                         tier: 'premium',
                         platform: detectedPlatform,
-                        apiKey: apiKey.substring(0, 8) + '...',
                         rateLimit: keyValidation.rateLimit,
                         endpoint: '/api/v1'
                     }
@@ -175,7 +174,6 @@ export async function GET(request: NextRequest) {
                     meta: {
                         tier: 'premium',
                         platform: urlResult.platform,
-                        apiKey: apiKey.substring(0, 8) + '...',
                         rateLimit: keyValidation.rateLimit,
                         endpoint: '/api/v1'
                     }
@@ -248,7 +246,6 @@ export async function GET(request: NextRequest) {
             meta: {
                 tier: 'premium',
                 platform: urlResult.platform,
-                apiKey: apiKey.substring(0, 8) + '...',
                 rateLimit: keyValidation.rateLimit,
                 endpoint: '/api/v1'
             }

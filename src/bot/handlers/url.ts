@@ -9,7 +9,7 @@
  * - Photo (album): Send all photos as media group with Original URL button
  */
 
-import { Bot, InputFile } from 'grammy';
+import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import type { InputMediaPhoto } from 'grammy/types';
 
 import { platformDetect, type PlatformId } from '@/core/config';
@@ -22,7 +22,8 @@ import { recordDownloadStat } from '@/lib/database';
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectDetailedQualities } from '../keyboards';
+import { botIsGlobalMaintenance } from '../middleware/maintenance';
+import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 
 // ============================================================================
@@ -40,6 +41,10 @@ const SUPPORTED_DOMAINS = [
     'weibo.com', 'weibo.cn',
 ];
 
+// Multi-URL limits
+const MAX_URLS_FREE = 1;
+const MAX_URLS_DONATOR = 5;
+
 function botUrlExtract(text: string): string | null {
     const matches = text.match(URL_REGEX);
     if (!matches) return null;
@@ -56,6 +61,35 @@ function botUrlExtract(text: string): string | null {
         }
     }
     return null;
+}
+
+/**
+ * Extract social media URLs from text
+ * @param text - Message text
+ * @param maxUrls - Maximum URLs to extract
+ * @returns Array of valid social media URLs
+ */
+function extractSocialUrls(text: string, maxUrls: number): string[] {
+    const matches = text.match(URL_REGEX) || [];
+    const validUrls: string[] = [];
+    
+    for (const url of matches) {
+        if (validUrls.length >= maxUrls) break;
+        
+        try {
+            const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+            const isSupported = SUPPORTED_DOMAINS.some(domain => 
+                hostname === domain || hostname.endsWith('.' + domain)
+            );
+            if (isSupported && !validUrls.includes(url)) {
+                validUrls.push(url);
+            }
+        } catch {
+            continue;
+        }
+    }
+    
+    return validUrls;
 }
 
 function botUrlGetPlatformName(platform: PlatformId): string {
@@ -110,6 +144,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
                 thumbnail: result.data.thumbnail,
                 author: result.data.author,
                 formats: result.data.formats,
+                usedCookie: !!poolCookie,  // Track whether cookie was used
             };
         }
 
@@ -201,6 +236,10 @@ function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumE
 
 /**
  * Send video directly (non-YouTube)
+ * 
+ * Smart quality logic:
+ * - If HD filesize ≤ 40MB → Send HD directly, show only [🔗 Original]
+ * - If HD filesize > 40MB → Send SD as fallback, show [🎬 HD (link)] [🔗 Original]
  */
 async function sendVideoDirectly(
     ctx: BotContext,
@@ -212,16 +251,40 @@ async function sendVideoDirectly(
     const videos = result.formats?.filter(f => f.type === 'video') || [];
     if (videos.length === 0) return false;
 
-    const hdVideo = videos.find(f => 
-        f.quality.includes('1080') || f.quality.includes('720') || f.quality.toLowerCase().includes('hd')
-    );
-    const videoToSend = hdVideo || videos[0];
+    // Find HD video (1080p, 720p, hd, fullhd, high, original)
+    const hdVideo = videos.find(f => {
+        const q = f.quality.toLowerCase();
+        return q.includes('1080') || q.includes('720') || q.includes('hd') || 
+               q.includes('fullhd') || q.includes('high') || q.includes('original');
+    });
+    
+    // Find SD video (480p, 360p, sd, low, medium) or fallback to last video
+    const sdVideo = videos.find(f => {
+        const q = f.quality.toLowerCase();
+        return q.includes('480') || q.includes('360') || q.includes('sd') || 
+               q.includes('low') || q.includes('medium');
+    }) || (videos.length > 1 ? videos[videos.length - 1] : undefined);
+
+    // Determine if HD exceeds Telegram's filesize limit
+    const hdExceedsLimit = hdVideo?.filesize && hdVideo.filesize > MAX_TELEGRAM_FILESIZE;
+    
+    // Select video to send: SD fallback if HD exceeds limit, otherwise HD (or first available)
+    const videoToSend = hdExceedsLimit && sdVideo ? sdVideo : (hdVideo || videos[0]);
 
     // Get premium expiry days if user is premium
     const premiumExpiryDays = getPremiumExpiryDays(ctx);
-    const caption = buildCaption(result, lang, premiumExpiryDays);
-    const qualities = detectDetailedQualities(result);
-    const keyboard = buildVideoKeyboard(originalUrl, visitorId, qualities);
+    let caption = buildCaption(result, lang, premiumExpiryDays);
+    
+    // Build appropriate keyboard based on whether we're using fallback
+    let keyboard;
+    if (hdExceedsLimit && hdVideo) {
+        // HD exceeds limit - sent SD as fallback, show HD as external link
+        keyboard = buildVideoFallbackKeyboard(hdVideo.url, originalUrl);
+        caption += '\n\n⚠️ HD exceeds 40MB limit';
+    } else {
+        // HD sent successfully (or no HD available) - show only Original link
+        keyboard = buildVideoSuccessKeyboard(originalUrl);
+    }
 
     try {
         await ctx.replyWithVideo(new InputFile({ url: videoToSend.url }), {
@@ -233,14 +296,40 @@ async function sendVideoDirectly(
     } catch (error) {
         logger.error('telegram', error, 'SEND_VIDEO');
         
+        // Fallback: Send thumbnail with download buttons instead of raw link
         try {
-            await ctx.reply(`📥 Download:\n\n${caption}\n\n${videoToSend.url}`, {
-                parse_mode: 'Markdown',
-                reply_markup: keyboard,
-                link_preview_options: { is_disabled: true },
-            });
+            const fallbackCaption = lang === 'id'
+                ? `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
+                  `${result.title ? escapeMarkdown(result.title) + '\n' : ''}` +
+                  `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
+                  `⚠️ Video terlalu besar untuk dikirim langsung.`
+                : `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
+                  `${result.title ? escapeMarkdown(result.title) + '\n' : ''}` +
+                  `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
+                  `⚠️ Video too large to send directly.`;
+            
+            const fallbackKeyboard = new InlineKeyboard()
+                .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), videoToSend.url)
+                .url('🔗 Original', originalUrl);
+            
+            // Try to send thumbnail with buttons
+            if (result.thumbnail) {
+                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+                    caption: fallbackCaption,
+                    parse_mode: 'Markdown',
+                    reply_markup: fallbackKeyboard,
+                });
+            } else {
+                // No thumbnail, send text message with buttons
+                await ctx.reply(fallbackCaption, {
+                    parse_mode: 'Markdown',
+                    reply_markup: fallbackKeyboard,
+                    link_preview_options: { is_disabled: true },
+                });
+            }
             return true;
-        } catch {
+        } catch (fallbackError) {
+            logger.error('telegram', fallbackError, 'SEND_VIDEO_FALLBACK');
             return false;
         }
     }
@@ -505,7 +594,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         
         // Skip known commands
         if (text.startsWith('/')) {
-            const knownCommands = ['/start', '/help', '/mystatus', '/history', '/premium', '/menu', '/privacy', '/status', '/stats', '/broadcast', '/ban', '/unban', '/givepremium', '/maintenance'];
+            const knownCommands = ['/start', '/help', '/mystatus', '/history', '/donate', '/menu', '/privacy', '/status', '/stats', '/broadcast', '/ban', '/unban', '/givevip', '/revokevip', '/maintenance'];
             const cmd = text.split(' ')[0].toLowerCase();
             
             if (!knownCommands.includes(cmd)) {
@@ -516,46 +605,84 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             return;
         }
         
-        const url = botUrlExtract(text);
-        if (!url) {
+        // Determine URL limit based on user type
+        const maxUrls = ctx.isPremium ? MAX_URLS_DONATOR : MAX_URLS_FREE;
+        const urls = extractSocialUrls(text, maxUrls);
+        
+        if (urls.length === 0) {
             await ctx.reply(t('unknown_text', lang), {
                 reply_parameters: { message_id: ctx.message.message_id },
             });
             return;
         }
-
-        const platform = platformDetect(url);
-        if (!platform) {
-            await ctx.reply(t('error_unsupported', lang), {
+        
+        // Count total URLs in message for warning
+        const allMatches = text.match(URL_REGEX) || [];
+        const totalUrls = allMatches.filter(url => {
+            try {
+                const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+                return SUPPORTED_DOMAINS.some(d => hostname === d || hostname.endsWith('.' + d));
+            } catch { return false; }
+        }).length;
+        
+        // Warn if URLs were ignored
+        if (totalUrls > urls.length) {
+            const ignored = totalUrls - urls.length;
+            const warning = ctx.isPremium
+                ? (lang === 'id' 
+                    ? `⚠️ ${ignored} URL diabaikan (max ${MAX_URLS_DONATOR}/pesan)`
+                    : `⚠️ ${ignored} URLs ignored (max ${MAX_URLS_DONATOR}/message)`)
+                : (lang === 'id'
+                    ? `⚠️ ${ignored} URL diabaikan. Free user: 1 URL/pesan. Gunakan /donate untuk multi-URL!`
+                    : `⚠️ ${ignored} URLs ignored. Free users: 1 URL/message. Use /donate for multi-URL!`);
+            
+            await ctx.reply(warning, {
                 reply_parameters: { message_id: ctx.message.message_id },
             });
-            return;
         }
-
-        ctx.session.pendingRetryUrl = url;
-        ctx.session.lastPlatform = platform;
-
-        const processingMsgId = await sendProcessingMessage(ctx, platform);
-        if (!processingMsgId) return;
-
-        const result = await botUrlCallScraper(url, ctx.isPremium || false);
-
-        if (result.success) {
-            await deleteMessage(ctx, processingMsgId);
-            
-            const visitorId = generateVisitorId();
-            const sent = await sendMediaByType(ctx, result, url, visitorId);
-            
-            if (sent) {
-                await deleteMessage(ctx, ctx.message.message_id);
-                await botRateLimitRecordDownload(ctx);
-            } else {
-                await ctx.reply(t('error_generic', lang), {
-                    reply_markup: errorKeyboard(url),
+        
+        // Process URLs sequentially
+        for (const url of urls) {
+            // Check global maintenance mode (synced with frontend via Redis)
+            const isGlobalMaintenance = await botIsGlobalMaintenance();
+            if (isGlobalMaintenance && !ctx.isAdmin) {
+                await ctx.reply('🚧 Service is under maintenance. Please try again later.', {
+                    reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
                 });
+                return;
             }
-        } else {
-            await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
+
+            const platform = platformDetect(url);
+            if (!platform) continue;
+
+            ctx.session.pendingRetryUrl = url;
+            ctx.session.lastPlatform = platform;
+
+            const processingMsgId = await sendProcessingMessage(ctx, platform);
+            if (!processingMsgId) continue;
+
+            const result = await botUrlCallScraper(url, ctx.isPremium || false);
+
+            if (result.success) {
+                await deleteMessage(ctx, processingMsgId);
+                
+                const visitorId = generateVisitorId();
+                const sent = await sendMediaByType(ctx, result, url, visitorId);
+                
+                if (sent) {
+                    // Only delete user message on first successful download
+                    if (url === urls[0]) {
+                        await deleteMessage(ctx, ctx.message.message_id);
+                    }
+                    await botRateLimitRecordDownload(ctx);
+                } else {
+                    await ctx.reply(t('error_generic', lang), {
+                        reply_markup: errorKeyboard(url),
+                    });
+                }
+            } else {
+                await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
+            }
         }
     });
 }

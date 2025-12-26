@@ -13,7 +13,7 @@ export { startComposer, botUserRegister, botUserGetTodayStats } from './start';
 export { helpComposer } from './help';
 export { statusComposer } from './status';
 export { historyComposer, botDownloadGetHistory } from './history';
-export { premiumComposer, botUserLinkApiKey, botUserHasPremium } from './premium';
+export { donateComposer, botUserLinkApiKey, botUserHasPremium, botUserHasDonatorStatus } from './donate';
 export { mystatusComposer, botUserGetPremiumStatus, botUserGetTotalDownloads } from './mystatus';
 export { menuComposer } from './menu';
 export { privacyComposer } from './privacy';

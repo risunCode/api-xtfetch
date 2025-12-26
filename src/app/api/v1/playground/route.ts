@@ -11,8 +11,9 @@ import { logger } from '@/lib/services/shared/logger';
 import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
+import { authVerifyAdminSession } from '@/core/security';
 
-// GET method for browser testing
+// GET is public - returns rate limit status only (no scraping)
 export async function GET(request: NextRequest) {
     const startTime = Date.now();
     
@@ -115,9 +116,18 @@ export async function GET(request: NextRequest) {
     }
 }
 
-// POST method for API integration
+// POST method for API integration - requires admin authentication
 export async function POST(request: NextRequest) {
     const startTime = Date.now();
+    
+    // ✅ Require admin authentication for POST (scraping)
+    const auth = await authVerifyAdminSession(request);
+    if (!auth.valid) {
+        return NextResponse.json(
+            { success: false, error: 'Admin authentication required', code: 'AUTH_REQUIRED' },
+            { status: 401 }
+        );
+    }
     
     // Load config from DB (service_config table - synced with admin console)
     await serviceConfigLoad();
@@ -209,14 +219,38 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// Support OPTIONS for CORS
-export async function OPTIONS() {
+// Support OPTIONS for CORS - use same origin validation as middleware
+export async function OPTIONS(request: NextRequest) {
+    const origin = request.headers.get('Origin');
+    
+    // Allowed origins (should match middleware ALLOWED_ORIGINS)
+    const ALLOWED_ORIGINS = [
+        'https://downaria.vercel.app',
+        'https://api-xtfetch.vercel.app',
+        'https://xtfetch-api-production.up.railway.app',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://localhost:3003',
+    ];
+    
+    const headers: Record<string, string> = {
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    };
+    
+    // Only set CORS origin if it's in the allowed list
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers['Access-Control-Allow-Credentials'] = 'true';
+    } else if (process.env.NODE_ENV === 'development' && origin?.startsWith('http://localhost:')) {
+        // Allow localhost in development
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers['Access-Control-Allow-Credentials'] = 'true';
+    }
+    // If no valid origin, don't set CORS headers (browser will block)
+    
     return new NextResponse(null, {
         status: 200,
-        headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        },
+        headers,
     });
 }

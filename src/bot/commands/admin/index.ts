@@ -56,7 +56,7 @@ export function botAdminIsAuthorized(userId: number): boolean {
 import { statsComposer } from './stats';
 import { broadcastComposer } from './broadcast';
 import { banComposer } from './ban';
-import { givepremiumComposer } from './givepremium';
+import { givevipComposer } from './givevip';
 import { maintenanceComposer } from './maintenance';
 
 /**
@@ -66,7 +66,7 @@ import { maintenanceComposer } from './maintenance';
 export const adminComposer = new Composer<Context>();
 
 // Admin commands list for filtering
-const adminCommands = ['stats', 'broadcast', 'ban', 'unban', 'givepremium', 'maintenance'];
+const adminCommands = ['stats', 'broadcast', 'ban', 'unban', 'givevip', 'revokevip', 'maintenance'];
 
 // Only intercept admin commands with admin check
 adminComposer.command(adminCommands, adminMiddleware());
@@ -75,7 +75,7 @@ adminComposer.command(adminCommands, adminMiddleware());
 adminComposer.use(statsComposer);
 adminComposer.use(broadcastComposer);
 adminComposer.use(banComposer);
-adminComposer.use(givepremiumComposer);
+adminComposer.use(givevipComposer);
 adminComposer.use(maintenanceComposer);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -85,5 +85,5 @@ adminComposer.use(maintenanceComposer);
 export { statsComposer } from './stats';
 export { broadcastComposer } from './broadcast';
 export { banComposer } from './ban';
-export { givepremiumComposer, botAdminGivePremium, botAdminRevokePremium } from './givepremium';
+export { givevipComposer, botAdminGiveVip, botAdminRevokeVip } from './givevip';
 export { maintenanceComposer, botBroadcastMessage, botGetAllUserIds } from './maintenance';

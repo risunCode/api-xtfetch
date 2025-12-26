@@ -1,14 +1,14 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * BOT ADMIN COMMAND - /givepremium
+ * BOT ADMIN COMMAND - /givevip
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * Give premium access to a user with preset or custom duration.
+ * Give VIP/donator access to a user with preset or custom duration.
  * Usage: 
- *   /givepremium <user_id> <duration>
+ *   /givevip <user_id> <duration>
  *   Duration: 7d, 30d, 90d, 365d, lifetime, or custom days
  * 
- * @module bot/commands/admin/givepremium
+ * @module bot/commands/admin/givevip
  */
 
 import { Composer, InlineKeyboard } from 'grammy';
@@ -113,12 +113,12 @@ async function botAdminGetUserInfo(userId: number): Promise<BotUserInfo | null> 
 }
 
 /**
- * Give premium to a user
+ * Give VIP to a user
  * @param userId - Telegram user ID
  * @param days - Number of days (-1 for lifetime)
  * @returns Expiry date or null on error
  */
-async function botAdminGivePremium(userId: number, days: number): Promise<string | null> {
+async function botAdminGiveVip(userId: number, days: number): Promise<string | null> {
     const db = supabaseAdmin;
     if (!db) return null;
 
@@ -140,21 +140,21 @@ async function botAdminGivePremium(userId: number, days: number): Promise<string
             .eq('id', userId);
 
         if (error) {
-            console.error('[botAdminGivePremium] Error:', error);
+            console.error('[botAdminGiveVip] Error:', error);
             return null;
         }
 
         return expiresAt || 'lifetime';
     } catch (error) {
-        console.error('[botAdminGivePremium] Error:', error);
+        console.error('[botAdminGiveVip] Error:', error);
         return null;
     }
 }
 
 /**
- * Revoke premium from a user
+ * Revoke VIP from a user
  */
-async function botAdminRevokePremium(userId: number): Promise<boolean> {
+async function botAdminRevokeVip(userId: number): Promise<boolean> {
     const db = supabaseAdmin;
     if (!db) return false;
 
@@ -169,13 +169,13 @@ async function botAdminRevokePremium(userId: number): Promise<boolean> {
             .eq('id', userId);
 
         if (error) {
-            console.error('[botAdminRevokePremium] Error:', error);
+            console.error('[botAdminRevokeVip] Error:', error);
             return false;
         }
 
         return true;
     } catch (error) {
-        console.error('[botAdminRevokePremium] Error:', error);
+        console.error('[botAdminRevokeVip] Error:', error);
         return false;
     }
 }
@@ -202,28 +202,28 @@ function parseArgs(text: string, command: string): { userId: number | null; dura
 // COMMAND HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const givepremiumComposer = new Composer<Context>();
+export const givevipComposer = new Composer<Context>();
 
-// /givepremium command
-givepremiumComposer.command('givepremium', async (ctx) => {
+// /givevip command
+givevipComposer.command('givevip', async (ctx) => {
     const messageText = ctx.message?.text || '';
-    const { userId, duration } = parseArgs(messageText, 'givepremium');
+    const { userId, duration } = parseArgs(messageText, 'givevip');
 
     // Show usage if no args
     if (!userId) {
         const keyboard = new InlineKeyboard()
-            .text('7 Days', 'gp_preset_7')
-            .text('30 Days', 'gp_preset_30')
+            .text('7 Days', 'gv_preset_7')
+            .text('30 Days', 'gv_preset_30')
             .row()
-            .text('90 Days', 'gp_preset_90')
-            .text('365 Days', 'gp_preset_365')
+            .text('90 Days', 'gv_preset_90')
+            .text('365 Days', 'gv_preset_365')
             .row()
-            .text('♾️ Lifetime', 'gp_preset_lifetime');
+            .text('♾️ Lifetime', 'gv_preset_lifetime');
 
         await ctx.reply(
-            `👑 *Give Premium Command*
+            `👑 *Give VIP Command*
 
-Usage: \`/givepremium <user_id> <duration>\`
+Usage: \`/givevip <user_id> <duration>\`
 
 *Duration Presets:*
 • \`7d\` - 7 days (1 week)
@@ -236,9 +236,9 @@ Usage: \`/givepremium <user_id> <duration>\`
 • \`45\` or \`45d\` - 45 days
 
 *Examples:*
-\`/givepremium 123456789 30d\`
-\`/givepremium 123456789 lifetime\`
-\`/givepremium 123456789 45\``,
+\`/givevip 123456789 30d\`
+\`/givevip 123456789 lifetime\`
+\`/givevip 123456789 45\``,
             { parse_mode: 'Markdown', reply_markup: keyboard }
         );
         return;
@@ -260,16 +260,16 @@ The user may not have started the bot yet.`,
     // If no duration, show preset buttons for this user
     if (!duration) {
         const keyboard = new InlineKeyboard()
-            .text('7 Days', `gp_give_${userId}_7`)
-            .text('30 Days', `gp_give_${userId}_30`)
+            .text('7 Days', `gv_give_${userId}_7`)
+            .text('30 Days', `gv_give_${userId}_30`)
             .row()
-            .text('90 Days', `gp_give_${userId}_90`)
-            .text('365 Days', `gp_give_${userId}_365`)
+            .text('90 Days', `gv_give_${userId}_90`)
+            .text('365 Days', `gv_give_${userId}_365`)
             .row()
-            .text('♾️ Lifetime', `gp_give_${userId}_-1`);
+            .text('♾️ Lifetime', `gv_give_${userId}_-1`);
 
-        // Check current premium status
-        let currentStatus = '❌ No premium';
+        // Check current VIP status
+        let currentStatus = '❌ No VIP';
         if (userInfo.premium_expires_at) {
             const expiry = new Date(userInfo.premium_expires_at);
             if (expiry.getFullYear() > 2100) {
@@ -285,13 +285,13 @@ The user may not have started the bot yet.`,
         }
 
         await ctx.reply(
-            `👑 *Give Premium to User*
+            `👑 *Give VIP to User*
 
 👤 *User Info:*
 • ID: \`${userInfo.id}\`
 • Username: ${userInfo.username ? `@${userInfo.username}` : 'N/A'}
 • Name: ${userInfo.first_name || 'N/A'}
-• Current Premium: ${currentStatus}
+• Current VIP: ${currentStatus}
 
 Select duration:`,
             { parse_mode: 'Markdown', reply_markup: keyboard }
@@ -311,8 +311,8 @@ Valid formats: \`7d\`, \`30d\`, \`90d\`, \`365d\`, \`lifetime\`, or custom days 
         return;
     }
 
-    // Give premium
-    const result = await botAdminGivePremium(userId, days);
+    // Give VIP
+    const result = await botAdminGiveVip(userId, days);
 
     if (result) {
         let expiryText = '♾️ Never (Lifetime)';
@@ -327,14 +327,14 @@ Valid formats: \`7d\`, \`30d\`, \`90d\`, \`365d\`, \`lifetime\`, or custom days 
         }
 
         await ctx.reply(
-            `✅ *Premium Granted!*
+            `✅ *VIP Granted!*
 
 👤 *User:*
 • ID: \`${userInfo.id}\`
 • Username: ${userInfo.username ? `@${userInfo.username}` : 'N/A'}
 • Name: ${userInfo.first_name || 'N/A'}
 
-👑 *Premium:*
+👑 *VIP:*
 • Duration: ${formatDuration(days)}
 • Expires: ${expiryText}
 
@@ -346,38 +346,38 @@ User now has unlimited downloads! 🎉`,
         try {
             await ctx.api.sendMessage(
                 userId,
-                `🎉 *Congratulations!*
+                `🎉 *Selamat!*
 
-You've been granted *Premium Access*!
+Kamu mendapatkan *Akses VIP*!
 
-👑 *Duration:* ${formatDuration(days)}
-📅 *Expires:* ${expiryText}
+👑 *Durasi:* ${formatDuration(days)}
+📅 *Kadaluarsa:* ${expiryText}
 
-Enjoy unlimited downloads! 🚀`,
+Nikmati download tanpa batas! 🚀`,
                 { parse_mode: 'Markdown' }
             );
         } catch {
             // User may have blocked the bot
         }
     } else {
-        await ctx.reply('❌ Failed to grant premium. Please try again.');
+        await ctx.reply('❌ Failed to grant VIP. Please try again.');
     }
 });
 
-// /revokepremium command
-givepremiumComposer.command('revokepremium', async (ctx) => {
+// /revokevip command
+givevipComposer.command('revokevip', async (ctx) => {
     const messageText = ctx.message?.text || '';
-    const { userId } = parseArgs(messageText, 'revokepremium');
+    const { userId } = parseArgs(messageText, 'revokevip');
 
     if (!userId) {
         await ctx.reply(
-            `🚫 *Revoke Premium Command*
+            `🚫 *Revoke VIP Command*
 
-Usage: \`/revokepremium <user_id>\`
+Usage: \`/revokevip <user_id>\`
 
-Example: \`/revokepremium 123456789\`
+Example: \`/revokevip 123456789\`
 
-This will remove premium access from the user.`,
+This will remove VIP access from the user.`,
             { parse_mode: 'Markdown' }
         );
         return;
@@ -396,7 +396,7 @@ This will remove premium access from the user.`,
 
     if (!userInfo.premium_expires_at && !userInfo.api_key_id) {
         await ctx.reply(
-            `⚠️ User doesn't have premium access.
+            `⚠️ User doesn't have VIP access.
 
 👤 *User Info:*
 • ID: \`${userInfo.id}\`
@@ -406,18 +406,18 @@ This will remove premium access from the user.`,
         return;
     }
 
-    // Revoke premium
-    const success = await botAdminRevokePremium(userId);
+    // Revoke VIP
+    const success = await botAdminRevokeVip(userId);
 
     if (success) {
         await ctx.reply(
-            `✅ *Premium Revoked*
+            `✅ *VIP Revoked*
 
 👤 *User:*
 • ID: \`${userInfo.id}\`
 • Username: ${userInfo.username ? `@${userInfo.username}` : 'N/A'}
 
-User is now on free tier (10 downloads/day).`,
+User is now on free tier (8 downloads/day).`,
             { parse_mode: 'Markdown' }
         );
 
@@ -425,27 +425,27 @@ User is now on free tier (10 downloads/day).`,
         try {
             await ctx.api.sendMessage(
                 userId,
-                `ℹ️ *Premium Status Update*
+                `ℹ️ *Update Status VIP*
 
-Your premium access has been revoked.
-You're now on the free tier with 10 downloads/day.
+Akses VIP kamu telah dicabut.
+Kamu sekarang di tier gratis dengan 8 download/hari.
 
-Contact admin if you think this is a mistake.`,
+Hubungi admin jika ini adalah kesalahan.`,
                 { parse_mode: 'Markdown' }
             );
         } catch {
             // User may have blocked the bot
         }
     } else {
-        await ctx.reply('❌ Failed to revoke premium. Please try again.');
+        await ctx.reply('❌ Failed to revoke VIP. Please try again.');
     }
 });
 
 // Handle preset button callbacks
-givepremiumComposer.callbackQuery(/^gp_give_(\d+)_(-?\d+)$/, async (ctx) => {
+givevipComposer.callbackQuery(/^gv_give_(\d+)_(-?\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     
-    const match = ctx.callbackQuery.data.match(/^gp_give_(\d+)_(-?\d+)$/);
+    const match = ctx.callbackQuery.data.match(/^gv_give_(\d+)_(-?\d+)$/);
     if (!match) return;
 
     const userId = parseInt(match[1], 10);
@@ -458,8 +458,8 @@ givepremiumComposer.callbackQuery(/^gp_give_(\d+)_(-?\d+)$/, async (ctx) => {
         return;
     }
 
-    // Give premium
-    const result = await botAdminGivePremium(userId, days);
+    // Give VIP
+    const result = await botAdminGiveVip(userId, days);
 
     if (result) {
         let expiryText = '♾️ Never (Lifetime)';
@@ -474,14 +474,14 @@ givepremiumComposer.callbackQuery(/^gp_give_(\d+)_(-?\d+)$/, async (ctx) => {
         }
 
         await ctx.editMessageText(
-            `✅ *Premium Granted!*
+            `✅ *VIP Granted!*
 
 👤 *User:*
 • ID: \`${userInfo.id}\`
 • Username: ${userInfo.username ? `@${userInfo.username}` : 'N/A'}
 • Name: ${userInfo.first_name || 'N/A'}
 
-👑 *Premium:*
+👑 *VIP:*
 • Duration: ${formatDuration(days)}
 • Expires: ${expiryText}
 
@@ -493,21 +493,21 @@ User now has unlimited downloads! 🎉`,
         try {
             await ctx.api.sendMessage(
                 userId,
-                `🎉 *Congratulations!*
+                `🎉 *Selamat!*
 
-You've been granted *Premium Access*!
+Kamu mendapatkan *Akses VIP*!
 
-👑 *Duration:* ${formatDuration(days)}
-📅 *Expires:* ${expiryText}
+👑 *Durasi:* ${formatDuration(days)}
+📅 *Kadaluarsa:* ${expiryText}
 
-Enjoy unlimited downloads! 🚀`,
+Nikmati download tanpa batas! 🚀`,
                 { parse_mode: 'Markdown' }
             );
         } catch {
             // User may have blocked the bot
         }
     } else {
-        await ctx.editMessageText('❌ Failed to grant premium. Please try again.');
+        await ctx.editMessageText('❌ Failed to grant VIP. Please try again.');
     }
 });
 
@@ -515,4 +515,4 @@ Enjoy unlimited downloads! 🚀`,
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export { botAdminGivePremium, botAdminRevokePremium };
+export { botAdminGiveVip, botAdminRevokeVip };

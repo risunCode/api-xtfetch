@@ -5,7 +5,7 @@
  * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
@@ -14,7 +14,26 @@ import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions 
 import { cookiePoolGetRotating, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { logger } from '../shared/logger';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Strict YouTube URL validation to prevent command injection
+ * Only allows valid YouTube domains and safe characters
+ */
+function isValidYouTubeUrl(url: string): boolean {
+    try {
+        const parsed = new URL(url);
+        const validHosts = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com', 'music.youtube.com'];
+        if (!validHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+            return false;
+        }
+        // Only allow safe characters in path and query
+        const safePattern = /^[a-zA-Z0-9\-_=&?\/%.]+$/;
+        return safePattern.test(parsed.pathname + parsed.search);
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Convert cookie string to Netscape format for yt-dlp
@@ -202,11 +221,13 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         // Clean URL - remove playlist parameter to speed up extraction
         const cleanUrl = cleanYouTubeUrl(url);
         
+        // Validate URL before processing to prevent command injection
+        if (!isValidYouTubeUrl(cleanUrl)) {
+            return createError(ScraperErrorCode.INVALID_URL, 'Invalid YouTube URL format');
+        }
+        
         // Path to Python script
         const scriptPath = path.join(process.cwd(), 'scripts', 'ytdlp-extract.py');
-        
-        // Escape URL for shell
-        const escapedUrl = cleanUrl.replace(/"/g, '\\"');
         
         // Execute Python script (use 'python' on Windows, 'python3' on Linux/Mac)
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
@@ -238,13 +259,14 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         logger.debug('youtube', `Extracting with yt-dlp: ${cleanUrl}`);
         const startTime = Date.now();
 
-        // Build command with optional cookie file
-        let cmd = `${pythonCmd} "${scriptPath}" "${escapedUrl}"`;
+        // Build args array (NO shell interpretation) - prevents command injection
+        const args = [scriptPath, cleanUrl];
         if (cookieFilePath) {
-            cmd += ` "${cookieFilePath}"`;
+            args.push(cookieFilePath);
         }
 
-        const { stdout, stderr } = await execAsync(cmd, { 
+        // Use execFile instead of exec - arguments passed as array, not string
+        const { stdout, stderr } = await execFileAsync(pythonCmd, args, {
             timeout: 90000, // 90s timeout (YouTube can be slow)
             maxBuffer: 10 * 1024 * 1024, // 10MB buffer
         });
