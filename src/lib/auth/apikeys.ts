@@ -317,13 +317,15 @@ export async function apiKeyDelete(id: string): Promise<boolean> {
 
 /**
  * Validate API key (full validation with rate limiting)
+ * NOTE: Uses admin client because api_keys table has RLS that blocks anon access
  */
 export async function apiKeyValidate(plainKey: string): Promise<ApiKeyValidateResult> {
     if (!plainKey || plainKey.length < 10 || !plainKey.includes('_')) {
         return { valid: false, error: 'Invalid API key format' };
     }
     const hashedInput = hashKey(plainKey);
-    const db = getReadClient();
+    // Must use admin client - api_keys table has RLS blocking anon access
+    const db = getWriteClient();
     if (!db) return { valid: false, error: 'Database unavailable' };
     
     const { data, error } = await db.from('api_keys').select('*').eq('key_hash', hashedInput).single();

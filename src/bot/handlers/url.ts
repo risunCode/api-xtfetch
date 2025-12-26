@@ -20,9 +20,9 @@ import { logger } from '@/lib/services/shared/logger';
 import { recordDownloadStat } from '@/lib/database';
 
 import type { BotContext, DownloadResult } from '../types';
-import { BOT_MESSAGES, detectContentType } from '../types';
+import { detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectQualities } from '../keyboards';
+import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, detectDetailedQualities } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 
 // ============================================================================
@@ -143,9 +143,25 @@ function escapeMarkdown(text: string): string {
 }
 
 /**
- * Build caption with bold platform name, full title, and filesize
+ * Get premium expiry days from context
+ * Returns undefined if not premium, or days until expiry
  */
-function buildCaption(result: DownloadResult, lang: BotLanguage = 'en'): string {
+function getPremiumExpiryDays(ctx: BotContext): number | undefined {
+    if (!ctx.isPremium || !ctx.botUser?.premium_expires_at) {
+        return undefined;
+    }
+    
+    const expiryDate = new Date(ctx.botUser.premium_expires_at);
+    const now = new Date();
+    const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    
+    return daysLeft > 0 ? daysLeft : undefined;
+}
+
+/**
+ * Build caption with bold platform name, full title, filesize, and optional expiry warning
+ */
+function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumExpiryDays?: number): string {
     const platformName = botUrlGetPlatformName(result.platform!);
     
     let caption = `*${platformName}*\n\n`;
@@ -168,6 +184,11 @@ function buildCaption(result: DownloadResult, lang: BotLanguage = 'en'): string 
     
     if (bestVideo?.filesize) {
         caption += `\n📦 ${formatFilesize(bestVideo.filesize, lang)}`;
+    }
+    
+    // Premium expiry warning (< 7 days)
+    if (premiumExpiryDays !== undefined && premiumExpiryDays > 0 && premiumExpiryDays < 7) {
+        caption += `\n\n⚠️ Premium expires in ${premiumExpiryDays} day${premiumExpiryDays === 1 ? '' : 's'}`;
     }
     
     return caption.trim();
@@ -196,8 +217,10 @@ async function sendVideoDirectly(
     );
     const videoToSend = hdVideo || videos[0];
 
-    const caption = buildCaption(result, lang);
-    const qualities = detectQualities(result);
+    // Get premium expiry days if user is premium
+    const premiumExpiryDays = getPremiumExpiryDays(ctx);
+    const caption = buildCaption(result, lang, premiumExpiryDays);
+    const qualities = detectDetailedQualities(result);
     const keyboard = buildVideoKeyboard(originalUrl, visitorId, qualities);
 
     try {
@@ -233,8 +256,9 @@ async function sendYouTubePreview(
     visitorId: string
 ): Promise<boolean> {
     const lang = detectLanguage(ctx.from?.language_code);
-    const caption = buildCaption(result, lang);
-    const qualities = detectQualities(result);
+    const premiumExpiryDays = getPremiumExpiryDays(ctx);
+    const caption = buildCaption(result, lang, premiumExpiryDays);
+    const qualities = detectDetailedQualities(result);
     const keyboard = buildYouTubeKeyboard(originalUrl, visitorId, qualities);
 
     try {
@@ -272,7 +296,8 @@ async function sendSinglePhoto(
     // Deduplicate images by itemId - keep only highest quality per item
     const bestImages = deduplicateImages(images);
     
-    const caption = buildCaption(result, lang);
+    const premiumExpiryDays = getPremiumExpiryDays(ctx);
+    const caption = buildCaption(result, lang, premiumExpiryDays);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
     try {
@@ -352,7 +377,8 @@ async function sendPhotoAlbum(
     // Deduplicate images - keep only highest quality per item
     const bestImages = deduplicateImages(images);
     
-    const caption = buildCaption(result, lang);
+    const premiumExpiryDays = getPremiumExpiryDays(ctx);
+    const caption = buildCaption(result, lang, premiumExpiryDays);
 
     const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
         type: 'photo' as const,

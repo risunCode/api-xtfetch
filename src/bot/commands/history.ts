@@ -32,14 +32,20 @@ interface BotDownload {
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PLATFORM_ICONS: Record<string, string> = {
-    youtube: '▶️',
-    instagram: '📸',
-    tiktok: '🎵',
-    twitter: '𝕏',
-    facebook: '📘',
-    weibo: '🔴',
-};
+/**
+ * Get platform icon for display
+ */
+function getPlatformIcon(platform: string): string {
+    const icons: Record<string, string> = {
+        instagram: '📸',
+        tiktok: '🎵',
+        twitter: '🐦',
+        facebook: '📘',
+        youtube: '▶️',
+        weibo: '🔴',
+    };
+    return icons[platform.toLowerCase()] || '📥';
+}
 
 const STATUS_ICONS: Record<string, string> = {
     success: '✅',
@@ -111,6 +117,7 @@ function truncateTitle(title: string | null, maxLength: number = 35): string {
 
 /**
  * Format download history for display
+ * Shows platform icons with platform name and date
  */
 function formatHistoryList(downloads: BotDownload[]): string {
     if (downloads.length === 0) {
@@ -119,15 +126,14 @@ function formatHistoryList(downloads: BotDownload[]): string {
 
     return downloads
         .map((d, index) => {
-            const platformIcon = PLATFORM_ICONS[d.platform] || '📦';
-            const statusIcon = STATUS_ICONS[d.status] || '❓';
-            const title = truncateTitle(d.title);
+            const platformIcon = getPlatformIcon(d.platform);
+            const platformName = d.platform.charAt(0).toUpperCase() + d.platform.slice(1);
             const date = formatDate(d.created_at);
-            const premiumBadge = d.is_premium ? ' 👑' : '';
             
-            return `${index + 1}. ${statusIcon} ${platformIcon} *${title}*${premiumBadge}\n   └ ${date}`;
+            // Format: "1. 📸 Instagram - Dec 25"
+            return `${index + 1}. ${platformIcon} ${platformName} \\- ${date}`;
         })
-        .join('\n\n');
+        .join('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

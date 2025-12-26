@@ -92,19 +92,21 @@ async function botUserGetPremiumStatus(userId: number): Promise<{
 
 /**
  * Get total downloads count for user
+ * Reads from bot_users.total_downloads column (updated by botUserIncrementDownloads)
  */
 async function botUserGetTotalDownloads(userId: number): Promise<number> {
     const db = supabaseAdmin;
     if (!db) return 0;
 
     try {
-        const { count, error } = await db
-            .from('bot_downloads')
-            .select('*', { count: 'exact', head: true })
-            .eq('user_id', userId);
+        const { data, error } = await db
+            .from('bot_users')
+            .select('total_downloads')
+            .eq('id', userId)
+            .single();
 
-        if (error) return 0;
-        return count || 0;
+        if (error || !data) return 0;
+        return data.total_downloads || 0;
     } catch {
         return 0;
     }

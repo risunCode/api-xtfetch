@@ -120,7 +120,7 @@ premiumComposer.command('premium', async (ctx: Context) => {
     
     if (hasPremium) {
         const keyboard = new InlineKeyboard()
-            .text('📊 My Status', 'mystatus')
+            .text('📊 My Status', 'cmd:mystatus')
             .text('🔓 Unlink Key', 'premium_unlink');
 
         await ctx.reply(
@@ -133,28 +133,23 @@ Use /mystatus to see your premium details.`,
         return;
     }
 
-    // Show premium benefits
+    // Show premium benefits with simpler flow
     const keyboard = new InlineKeyboard()
-        .text('💬 Contact Admin', `premium_contact`)
+        .text('🛒 Buy Premium', `premium_contact`)
+        .row()
         .text('🔑 I Have API Key', 'premium_enter_key');
 
-    const message = `👑 *Get Premium Access!*
+    const message = `💎 *DownAria Premium*
 
-Enjoy unlimited downloads with no restrictions.
-
-*Premium Benefits:*
-✅ Unlimited downloads/day
-✅ No cooldown between requests
-✅ HD video quality
-✅ Audio extraction
-✅ Priority processing
+*Benefits:*
+• Unlimited downloads
+• No cooldown
+• HD quality
+• Priority support
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-*How to Get Premium:*
-1. Contact admin to purchase an API key
-2. Once you have the key, click "I Have API Key"
-3. Enter your API key to activate premium`;
+Already have an API key? Click "I Have API Key" to activate.`;
 
     await ctx.reply(message, {
         parse_mode: 'Markdown',
@@ -162,22 +157,26 @@ Enjoy unlimited downloads with no restrictions.
     });
 });
 
-// Handle contact admin button
+// Handle contact admin button (Buy Premium)
 premiumComposer.callbackQuery('premium_contact', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
-    await ctx.reply(
-        `💬 *Contact Admin*
+    const keyboard = new InlineKeyboard()
+        .url(`💬 Chat with Admin`, `https://t.me/${ADMIN_USERNAME}`)
+        .row()
+        .text('✅ Already Bought', 'premium_enter_key')
+        .row()
+        .text('« Back', 'cmd:premium');
 
-To purchase a premium API key, please contact:
+    await ctx.editMessageText(
+        `🛒 *Buy Premium*
+
+Contact admin to purchase:
 👤 @${ADMIN_USERNAME}
 
-*What to include in your message:*
-• Your Telegram username
-• Desired subscription period (monthly/yearly)
-
-The admin will provide you with an API key after payment.`,
-        { parse_mode: 'Markdown' }
+After payment, you'll receive an API key.
+Click "Already Bought" to enter your key.`,
+        { parse_mode: 'Markdown', reply_markup: keyboard }
     );
 });
 
@@ -195,16 +194,16 @@ premiumComposer.callbackQuery('premium_enter_key', async (ctx: Context) => {
     cleanupAwaitingEntries();
 
     const keyboard = new InlineKeyboard()
-        .text('❌ Cancel', 'premium_cancel');
+        .text('❌ Cancel', 'cmd:premium');
 
     const msg = await ctx.reply(
         `🔑 *Enter Your API Key*
 
-Please send your API key in the next message.
+Send your API key in the next message.
 
-_Your key should look like:_ \`xtf_live_xxxxx...\`
+_Format:_ \`xtf_live_xxxxx...\`
 
-⚠️ This will expire in 5 minutes.`,
+⚠️ Expires in 5 minutes.`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
     );
 
@@ -213,21 +212,6 @@ _Your key should look like:_ \`xtf_live_xxxxx...\`
         messageId: msg.message_id,
         timestamp: Date.now()
     });
-});
-
-// Handle cancel button
-premiumComposer.callbackQuery('premium_cancel', async (ctx: Context) => {
-    await ctx.answerCallbackQuery('Cancelled');
-    
-    const userId = ctx.from?.id;
-    if (userId) {
-        awaitingApiKey.delete(userId);
-    }
-
-    await ctx.editMessageText(
-        '❌ API key entry cancelled.\n\nUse /premium to try again.',
-        { parse_mode: 'Markdown' }
-    );
 });
 
 // Handle unlink button
@@ -300,6 +284,90 @@ Use /premium to link a new API key.`,
 premiumComposer.callbackQuery('premium_unlink_cancel', async (ctx: Context) => {
     await ctx.answerCallbackQuery('Cancelled');
     await ctx.deleteMessage();
+});
+
+// Handle premium refresh button
+premiumComposer.callbackQuery('premium_refresh', async (ctx: Context) => {
+    await ctx.answerCallbackQuery('Refreshing...');
+    
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.answerCallbackQuery('Unable to identify user');
+        return;
+    }
+
+    try {
+        // Import dynamically to avoid circular dependency
+        const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('./mystatus');
+        const { premiumStatusKeyboard } = await import('../keyboards');
+        
+        const { user, apiKey } = await botUserGetPremiumStatus(userId);
+        const totalDownloads = await botUserGetTotalDownloads(userId);
+
+        if (!user || !apiKey) {
+            // User is no longer premium
+            const keyboard = new InlineKeyboard()
+                .text('🛒 Buy Premium', 'premium_contact')
+                .row()
+                .text('🔑 I Have API Key', 'premium_enter_key');
+
+            await ctx.editMessageText(
+                `💎 *DownAria Premium*
+
+Your premium status has expired or been unlinked.
+
+*Benefits:*
+• Unlimited downloads
+• No cooldown
+• HD quality
+• Priority support`,
+                { parse_mode: 'Markdown', reply_markup: keyboard }
+            );
+            return;
+        }
+
+        // Format expiry
+        let expiryText = '♾️ Never';
+        let statusEmoji = '✅';
+        
+        if (apiKey.expires_at) {
+            const expiryDate = new Date(apiKey.expires_at);
+            const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+            
+            if (daysLeft <= 0) {
+                expiryText = '❌ Expired';
+                statusEmoji = '❌';
+            } else if (daysLeft <= 7) {
+                expiryText = `⚠️ ${expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+                statusEmoji = '⚠️';
+            } else {
+                expiryText = `${expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+            }
+        }
+
+        const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
+
+        await ctx.editMessageText(
+            `👑 *Premium Status*
+
+*API Key:* \`${apiKey.key_preview}\`
+*Status:* ${keyStatus}
+*Expires:* ${expiryText}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*Downloads:*
+• Today: ${user.daily_downloads} (Unlimited)
+• Total: ${totalDownloads}
+• API Requests: ${apiKey.total_requests}
+
+*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`,
+            { parse_mode: 'Markdown', reply_markup: premiumStatusKeyboard() }
+        );
+    } catch (error) {
+        console.error('[premium_refresh callback] Error:', error);
+        await ctx.answerCallbackQuery('Error refreshing status');
+    }
 });
 
 // Handle text messages (for API key input)
@@ -384,7 +452,7 @@ Use /premium to try again.`,
         }
 
         const keyboard = new InlineKeyboard()
-            .text('📊 My Status', 'mystatus');
+            .text('📊 My Status', 'cmd:mystatus');
 
         await ctx.api.editMessageText(
             ctx.chat!.id,
