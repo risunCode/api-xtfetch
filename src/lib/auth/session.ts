@@ -145,6 +145,12 @@ export async function authVerifyAdminToken(request: NextRequest): Promise<{ vali
     };
 }
 
+import crypto from 'crypto';
+
+function hashApiKey(key: string): string {
+    return crypto.createHash('sha256').update(key).digest('hex');
+}
+
 /**
  * Verify API key from database (simple validation)
  */
@@ -155,17 +161,20 @@ export async function authVerifyApiKey(apiKey: string): Promise<{ valid: boolean
     }
 
     try {
+        // Hash the API key before comparing with database
+        const hashedKey = hashApiKey(apiKey);
+        
         const { data: keyData, error } = await authClient
             .from('api_keys')
-            .select('id, rate_limit, is_active, expires_at')
-            .eq('key_hash', apiKey)
+            .select('id, rate_limit, enabled, expires_at')
+            .eq('key_hash', hashedKey)
             .single();
 
         if (error || !keyData) {
             return { valid: false, error: 'Invalid API key' };
         }
 
-        if (!keyData.is_active) {
+        if (!keyData.enabled) {
             return { valid: false, error: 'API key is disabled' };
         }
 
