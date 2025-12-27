@@ -180,8 +180,11 @@ export async function initWorker(): Promise<boolean> {
         return true;
     }
 
+    console.log('[Bot.Worker] Initializing worker...');
+    
     const connection = getRedisConnection();
     if (!connection) {
+        console.log('[Bot.Worker] Redis not configured - worker disabled');
         logger.warn('telegram', 'Redis not configured - worker disabled');
         return false;
     }
@@ -202,17 +205,25 @@ export async function initWorker(): Promise<boolean> {
 
         // Worker event handlers
         downloadWorker.on('completed', (job) => {
+            console.log(`[Bot.Worker] Job ${job.id} completed`);
             logger.debug('telegram', `Worker completed job ${job.id}`);
         });
 
         downloadWorker.on('failed', (job, err) => {
+            console.log(`[Bot.Worker] Job ${job?.id} failed: ${err.message}`);
             logger.error('telegram', `Worker job ${job?.id} failed: ${err.message}`, 'WORKER_FAILED');
         });
 
         downloadWorker.on('error', (err) => {
+            console.log(`[Bot.Worker] Error: ${err.message}`);
             logger.error('telegram', err, 'WORKER_ERROR');
         });
+        
+        downloadWorker.on('active', (job) => {
+            console.log(`[Bot.Worker] Processing job ${job.id}...`);
+        });
 
+        console.log(`[Bot.Worker] Worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
         logger.debug('telegram', `Download worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
         return true;
     } catch (error) {

@@ -233,28 +233,21 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
     const candidates: VideoCandidate[] = [];
     const seen = new Set<string>();
 
-    // First, try to extract from progressive_urls array with quality metadata (best for reels)
-    P.video.progressiveWithQuality.lastIndex = 0;
-    let m;
-    while ((m = P.video.progressiveWithQuality.exec(html)) !== null) {
-        const url = decode(m[1]);
-        const quality = m[2] as 'HD' | 'SD';
+    // Helper to add candidate
+    const addCandidate = (url: string, quality: 'HD' | 'SD', basePriority: number) => {
         const urlKey = url.split('?')[0];
-        if (seen.has(urlKey) || !url.includes('.mp4')) continue;
+        if (seen.has(urlKey) || !url.includes('.mp4')) return;
         seen.add(urlKey);
 
         const cdnBoost = getCdnInfo(url).score;
         const assetId = extractAssetId(url);
         const isMuted = hasMutedAudio(url);
+        const isProgressive = url.includes('tag=progressive') || !url.includes('_nc_vs=');
         
-        // Base priority: HD=100, SD=50
-        // Progressive URLs (no _nc_vs) get +30 bonus (always have audio)
-        // Muted URLs get -80 penalty (heavily deprioritize)
-        const isProgressive = !url.includes('_nc_vs=');
-        let priority = quality === 'HD' ? 100 : 50;
+        let priority = basePriority;
         priority += cdnBoost;
-        if (isProgressive) priority += 30; // Progressive bonus
-        if (isMuted) priority -= 80; // Muted penalty
+        if (isProgressive) priority += 30;
+        if (isMuted) priority -= 80;
 
         candidates.push({
             url,
@@ -263,81 +256,67 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
             priority,
             assetId,
         });
+    };
+
+    // 1. Progressive URLs with quality metadata (best for reels)
+    P.video.progressiveWithQuality.lastIndex = 0;
+    let m;
+    while ((m = P.video.progressiveWithQuality.exec(html)) !== null) {
+        addCandidate(decode(m[1]), m[2] as 'HD' | 'SD', m[2] === 'HD' ? 100 : 50);
     }
 
-    // If we found videos with quality metadata, sort and filter
-    if (candidates.length > 0) {
-        // Sort by priority (audio URLs first, then by quality)
-        const sorted = candidates.sort((a, b) => b.priority - a.priority);
-        
-        // Log audio detection results
-        const withAudio = sorted.filter(v => v.hasMuxedAudio);
-        const muted = sorted.filter(v => !v.hasMuxedAudio);
-        if (muted.length > 0) {
-            console.log(`[FB] Audio detection: ${withAudio.length} with audio, ${muted.length} muted`);
-        }
-        
-        if (filterToFirstAsset && sorted.length > 0) {
-            const firstAssetId = sorted.find(v => v.assetId)?.assetId;
-            if (firstAssetId) {
-                return sorted.filter(v => v.assetId === firstAssetId);
-            }
-        }
-        return sorted;
+    // 2. Browser native URLs (often have HD)
+    P.video.browserHd.lastIndex = 0;
+    while ((m = P.video.browserHd.exec(html)) !== null) {
+        addCandidate(decode(m[1]), 'HD', 95);
+    }
+    
+    P.video.browserSd.lastIndex = 0;
+    while ((m = P.video.browserSd.exec(html)) !== null) {
+        addCandidate(decode(m[1]), 'SD', 45);
     }
 
-    // Fallback to other patterns
-    const configs: { pattern: RegExp; priority: number }[] = [
-        { pattern: P.video.playableHd, priority: 100 },
-        { pattern: P.video.playable, priority: 95 },
-        { pattern: P.video.progressive, priority: 90 },
-        { pattern: P.video.hdSrc, priority: 85 },
-        { pattern: P.video.sdSrc, priority: 80 },
-        { pattern: P.video.browserHd, priority: 70 },
-        { pattern: P.video.browserSd, priority: 65 },
+    // 3. Playable URLs
+    P.video.playableHd.lastIndex = 0;
+    while ((m = P.video.playableHd.exec(html)) !== null) {
+        addCandidate(decode(m[1]), 'HD', 90);
+    }
+    
+    P.video.playable.lastIndex = 0;
+    while ((m = P.video.playable.exec(html)) !== null) {
+        const url = decode(m[1]);
+        addCandidate(url, detectQuality(url), 85);
+    }
+
+    // 4. Other patterns (fallback)
+    const fallbackPatterns: { pattern: RegExp; priority: number }[] = [
+        { pattern: P.video.progressive, priority: 80 },
+        { pattern: P.video.hdSrc, priority: 75 },
+        { pattern: P.video.sdSrc, priority: 70 },
         { pattern: P.video.dash, priority: 60 },
     ];
 
-    for (const { pattern, priority } of configs) {
+    for (const { pattern, priority } of fallbackPatterns) {
         pattern.lastIndex = 0;
-        let m;
         while ((m = pattern.exec(html)) !== null) {
             const url = decode(m[1]);
-            const urlKey = url.split('?')[0];
-            if (seen.has(urlKey) || !url.includes('.mp4')) continue;
-            seen.add(urlKey);
-
-            const cdnBoost = getCdnInfo(url).score;
-            const quality = detectQuality(url);
-            const assetId = extractAssetId(url);
-            const isMuted = hasMutedAudio(url);
-            
-            // Progressive URLs (no _nc_vs) get +30 bonus
-            // Muted URLs get -80 penalty
-            const isProgressive = !url.includes('_nc_vs=');
-            let finalPriority = priority + cdnBoost + (quality === 'HD' ? 10 : 0);
-            if (isProgressive) finalPriority += 30;
-            if (isMuted) finalPriority -= 80;
-
-            candidates.push({
-                url,
-                quality,
-                hasMuxedAudio: !isMuted,
-                priority: finalPriority,
-                assetId,
-            });
+            addCandidate(url, detectQuality(url), priority);
         }
     }
 
+    // Sort by priority
     const sorted = candidates.sort((a, b) => b.priority - a.priority);
     
-    // Log audio detection for fallback patterns
-    const withAudio = sorted.filter(v => v.hasMuxedAudio);
-    const muted = sorted.filter(v => !v.hasMuxedAudio);
-    if (muted.length > 0) {
-        console.log(`[FB] Audio detection: ${withAudio.length} with audio, ${muted.length} muted`);
+    // Log results
+    if (sorted.length > 0) {
+        const withAudio = sorted.filter(v => v.hasMuxedAudio);
+        const muted = sorted.filter(v => !v.hasMuxedAudio);
+        if (muted.length > 0) {
+            console.log(`[FB] Audio: ${withAudio.length} with audio, ${muted.length} muted`);
+        }
     }
     
+    // Filter to first asset if requested
     if (filterToFirstAsset && sorted.length > 0) {
         const firstAssetId = sorted.find(v => v.assetId)?.assetId;
         if (firstAssetId) {
