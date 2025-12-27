@@ -107,14 +107,37 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                 return createError(ScraperErrorCode.UNSUPPORTED_CONTENT, 'Live video tidak dapat didownload');
             }
 
-            // Check for login redirect - cookie might be expired or invalid
-            if (res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?')) {
+            // Check for login redirect - but be careful with stories!
+            // Stories sometimes redirect through login but still work if cookie is valid
+            const isLoginPage = res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?');
+            const isStoryContent = contentType === 'story' || res.finalUrl.includes('/stories/');
+            
+            if (isLoginPage) {
                 logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
-                if (useCookie) {
+                
+                // For stories with cookie, this might be a false positive
+                // Check if the HTML actually contains story data before marking as expired
+                if (useCookie && isStoryContent) {
+                    // Check if we got actual story content despite login URL
+                    const hasStoryData = res.data.includes('"unified_stories"') || 
+                                        res.data.includes('"story_bucket"') || 
+                                        res.data.includes('"progressive_url"') ||
+                                        res.data.includes('"story_card_seen_state"');
+                    
+                    if (hasStoryData) {
+                        logger.debug('facebook', 'Login redirect but story data found, continuing extraction...');
+                        // Don't return error, continue with extraction
+                    } else {
+                        // Actually no story data, cookie is likely expired
+                        cookiePoolMarkLoginRedirect('Login redirect - no story data found').catch(() => {});
+                        return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin sedang bermasalah. Coba gunakan cookie pribadimu di Settings.');
+                    }
+                } else if (useCookie) {
                     cookiePoolMarkLoginRedirect('Login redirect - cookie may be expired').catch(() => {});
                     return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin sedang bermasalah. Coba gunakan cookie pribadimu di Settings.');
+                } else {
+                    return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
                 }
-                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
             }
 
             const html = res.data;
@@ -163,9 +186,24 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                 
                 if (formats.length === 0 && useCookie) {
                     // Retry once - stories sometimes need time to load
-                    await new Promise(r => setTimeout(r, 300));
+                    logger.debug('facebook', 'No stories found, retrying...');
+                    await new Promise(r => setTimeout(r, 500));
                     const retry = await httpGet(finalUrl, { headers, timeout: timeout + 5000 });
-                    formats = fbExtractStories(utilDecodeHtml(retry.data));
+                    const retryHtml = utilDecodeHtml(retry.data);
+                    formats = fbExtractStories(retryHtml);
+                    
+                    // If still no stories, try extracting as video (some stories are just videos)
+                    if (formats.length === 0) {
+                        logger.debug('facebook', 'Still no stories, trying video extraction...');
+                        const block = fbFindVideoBlock(retryHtml);
+                        const { hd, sd, thumbnail } = fbExtractVideos(block);
+                        if (hd) {
+                            formats.push({ quality: 'HD', type: 'video', url: hd, format: 'mp4', itemId: 'story-video', thumbnail });
+                        }
+                        if (sd && sd !== hd) {
+                            formats.push({ quality: 'SD', type: 'video', url: sd, format: 'mp4', itemId: 'story-video', thumbnail });
+                        }
+                    }
                 }
             } else if (actualType === 'video' || actualType === 'reel') {
                 // Video extraction
