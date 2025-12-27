@@ -72,6 +72,9 @@ async function getHandler() {
 // ============================================================================
 
 export async function POST(request: NextRequest) {
+  console.log('[Webhook] === INCOMING REQUEST ===');
+  console.log('[Webhook] Headers:', Object.fromEntries(request.headers.entries()));
+  
   // Check if bot is configured
   if (!botConfigIsValid()) {
     console.error('[Webhook] Bot not configured');
@@ -83,19 +86,35 @@ export async function POST(request: NextRequest) {
     || request.headers.get('x-real-ip') 
     || 'unknown';
   
+  console.log('[Webhook] Client IP:', clientIp, 'Valid:', isFromTelegram(clientIp));
+  
   if (!isFromTelegram(clientIp)) {
     console.warn('[Webhook] Rejected: Not from Telegram IP', { ip: clientIp });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const handler = await getHandler();
-  if (!handler) {
-    console.error('[Webhook] Handler not initialized');
-    return NextResponse.json({ error: 'Bot not ready' }, { status: 503 });
-  }
-
+  // Try to read body
   try {
-    return await handler(request);
+    const bodyText = await request.text();
+    console.log('[Webhook] Body:', bodyText.substring(0, 500));
+    
+    // Re-create request with body for handler
+    const newRequest = new Request(request.url, {
+      method: 'POST',
+      headers: request.headers,
+      body: bodyText,
+    });
+
+    const handler = await getHandler();
+    if (!handler) {
+      console.error('[Webhook] Handler not initialized');
+      return NextResponse.json({ error: 'Bot not ready' }, { status: 503 });
+    }
+
+    console.log('[Webhook] Passing to Grammy handler...');
+    const response = await handler(newRequest);
+    console.log('[Webhook] Grammy response status:', response.status);
+    return response;
   } catch (error) {
     console.error('[Webhook] Error:', error);
     return NextResponse.json({ ok: true }); // Always 200 to prevent Telegram retry
