@@ -42,9 +42,23 @@ function isFromTelegram(ip: string): boolean {
 
 // Lazy-init webhook handler (avoid build-time errors when bot is null)
 let handleUpdate: ((req: Request) => Promise<Response>) | null = null;
+let botInitialized = false;
 
-function getHandler() {
+async function getHandler() {
   if (!handleUpdate && bot) {
+    // Initialize bot first (fetch bot info from Telegram)
+    if (!botInitialized) {
+      console.log('[Webhook] Initializing bot...');
+      try {
+        await bot.init();
+        botInitialized = true;
+        console.log('[Webhook] Bot initialized successfully');
+      } catch (error) {
+        console.error('[Webhook] Bot init failed:', error);
+        return null;
+      }
+    }
+    
     handleUpdate = webhookCallback(bot, 'std/http', {
       timeoutMilliseconds: 25_000,
       onTimeout: 'return',
@@ -78,13 +92,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const handler = getHandler();
+  const handler = await getHandler();
   if (!handler) {
     console.error('[Webhook] Handler not initialized');
     return NextResponse.json({ error: 'Bot not ready' }, { status: 503 });
   }
 
   try {
+    console.log('[Webhook] Passing to handler...');
     return await handler(request);
   } catch (error) {
     console.error('[Webhook] Error:', error);
