@@ -58,7 +58,7 @@ async function botUserGetOrCreate(
             is_banned: data.is_banned || false,
             ban_reason: undefined,
             api_key_id: data.api_key_id || undefined,
-            premium_expires_at: (data as any).premium_expires_at || undefined,
+            vip_expires_at: (data as any).vip_expires_at || (data as any).premium_expires_at || undefined,
             daily_downloads: data.daily_downloads,
             last_download_at: data.last_download_at || undefined,
             last_download_reset: data.daily_reset_at,
@@ -79,11 +79,11 @@ function botUserIsBanned(user: BotUser): boolean {
 }
 
 /**
- * Check if user is premium (has linked API key and not expired)
+ * Check if user is VIP (has linked API key and not expired)
  */
-function botUserIsPremium(user: BotUser): boolean {
+function botUserIsVip(user: BotUser): boolean {
     return !!user.api_key_id && 
-        (!user.premium_expires_at || new Date(user.premium_expires_at) > new Date());
+        (!user.vip_expires_at || new Date(user.vip_expires_at) > new Date());
 }
 
 // ============================================================================
@@ -132,8 +132,8 @@ export const authMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
 
     // Attach user data to context
     ctx.botUser = botUser;
-    // Admin is always premium, otherwise check api_key_id
-    ctx.isPremium = botIsAdmin(from.id) || botUserIsPremium(botUser);
+    // Admin is always VIP, otherwise check api_key_id
+    ctx.isVip = botIsAdmin(from.id) || botUserIsVip(botUser);
     ctx.isAdmin = botIsAdmin(from.id);
 
     // Continue to next middleware/handler
@@ -147,5 +147,5 @@ export const authMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
 export {
     botUserGetOrCreate,
     botUserIsBanned,
-    botUserIsPremium,
+    botUserIsVip,
 };

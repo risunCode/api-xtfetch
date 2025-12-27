@@ -199,7 +199,7 @@ export {
     rateLimitMiddleware,
     botUserGetOrCreate,
     botUserIsBanned,
-    botUserIsPremium,
+    botUserIsVip,
     botRateLimitRecordDownload,
     botRateLimitNeedsReset,
     botRateLimitResetDaily,

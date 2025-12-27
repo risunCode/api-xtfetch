@@ -187,15 +187,15 @@ function escapeMarkdown(text: string): string {
 }
 
 /**
- * Get premium expiry days from context
- * Returns undefined if not premium, or days until expiry
+ * Get VIP expiry days from context
+ * Returns undefined if not VIP, or days until expiry
  */
-function getPremiumExpiryDays(ctx: BotContext): number | undefined {
-    if (!ctx.isPremium || !ctx.botUser?.premium_expires_at) {
+function getVipExpiryDays(ctx: BotContext): number | undefined {
+    if (!ctx.isVip || !ctx.botUser?.vip_expires_at) {
         return undefined;
     }
     
-    const expiryDate = new Date(ctx.botUser.premium_expires_at);
+    const expiryDate = new Date(ctx.botUser.vip_expires_at);
     const now = new Date();
     const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     
@@ -204,8 +204,9 @@ function getPremiumExpiryDays(ctx: BotContext): number | undefined {
 
 /**
  * Build caption with bold platform name, sanitized title, filesize, and optional expiry warning
+ * Used for YouTube only (keeps full format)
  */
-function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumExpiryDays?: number): string {
+function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', vipExpiryDays?: number): string {
     const platformName = botUrlGetPlatformName(result.platform!);
     
     let caption = `*${platformName}*\n\n`;
@@ -234,11 +235,29 @@ function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumE
     }
     
     // VIP expiry warning (< 7 days)
-    if (premiumExpiryDays !== undefined && premiumExpiryDays > 0 && premiumExpiryDays < 7) {
-        caption += `\n\n⚠️ VIP expires in ${premiumExpiryDays} day${premiumExpiryDays === 1 ? '' : 's'}`;
+    if (vipExpiryDays !== undefined && vipExpiryDays > 0 && vipExpiryDays < 7) {
+        caption += `\n\n⚠️ VIP expires in ${vipExpiryDays} day${vipExpiryDays === 1 ? '' : 's'}`;
     }
     
     return caption.trim();
+}
+
+/**
+ * Build simple caption - just username/author
+ * Used for non-YouTube platforms (cleaner embed)
+ */
+function buildSimpleCaption(result: DownloadResult, originalUrl: string): string {
+    const platform = result.platform;
+    
+    // Just author/username
+    if (result.author) {
+        // Add @ for Twitter/Instagram/TikTok if not already present
+        const needsAt = ['twitter', 'instagram', 'tiktok'].includes(platform || '');
+        const authorPrefix = needsAt && !result.author.startsWith('@') ? '@' : '';
+        return `${authorPrefix}${escapeMarkdown(result.author)}`;
+    }
+    
+    return '';
 }
 
 
@@ -283,16 +302,16 @@ async function sendVideoDirectly(
     // Select video to send: SD fallback if HD exceeds limit, otherwise HD (or first available)
     const videoToSend = hdExceedsLimit && sdVideo ? sdVideo : (hdVideo || videos[0]);
 
-    // Get premium expiry days if user is premium
-    const premiumExpiryDays = getPremiumExpiryDays(ctx);
-    let caption = buildCaption(result, lang, premiumExpiryDays);
+    // Use simple caption (just username) for non-YouTube
+    let caption = buildSimpleCaption(result, originalUrl);
     
     // Build appropriate keyboard based on whether we're using fallback
     let keyboard;
     if (hdExceedsLimit && hdVideo) {
         // HD exceeds limit - sent SD as fallback, show HD as external link
         keyboard = buildVideoFallbackKeyboard(hdVideo.url, originalUrl);
-        caption += '\n\n⚠️ HD exceeds 40MB limit';
+        if (caption) caption += '\n';
+        caption += '⚠️ HD > 40MB';
     } else {
         // HD sent successfully (or no HD available) - show only Original link
         keyboard = buildVideoSuccessKeyboard(originalUrl);
@@ -300,7 +319,7 @@ async function sendVideoDirectly(
 
     try {
         await ctx.replyWithVideo(new InputFile({ url: videoToSend.url }), {
-            caption,
+            caption: caption || undefined,
             parse_mode: 'Markdown',
             reply_markup: keyboard,
         });
@@ -312,13 +331,11 @@ async function sendVideoDirectly(
         try {
             const fallbackCaption = lang === 'id'
                 ? `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
-                  `${result.title ? escapeMarkdown(result.title) + '\n' : ''}` +
                   `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
-                  `⚠️ Video terlalu besar untuk dikirim langsung.`
+                  `⚠️ Video terlalu besar.`
                 : `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
-                  `${result.title ? escapeMarkdown(result.title) + '\n' : ''}` +
                   `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
-                  `⚠️ Video too large to send directly.`;
+                  `⚠️ Video too large.`;
             
             const fallbackKeyboard = new InlineKeyboard()
                 .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), videoToSend.url)
@@ -357,8 +374,8 @@ async function sendYouTubePreview(
     visitorId: string
 ): Promise<boolean> {
     const lang = detectLanguage(ctx.from?.language_code);
-    const premiumExpiryDays = getPremiumExpiryDays(ctx);
-    const caption = buildCaption(result, lang, premiumExpiryDays);
+    const vipExpiryDays = getVipExpiryDays(ctx);
+    const caption = buildCaption(result, lang, vipExpiryDays);
     const qualities = detectDetailedQualities(result);
     const keyboard = buildYouTubeKeyboard(originalUrl, visitorId, qualities);
     
@@ -400,13 +417,13 @@ async function sendSinglePhoto(
     // Deduplicate images by itemId - keep only highest quality per item
     const bestImages = deduplicateImages(images);
     
-    const premiumExpiryDays = getPremiumExpiryDays(ctx);
-    const caption = buildCaption(result, lang, premiumExpiryDays);
+    // Use simple caption (just username)
+    const caption = buildSimpleCaption(result, originalUrl);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
     try {
         await ctx.replyWithPhoto(new InputFile({ url: bestImages[0].url }), {
-            caption,
+            caption: caption || undefined,
             parse_mode: 'Markdown',
             reply_markup: keyboard,
         });
@@ -481,14 +498,14 @@ async function sendPhotoAlbum(
     // Deduplicate images - keep only highest quality per item
     const bestImages = deduplicateImages(images);
     
-    const premiumExpiryDays = getPremiumExpiryDays(ctx);
-    const caption = buildCaption(result, lang, premiumExpiryDays);
+    // Use simple caption (just username) for album
+    const caption = buildSimpleCaption(result, originalUrl);
 
     const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
         type: 'photo' as const,
         media: img.url,
-        caption: index === 0 ? caption : undefined,
-        parse_mode: index === 0 ? 'Markdown' as const : undefined,
+        caption: index === 0 ? (caption || undefined) : undefined,
+        parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
     }));
 
     try {
@@ -621,7 +638,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         }
         
         // Determine URL limit based on user type (VIP = Donator)
-        const isVip = ctx.isPremium || false;
+        const isVip = ctx.isVip || false;
         const maxUrls = isVip ? MAX_URLS_DONATOR : MAX_URLS_FREE;
         const urls = extractSocialUrls(text, maxUrls);
         

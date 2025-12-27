@@ -22,8 +22,8 @@ export interface BotUser {
     language_code?: string;        // User's language
     is_banned: boolean;            // Whether user is banned
     ban_reason?: string;           // Reason for ban
-    api_key_id?: string;           // Linked API key (premium user)
-    premium_expires_at?: string;   // ISO timestamp when premium expires
+    api_key_id?: string;           // Linked API key (VIP user)
+    vip_expires_at?: string;       // ISO timestamp when VIP expires
     daily_downloads: number;       // Downloads today
     last_download_at?: string;     // ISO timestamp of last download
     last_download_reset?: string;  // ISO timestamp when daily count was reset
@@ -61,8 +61,8 @@ export interface SessionData {
 export interface BotContext extends Context, SessionFlavor<SessionData> {
     /** Authenticated bot user from database */
     botUser?: BotUser;
-    /** Whether user is premium (has API key or is admin) */
-    isPremium?: boolean;
+    /** Whether user is VIP (has API key or is admin) */
+    isVip?: boolean;
     /** Whether user is admin */
     isAdmin?: boolean;
     /** Rate limit info */
@@ -158,14 +158,14 @@ export const RATE_LIMITS = {
     FREE_COOLDOWN_SECONDS: 4,
     /** Cooldown between downloads for free users (milliseconds) */
     FREE_COOLDOWN_MS: 4000,
-    /** Donator users have no limits */
+    /** VIP users have no limits */
+    VIP_DOWNLOAD_LIMIT: Infinity,
+    VIP_COOLDOWN_SECONDS: 0,
+    VIP_COOLDOWN_MS: 0,
+    /** @deprecated Use VIP_* instead */
     DONATOR_DOWNLOAD_LIMIT: Infinity,
     DONATOR_COOLDOWN_SECONDS: 0,
     DONATOR_COOLDOWN_MS: 0,
-    /** @deprecated Use DONATOR_* instead */
-    PREMIUM_DOWNLOAD_LIMIT: Infinity,
-    /** @deprecated Use DONATOR_* instead */
-    PREMIUM_COOLDOWN_SECONDS: 0,
 } as const;
 
 /** Bot messages */

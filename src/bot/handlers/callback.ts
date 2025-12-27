@@ -369,7 +369,7 @@ async function botCallbackDownloadQuality(
                 try { await ctx.editMessageText('⏳ Re-fetching media...'); } catch {}
             }
             
-            const result = await botUrlCallScraper(originalUrl, ctx.isPremium || false);
+            const result = await botUrlCallScraper(originalUrl, ctx.isVip || false);
             
             if (result.success && result.formats) {
                 const formatToSend = findFormatByQuality(result.formats, quality);
@@ -649,9 +649,9 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
             
             const user = statusResult?.user;
             const apiKey = statusResult?.apiKey;
-            const isPremium = !!apiKey;
+            const isVip = !!apiKey;
             
-            if (!isPremium) {
+            if (!isVip) {
                 // Free user
                 const dailyUsed = user?.daily_downloads || 0;
                 const dailyLimit = 10;
@@ -669,7 +669,7 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
                       `• Hari ini: ${dailyUsed} / ${dailyLimit}\n` +
                       `• Total: ${totalDownloads}\n\n` +
                       `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `💡 Upgrade ke Premium untuk download tanpa batas!`
+                      `💡 Upgrade ke VIP untuk download tanpa batas!`
                     : `📊 *Your Status*\n\n` +
                       `*Account:* Free Tier\n` +
                       `*Username:* ${user?.username ? '@' + user.username : 'Not set'}\n` +

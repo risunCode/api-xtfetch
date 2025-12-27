@@ -24,8 +24,8 @@ const FREE_DAILY_LIMIT = 8;
 /** Free tier cooldown between downloads (milliseconds) */
 const FREE_COOLDOWN_MS = 4000;
 
-/** Donator cooldown (no cooldown) */
-const DONATOR_COOLDOWN_MS = 0;
+/** VIP cooldown (no cooldown) */
+const VIP_COOLDOWN_MS = 0;
 
 /** Free tier cooldown in seconds (for display) */
 const FREE_COOLDOWN_SECONDS = FREE_COOLDOWN_MS / 1000;
@@ -210,7 +210,7 @@ function getCooldownMessage(seconds: number, lang: 'id' | 'en'): string {
  * Rate limit middleware - checks daily limits and cooldown
  * 
  * IMPORTANT: This middleware should run AFTER authMiddleware
- * It requires ctx.botUser and ctx.isPremium to be set
+ * It requires ctx.botUser and ctx.isVip to be set
  * 
  * Usage:
  * ```typescript
@@ -245,11 +245,11 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
     const telegramId = user.id;
     const lang = getUserLanguage(ctx);
 
-    // Donators/Premium users bypass all limits
-    if (ctx.isPremium) {
+    // VIP users bypass all limits
+    if (ctx.isVip) {
         ctx.rateLimit = {
             remaining: Infinity,
-            cooldownSeconds: DONATOR_COOLDOWN_MS / 1000,
+            cooldownSeconds: VIP_COOLDOWN_MS / 1000,
         };
         return next();
     }
@@ -309,8 +309,8 @@ export async function botRateLimitRecordDownload(ctx: BotContext): Promise<void>
 
     const telegramId = ctx.botUser.id;
 
-    // Donators/Premium users don't have cooldown
-    if (!ctx.isPremium) {
+    // VIP users don't have cooldown
+    if (!ctx.isVip) {
         await botRateLimitSetCooldown(telegramId, FREE_COOLDOWN_SECONDS);
     }
 
@@ -326,7 +326,7 @@ export {
     FREE_DAILY_LIMIT,
     FREE_COOLDOWN_MS,
     FREE_COOLDOWN_SECONDS,
-    DONATOR_COOLDOWN_MS,
+    VIP_COOLDOWN_MS,
     botRateLimitNeedsReset,
     botRateLimitResetDaily,
     botRateLimitGetCooldown,

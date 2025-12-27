@@ -11,7 +11,7 @@
  * ```
  */
 
-export { authMiddleware, botUserGetOrCreate, botUserIsBanned, botUserIsPremium } from './auth';
+export { authMiddleware, botUserGetOrCreate, botUserIsBanned, botUserIsVip } from './auth';
 export { 
     rateLimitMiddleware, 
     botRateLimitRecordDownload,
