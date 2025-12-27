@@ -29,8 +29,9 @@ const CDN_MAP: Record<string, CdnInfo> = {
     'xx.fbcdn': { region: 'us', location: 'US/Global', score: 5 },
 };
 
-// Jakarta CDN hostname for replacement (closest to Singapore server)
-const JAKARTA_CDN = 'scontent.fbdj2-1.fna.fbcdn.net';
+// Video CDN hostname - serves full video WITH AUDIO
+// scontent.* CDN may serve dash_muted version without audio!
+const VIDEO_CDN = 'video.xx.fbcdn.net';
 
 export function getCdnInfo(url: string): CdnInfo {
     for (const [pattern, info] of Object.entries(CDN_MAP)) {
@@ -47,31 +48,24 @@ export function isUsCdn(url: string): boolean {
     return getCdnInfo(url).region === 'us';
 }
 
-// Replace non-Asia CDN URLs with Jakarta CDN (closest to Singapore server)
-// Facebook CDNs are interchangeable - same content, different edge location
-// IMPORTANT: Don't replace video.xx.fbcdn.net - it has audio, scontent may serve muted version!
+// Replace scontent.* CDN URLs with video.xx.fbcdn.net to get FULL VIDEO WITH AUDIO
+// scontent.* CDN serves dash_muted version (no audio) for some videos!
+// video.xx.fbcdn.net always serves the full muxed video with audio
 export function optimizeCdnUrl(url: string): string {
-    // NEVER replace video.xx.fbcdn.net - this is the full video with audio
-    // Replacing it with scontent CDN may serve dash_muted version without audio
+    // Already video.* CDN, no need to replace
     if (url.includes('video.') && url.includes('fbcdn.net')) {
-        console.log(`[FB.CDN] Keeping video.* URL (has audio)`);
         return url;
     }
     
-    const info = getCdnInfo(url);
-    
-    // Already Asia CDN, no need to replace
-    if (info.region === 'asia') return url;
-    
-    // Replace US/EU/Unknown CDN hostname with Jakarta CDN
-    // Pattern: scontent-bos5-1.xx.fbcdn.net, scontent.fra1-1.fna.fbcdn.net, scontent.xx.fbcdn.net, etc.
+    // Replace any scontent.* hostname with video.xx.fbcdn.net
+    // This ensures we get the full video with audio, not the muted DASH version
     const replaced = url.replace(
         /scontent[-.][\w-]+\.(?:xx|fna)\.fbcdn\.net/,
-        JAKARTA_CDN
+        VIDEO_CDN
     );
     
     if (replaced !== url) {
-        console.log(`[FB.CDN] Redirected: ${info.location} -> Jakarta`);
+        console.log(`[FB.CDN] Redirected to video.xx (with audio)`);
     }
     
     return replaced;
