@@ -2,28 +2,44 @@
 
 All notable changes to the DownAria Backend API will be documented in this file.
 
-## [December 28, 2025] - Bot Refactor Phase 1: Memory & Performance
+## [December 28, 2025] - Bot Refactor Phase 1-3: Complete Implementation
 
-### Memory Management
+### Phase 1: Memory Management
 - **Session TTL** - Added 1 hour TTL using MemorySessionStorage (prevents memory accumulation)
 - **Session Cleanup** - Auto-cleanup stale pendingDownload data older than 5 minutes
-- **Buffer Management** - New `buffer.ts` utility with ManagedBuffer class and fetchWithCleanup pattern
+- **Buffer Management** - New `buffer.ts` utility with ManagedBuffer class and cleanup patterns
 - **Graceful Shutdown** - Added SIGTERM/SIGINT handlers to properly close workers
+
+### Phase 2: Queue Integration
+- **Feature Flag** - `BOT_USE_QUEUE=true` enables async queue processing
+- **BullMQ Integration** - Downloads added to queue instead of processed synchronously
+- **Priority Queue** - VIP users get higher priority (1 vs 10)
+- **Fallback** - If queue fails, falls back to synchronous processing
+
+### Phase 3: Monitoring
+- **Memory Monitoring** - `monitoring.ts` tracks heap usage with warning (400MB) and critical (700MB) thresholds
+- **Metrics Tracking** - Downloads processed/failed, average processing time, success rate
+- **Health Check** - `checkHealth()` function for memory, queue, and Redis status
+- **Periodic Logging** - Logs memory warnings and metrics summary every minute
 
 ### Code Consolidation
 - **Unified Media Sending** - New `media.ts` consolidates video/photo sending from url.ts, callback.ts, worker.ts
 - **Shared Utilities** - fetchWithRetry, buildSimpleCaption, deduplicateImages now in single location
-- **Worker Simplified** - Queue worker now uses unified sendMedia() function
+- **Worker Simplified** - Queue worker now uses unified sendMedia() with metrics tracking
 
 ### Middleware Optimization
 - **Reordered Middleware** - Stale message filter moved to first position (early exit, no DB)
-- **Memory Monitoring** - Added heap usage warning when exceeds 400MB
 
 ### Technical Details
 - `src/bot/utils/media.ts` - Unified media sending with ctx/api support
 - `src/bot/utils/buffer.ts` - Buffer management with cleanup patterns
-- `src/bot/index.ts` - Session TTL, middleware reorder, graceful shutdown
-- `src/bot/queue/worker.ts` - Simplified to use unified sendMedia()
+- `src/bot/utils/monitoring.ts` - Memory monitoring, metrics, health checks
+- `src/bot/index.ts` - Session TTL, middleware reorder, graceful shutdown, monitoring start
+- `src/bot/handlers/url.ts` - Queue integration with feature flag, metrics recording
+- `src/bot/queue/worker.ts` - Simplified with unified sendMedia(), metrics tracking
+
+### Environment Variables
+- `BOT_USE_QUEUE=true` - Enable async queue processing (default: false/sync)
 
 ---
 

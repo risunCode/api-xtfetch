@@ -14,6 +14,7 @@ import { logger } from '@/lib/services/shared/logger';
 import { QUEUE_CONFIG, getRedisConnection } from './config';
 import type { DownloadJobData } from './index';
 import { sendMedia } from '../utils/media';
+import { recordDownloadSuccess, recordDownloadFailure, updateQueueMetrics } from '../utils/monitoring';
 
 // ============================================================================
 // BOT INSTANCE ACCESS
@@ -53,7 +54,8 @@ async function getRateLimitFunction() {
  * Process a download job
  */
 async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
-    const { chatId, userId, messageId, processingMsgId, url, isPremium } = job.data;
+    const { chatId, userId, messageId, processingMsgId, url, isPremium, timestamp } = job.data;
+    const startTime = Date.now();
 
     logger.debug('telegram', `Processing job ${job.id} for user ${userId}`);
 
@@ -98,9 +100,15 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 // Increment download count
                 await botRateLimitIncrementDownloads(userId);
 
-                logger.debug('telegram', `Job ${job.id} completed successfully`);
+                // Record metrics
+                const processingTime = Date.now() - startTime;
+                recordDownloadSuccess(processingTime);
+
+                logger.debug('telegram', `Job ${job.id} completed in ${processingTime}ms`);
             } else {
                 // Failed to send media - edit processing message to error
+                recordDownloadFailure();
+                
                 await api.editMessageText(
                     chatId,
                     processingMsgId,
@@ -116,6 +124,7 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
             }
         } else {
             // Scraper failed - edit processing message to show error
+            recordDownloadFailure();
             const errorMessage = result.error || 'Download failed';
             
             await api.editMessageText(
@@ -135,6 +144,7 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
         }
     } catch (error) {
         logger.error('telegram', error, 'QUEUE_WORKER');
+        recordDownloadFailure();
 
         // Try to notify user of failure
         await api.editMessageText(

@@ -82,3 +82,24 @@ export {
   DEFAULT_RETRIES,
   type FetchOptions,
 } from './buffer';
+
+// Monitoring utilities
+export {
+  getMemoryStats,
+  isMemorySafe,
+  isMemoryCritical,
+  logMemoryStatus,
+  recordDownloadSuccess,
+  recordDownloadFailure,
+  updateQueueMetrics,
+  getMetrics,
+  getSuccessRate,
+  checkHealth,
+  startMonitoring,
+  stopMonitoring,
+  MEMORY_WARNING_THRESHOLD_MB,
+  MEMORY_CRITICAL_THRESHOLD_MB,
+  type MemoryStats,
+  type BotMetrics,
+  type HealthStatus,
+} from './monitoring';

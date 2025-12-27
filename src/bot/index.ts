@@ -27,6 +27,7 @@ import {
 } from './commands';
 import { adminComposer } from './commands/admin';
 import { initWorker, closeWorker, isQueueAvailable } from './queue';
+import { startMonitoring, stopMonitoring } from './utils/monitoring';
 
 // ============================================================================
 // Bot Instance (Singleton)
@@ -140,14 +141,8 @@ async function initBot(): Promise<void> {
                 await initWorker();
             }
             
-            // Memory monitoring - warn if heap usage is high
-            setInterval(() => {
-                const used = process.memoryUsage();
-                const heapMB = Math.round(used.heapUsed / 1024 / 1024);
-                if (heapMB > 400) { // Warning threshold
-                    console.warn(`[Bot] High memory usage: ${heapMB}MB heap`);
-                }
-            }, 60000); // Check every minute
+            // Start monitoring (logs memory warnings, tracks metrics)
+            startMonitoring(60000); // Check every minute
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
         }
@@ -258,12 +253,14 @@ export {
 
 process.on('SIGTERM', async () => {
     console.log('[Bot] Received SIGTERM, shutting down gracefully...');
+    stopMonitoring();
     await closeWorker();
     process.exit(0);
 });
 
 process.on('SIGINT', async () => {
     console.log('[Bot] Received SIGINT, shutting down gracefully...');
+    stopMonitoring();
     await closeWorker();
     process.exit(0);
 });

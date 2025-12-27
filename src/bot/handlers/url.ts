@@ -27,6 +27,8 @@ import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware/main
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
+import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
+import { downloadQueue, isQueueAvailable } from '../queue';
 
 // ============================================================================
 // URL DETECTION
@@ -46,6 +48,11 @@ const SUPPORTED_DOMAINS = [
 // Multi-URL limits
 const MAX_URLS_FREE = 1;
 const MAX_URLS_DONATOR = 5;
+
+// Feature flag for queue-based processing
+// Set to true to enable async queue processing (Phase 2)
+// When enabled, downloads are added to BullMQ queue instead of processed synchronously
+const USE_QUEUE_PROCESSING = process.env.BOT_USE_QUEUE === 'true';
 
 function botUrlExtract(text: string): string | null {
     const matches = text.match(URL_REGEX);
@@ -1001,7 +1008,34 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                 if (!processingMsgId) continue;
             }
 
+            // Queue-based processing (Phase 2) - async, non-blocking
+            // Enable with BOT_USE_QUEUE=true environment variable
+            if (USE_QUEUE_PROCESSING && isQueueAvailable() && downloadQueue && !isMultiUrl) {
+                try {
+                    await downloadQueue.add('download', {
+                        chatId: ctx.chat!.id,
+                        userId: ctx.from!.id,
+                        messageId: ctx.message.message_id,
+                        processingMsgId: processingMsgId!,
+                        url,
+                        isPremium: isVip,
+                        timestamp: Date.now(),
+                    }, {
+                        priority: isVip ? 1 : 10, // VIP gets higher priority
+                    });
+                    
+                    console.log(`[Bot.Queue] Job added for user ${ctx.from!.id}: ${url.substring(0, 50)}...`);
+                    // Return immediately - worker will handle the rest
+                    return;
+                } catch (queueError) {
+                    console.error('[Bot.Queue] Failed to add job, falling back to sync:', queueError);
+                    // Fall through to synchronous processing
+                }
+            }
+
+            // Synchronous processing (default)
             const result = await botUrlCallScraper(url, isVip);
+            const processingEndTime = Date.now();
 
             if (result.success) {
                 // Pass processingMsgId to sendMediaByType - it will handle status updates and deletion
@@ -1010,6 +1044,8 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                 
                 if (sent) {
                     successCount++;
+                    // Record metrics
+                    recordDownloadSuccess(processingEndTime - Date.now());
                     // Only delete user message on first successful download (single URL mode)
                     if (!isMultiUrl && url === urls[0]) {
                         await deleteMessage(ctx, ctx.message.message_id);
@@ -1017,6 +1053,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                     await botRateLimitRecordDownload(ctx);
                 } else {
                     failCount++;
+                    recordDownloadFailure();
                     if (processingMsgId) await deleteMessage(ctx, processingMsgId);
                     await ctx.reply(t('error_generic', lang), {
                         reply_markup: errorKeyboard(url),
@@ -1024,6 +1061,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                 }
             } else {
                 failCount++;
+                recordDownloadFailure();
                 if (processingMsgId) {
                     await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
                 } else {
