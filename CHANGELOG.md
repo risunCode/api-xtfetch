@@ -2,6 +2,31 @@
 
 All notable changes to the DownAria Backend API will be documented in this file.
 
+## [December 28, 2025] - Bot Refactor Phase 1: Memory & Performance
+
+### Memory Management
+- **Session TTL** - Added 1 hour TTL using MemorySessionStorage (prevents memory accumulation)
+- **Session Cleanup** - Auto-cleanup stale pendingDownload data older than 5 minutes
+- **Buffer Management** - New `buffer.ts` utility with ManagedBuffer class and fetchWithCleanup pattern
+- **Graceful Shutdown** - Added SIGTERM/SIGINT handlers to properly close workers
+
+### Code Consolidation
+- **Unified Media Sending** - New `media.ts` consolidates video/photo sending from url.ts, callback.ts, worker.ts
+- **Shared Utilities** - fetchWithRetry, buildSimpleCaption, deduplicateImages now in single location
+- **Worker Simplified** - Queue worker now uses unified sendMedia() function
+
+### Middleware Optimization
+- **Reordered Middleware** - Stale message filter moved to first position (early exit, no DB)
+- **Memory Monitoring** - Added heap usage warning when exceeds 400MB
+
+### Technical Details
+- `src/bot/utils/media.ts` - Unified media sending with ctx/api support
+- `src/bot/utils/buffer.ts` - Buffer management with cleanup patterns
+- `src/bot/index.ts` - Session TTL, middleware reorder, graceful shutdown
+- `src/bot/queue/worker.ts` - Simplified to use unified sendMedia()
+
+---
+
 ## [December 27, 2025] - Facebook CDN Retry Logic
 
 ### Network Reliability

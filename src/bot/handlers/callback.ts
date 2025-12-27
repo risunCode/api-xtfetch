@@ -201,7 +201,7 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
         const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    console.log(`[Bot.Callback] Attempt ${attempt}/${maxRetries}: ${url.substring(0, 60)}...`);
+                    console.log(`[Bot.Callback] Attempt ${attempt}/${maxRetries}`);
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 25000);
                     

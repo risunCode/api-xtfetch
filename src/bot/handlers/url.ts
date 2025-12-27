@@ -403,7 +403,7 @@ async function sendVideoDirectly(
     const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                console.log(`[Bot.Video] Attempt ${attempt}/${maxRetries}: ${url.substring(0, 60)}...`);
+                console.log(`[Bot.Video] Attempt ${attempt}/${maxRetries}`);
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s per attempt
                 
@@ -447,9 +447,10 @@ async function sendVideoDirectly(
             // Optimize CDN URL for Facebook (redirect US/EU to Jakarta)
             const optimizedUrl = videoUrl.includes('fbcdn.net') ? optimizeCdnUrl(videoUrl) : videoUrl;
             
-            // Log filesize info before download
+            // Log filesize info before download (full URL for debugging)
             const expectedSize = videoToSend.filesize ? (videoToSend.filesize / 1024 / 1024).toFixed(1) : '?';
-            console.log(`[Bot.Video] Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN: ${optimizedUrl.substring(0, 80)}...`);
+            console.log(`[Bot.Video] Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN:`);
+            console.log(`[Bot.Video] URL: ${optimizedUrl}`);
             
             // Show "uploading video" status under bot name
             await ctx.replyWithChatAction('upload_video');

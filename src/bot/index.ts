@@ -8,7 +8,7 @@
  * @module bot
  */
 
-import { Bot, session, webhookCallback } from 'grammy';
+import { Bot, session, webhookCallback, MemorySessionStorage } from 'grammy';
 import { NextRequest, NextResponse } from 'next/server';
 
 import type { BotContext, SessionData } from './types';
@@ -42,12 +42,7 @@ function getBotInstance(): Bot<BotContext> {
     if (!botInstance && TELEGRAM_BOT_TOKEN) {
         botInstance = new Bot<BotContext>(TELEGRAM_BOT_TOKEN);
         
-        // Setup session
-        botInstance.use(session({
-            initial: (): SessionData => ({})
-        }));
-        
-        // Filter stale messages (sent while bot was offline)
+        // 1. Filter stale messages FIRST (early exit - no DB queries)
         // Telegram retries webhooks, so we need generous threshold
         const STALE_THRESHOLD_SECONDS = 900; // 15 minutes - handles Telegram retries
         botInstance.use(async (ctx, next) => {
@@ -79,8 +74,25 @@ function getBotInstance(): Bot<BotContext> {
             await next();
         });
         
-        // Setup middleware (order matters!)
-        botInstance.use(maintenanceMiddleware); // Check maintenance first
+        // 2. Setup session with TTL (1 hour)
+        botInstance.use(session({
+            initial: (): SessionData => ({}),
+            storage: new MemorySessionStorage<SessionData>(3600), // 1 hour TTL
+        }));
+        
+        // 3. Cleanup stale pendingDownload data
+        botInstance.use(async (ctx, next) => {
+            if (ctx.session?.pendingDownload) {
+                const age = Date.now() - ctx.session.pendingDownload.timestamp;
+                if (age > 5 * 60 * 1000) { // 5 minutes
+                    ctx.session.pendingDownload = undefined;
+                }
+            }
+            await next();
+        });
+        
+        // 4. Setup middleware (order matters!)
+        botInstance.use(maintenanceMiddleware); // Check maintenance (should be cached)
         botInstance.use(authMiddleware);
         botInstance.use(rateLimitMiddleware);
         
@@ -127,6 +139,15 @@ async function initBot(): Promise<void> {
             if (isQueueAvailable()) {
                 await initWorker();
             }
+            
+            // Memory monitoring - warn if heap usage is high
+            setInterval(() => {
+                const used = process.memoryUsage();
+                const heapMB = Math.round(used.heapUsed / 1024 / 1024);
+                if (heapMB > 400) { // Warning threshold
+                    console.warn(`[Bot] High memory usage: ${heapMB}MB heap`);
+                }
+            }, 60000); // Check every minute
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
         }
@@ -230,3 +251,19 @@ export {
     QUEUE_CONFIG,
     type DownloadJobData,
 } from './queue';
+
+// ============================================================================
+// Graceful Shutdown Handlers
+// ============================================================================
+
+process.on('SIGTERM', async () => {
+    console.log('[Bot] Received SIGTERM, shutting down gracefully...');
+    await closeWorker();
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('[Bot] Received SIGINT, shutting down gracefully...');
+    await closeWorker();
+    process.exit(0);
+});
