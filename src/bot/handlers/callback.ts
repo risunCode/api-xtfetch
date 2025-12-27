@@ -320,6 +320,9 @@ function findFormatByQuality(
 /**
  * Handle download quality callback
  * Pattern: dl:(hd|sd|audio|cancel):{visitorId}
+ * 
+ * For YouTube: calls merge API to combine video+audio streams
+ * For other platforms: sends URL directly
  */
 async function botCallbackDownloadQuality(
     ctx: BotContext,
@@ -411,19 +414,25 @@ async function botCallbackDownloadQuality(
         return;
     }
 
+    const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
+    const isYouTube = pending.platform === 'youtube';
+    
     // Answer callback immediately
     const qualityLabel = quality === 'audio' ? 'audio' : quality.toUpperCase();
-    await ctx.answerCallbackQuery(`⏳ Downloading ${qualityLabel}...`);
+    await ctx.answerCallbackQuery(`⏳ ${isYouTube ? 'Processing' : 'Downloading'} ${qualityLabel}...`);
 
-    // Edit message to show downloading status
+    // Edit message to show processing status
+    const processingMsg = isYouTube
+        ? (lang === 'id' 
+            ? `⏳ Memproses ${qualityLabel}...\n\n💡 YouTube memerlukan merge video+audio, mohon tunggu 30-60 detik.`
+            : `⏳ Processing ${qualityLabel}...\n\n💡 YouTube requires video+audio merge, please wait 30-60 seconds.`)
+        : `⏳ Downloading ${qualityLabel} quality...`;
+    
     try {
-        await ctx.editMessageCaption({
-            caption: `⏳ Downloading ${qualityLabel} quality...`,
-        });
+        await ctx.editMessageCaption({ caption: processingMsg });
     } catch {
-        // Message might not have caption (e.g., text message)
         try {
-            await ctx.editMessageText(`⏳ Downloading ${qualityLabel} quality...`);
+            await ctx.editMessageText(processingMsg);
         } catch {
             // Ignore edit errors
         }
@@ -434,14 +443,11 @@ async function botCallbackDownloadQuality(
     const formatToSend = findFormatByQuality(formats, quality);
 
     if (!formatToSend) {
+        const errorMsg = lang === 'id' ? '❌ Format tidak tersedia' : '❌ Format not available';
         try {
-            await ctx.editMessageCaption({ caption: '❌ Format not available' });
+            await ctx.editMessageCaption({ caption: errorMsg });
         } catch {
-            try {
-                await ctx.editMessageText('❌ Format not available');
-            } catch {
-                await ctx.reply('❌ Format not available');
-            }
+            try { await ctx.editMessageText(errorMsg); } catch { await ctx.reply(errorMsg); }
         }
         return;
     }
@@ -461,12 +467,119 @@ async function botCallbackDownloadQuality(
         // Create simple keyboard with only Original URL button
         const simpleKeyboard = new InlineKeyboard().url('🔗 Original', pending.url);
 
-        // Delete the preview message (thumbnail with quality buttons)
-        try {
-            await ctx.deleteMessage();
-        } catch {
-            // Ignore if can't delete
+        // ========================================
+        // YouTube: Call merge API
+        // ========================================
+        if (isYouTube) {
+            // Determine quality parameter for merge API
+            let mergeQuality: string;
+            if (quality === 'audio') {
+                mergeQuality = 'mp3';
+            } else if (quality === 'hd') {
+                // Find HD format height
+                const hdFormat = formats.find(f => 
+                    f.type === 'video' && (
+                        f.quality.includes('1080') || 
+                        f.quality.includes('720') || 
+                        f.quality.toLowerCase().includes('hd')
+                    )
+                );
+                mergeQuality = hdFormat?.quality.match(/\d+/)?.[0] + 'p' || '720p';
+            } else {
+                // SD quality
+                const sdFormat = formats.find(f => 
+                    f.type === 'video' && (
+                        f.quality.includes('480') || 
+                        f.quality.includes('360') || 
+                        f.quality.toLowerCase().includes('sd')
+                    )
+                );
+                mergeQuality = sdFormat?.quality.match(/\d+/)?.[0] + 'p' || '360p';
+            }
+            
+            logger.debug('telegram', `YouTube merge: ${pending.url} @ ${mergeQuality}`);
+            
+            try {
+                // Call merge API internally
+                const mergeResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3002'}/api/v1/youtube/merge`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: pending.url,
+                        quality: mergeQuality,
+                        filename: pending.result.title?.substring(0, 100) || 'video',
+                    }),
+                });
+                
+                if (!mergeResponse.ok) {
+                    const errorData = await mergeResponse.json().catch(() => ({}));
+                    throw new Error(errorData.error || `Merge failed: ${mergeResponse.status}`);
+                }
+                
+                // Get the merged file as buffer
+                const mergedBuffer = Buffer.from(await mergeResponse.arrayBuffer());
+                const contentType = mergeResponse.headers.get('content-type') || 'video/mp4';
+                const isAudioFile = contentType.includes('audio');
+                
+                // Generate filename
+                const ext = isAudioFile ? '.mp3' : '.mp4';
+                const safeTitle = (pending.result.title || 'video')
+                    .replace(/[^\w\s.-]/g, '_')
+                    .replace(/\s+/g, '_')
+                    .substring(0, 50);
+                const filename = `${safeTitle}${ext}`;
+                
+                logger.debug('telegram', `YouTube merge complete: ${mergedBuffer.length} bytes, sending as ${filename}`);
+                
+                // Delete preview message
+                try { await ctx.deleteMessage(); } catch {}
+                
+                // Send merged file
+                if (isAudioFile) {
+                    await ctx.replyWithAudio(new InputFile(mergedBuffer, filename), {
+                        caption,
+                        title: pending.result.title?.substring(0, 64),
+                        reply_markup: simpleKeyboard,
+                    });
+                } else {
+                    await ctx.replyWithVideo(new InputFile(mergedBuffer, filename), {
+                        caption,
+                        reply_markup: simpleKeyboard,
+                        supports_streaming: true,
+                    });
+                }
+                
+                // Record successful download
+                await botRateLimitRecordDownload(ctx);
+                ctx.session.pendingDownload = undefined;
+                
+                logger.debug('telegram', `YouTube download sent: ${quality} quality`);
+                return;
+                
+            } catch (mergeError) {
+                logger.error('telegram', mergeError, 'YOUTUBE_MERGE');
+                
+                // Fallback: send link instead
+                const fallbackMsg = lang === 'id'
+                    ? `❌ Gagal memproses video.\n\n🔗 Coba download manual:`
+                    : `❌ Failed to process video.\n\n🔗 Try manual download:`;
+                
+                await ctx.reply(fallbackMsg, {
+                    reply_markup: new InlineKeyboard()
+                        .url('📥 Download', pending.url)
+                        .url('🔗 Original', pending.url),
+                    link_preview_options: { is_disabled: true },
+                });
+                return;
+            }
         }
+
+        // ========================================
+        // Non-YouTube: Send URL directly
+        // ========================================
+        
+        // Delete the preview message (thumbnail with quality buttons)
+        try { await ctx.deleteMessage(); } catch {}
 
         // Send the media with only Original URL button
         if (quality === 'audio') {

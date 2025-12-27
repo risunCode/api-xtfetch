@@ -46,14 +46,54 @@ export async function GET(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const type = searchParams.get('type') as AlertType | null;
         const enabled = searchParams.get('enabled');
+        const single = searchParams.get('single'); // Get single config mode
 
         let query = db.from('alert_config').select('*').order('created_at', { ascending: false });
 
         if (type) {
             query = query.eq('type', type);
         }
-        if (enabled !== null) {
+        if (enabled !== null && enabled !== undefined) {
             query = query.eq('enabled', enabled === 'true');
+        }
+
+        // Single config mode - return first row as object (not array)
+        if (single === 'true') {
+            const { data, error } = await query.limit(1).single();
+            
+            if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+                return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+            }
+            
+            // Map database columns to frontend field names
+            const config = data ? {
+                id: data.id,
+                alertErrorSpike: data.alert_error_spike ?? true,
+                alertCookieLow: data.alert_cookie_low ?? true,
+                alertPlatformDown: data.alert_platform_down ?? true,
+                alertRateLimit: data.alert_rate_limit ?? false,
+                enabled: data.enabled ?? true,
+                errorSpikeThreshold: data.error_spike_threshold ?? 50,
+                errorSpikeWindow: data.error_spike_window ?? 300,
+                cookieLowThreshold: data.cookie_low_threshold ?? 2,
+                platformDownThreshold: data.platform_down_threshold ?? 3,
+                rateLimitThreshold: data.rate_limit_threshold ?? 100,
+                cooldownMinutes: data.cooldown_minutes ?? 30,
+                notifyEmail: data.notify_email ?? false,
+                notifyDiscord: data.notify_discord ?? true,
+                discordWebhookUrl: data.discord_webhook_url,
+                webhookUrl: data.discord_webhook_url, // Legacy alias
+                emailRecipients: data.email_recipients,
+                healthCheckEnabled: data.health_check_enabled ?? false,
+                healthCheckInterval: data.health_check_interval ?? 3600,
+                lastHealthCheckAt: data.last_health_check_at,
+                lastAlertAt: data.last_alert_at,
+                lastAlertType: data.last_alert_type,
+                createdAt: data.created_at,
+                updatedAt: data.updated_at,
+            } : null;
+            
+            return NextResponse.json({ success: true, data: config });
         }
 
         const { data, error } = await query;
@@ -209,27 +249,69 @@ export async function PUT(request: NextRequest) {
     try {
         const body = await request.json();
         const { id, ...updates } = body;
-        
-        if (!id) {
-            return NextResponse.json({ success: false, error: 'ID required' }, { status: 400 });
-        }
 
         // Remove any fields that shouldn't be updated directly
         delete updates.created_at;
         delete updates.last_triggered;
+        delete updates.createdAt;
+        delete updates.updatedAt;
 
-        const { data, error } = await db
-            .from('alert_config')
-            .update({ ...updates, updated_at: new Date().toISOString() })
-            .eq('id', id)
-            .select()
-            .single();
+        // Map frontend field names to database column names
+        const dbUpdates: Record<string, unknown> = {};
+        
+        // Boolean flags
+        if (updates.alertErrorSpike !== undefined) dbUpdates.alert_error_spike = updates.alertErrorSpike;
+        if (updates.alertCookieLow !== undefined) dbUpdates.alert_cookie_low = updates.alertCookieLow;
+        if (updates.alertPlatformDown !== undefined) dbUpdates.alert_platform_down = updates.alertPlatformDown;
+        if (updates.alertRateLimit !== undefined) dbUpdates.alert_rate_limit = updates.alertRateLimit;
+        if (updates.enabled !== undefined) dbUpdates.enabled = updates.enabled;
+        
+        // Thresholds
+        if (updates.errorSpikeThreshold !== undefined) dbUpdates.error_spike_threshold = updates.errorSpikeThreshold;
+        if (updates.errorSpikeWindow !== undefined) dbUpdates.error_spike_window = updates.errorSpikeWindow;
+        if (updates.cookieLowThreshold !== undefined) dbUpdates.cookie_low_threshold = updates.cookieLowThreshold;
+        if (updates.platformDownThreshold !== undefined) dbUpdates.platform_down_threshold = updates.platformDownThreshold;
+        if (updates.rateLimitThreshold !== undefined) dbUpdates.rate_limit_threshold = updates.rateLimitThreshold;
+        if (updates.cooldownMinutes !== undefined) dbUpdates.cooldown_minutes = updates.cooldownMinutes;
+        
+        // Notification settings
+        if (updates.notifyEmail !== undefined) dbUpdates.notify_email = updates.notifyEmail;
+        if (updates.notifyDiscord !== undefined) dbUpdates.notify_discord = updates.notifyDiscord;
+        if (updates.discordWebhookUrl !== undefined) dbUpdates.discord_webhook_url = updates.discordWebhookUrl;
+        if (updates.webhookUrl !== undefined) dbUpdates.discord_webhook_url = updates.webhookUrl; // Legacy alias
+        if (updates.emailRecipients !== undefined) dbUpdates.email_recipients = updates.emailRecipients;
+        
+        // Health check settings
+        if (updates.healthCheckEnabled !== undefined) dbUpdates.health_check_enabled = updates.healthCheckEnabled;
+        if (updates.healthCheckInterval !== undefined) dbUpdates.health_check_interval = updates.healthCheckInterval;
+
+        // Add updated_at timestamp
+        dbUpdates.updated_at = new Date().toISOString();
+
+        let query;
+        if (id) {
+            // Update specific row by ID
+            query = db.from('alert_config').update(dbUpdates).eq('id', id);
+        } else {
+            // Update first row (single config mode) or upsert
+            // First try to get existing config
+            const { data: existing } = await db.from('alert_config').select('id').limit(1).single();
+            
+            if (existing?.id) {
+                query = db.from('alert_config').update(dbUpdates).eq('id', existing.id);
+            } else {
+                // No config exists, create one
+                query = db.from('alert_config').insert(dbUpdates);
+            }
+        }
+
+        const { data, error } = await query.select().single();
 
         if (error) {
             return NextResponse.json({ success: false, error: error.message }, { status: 500 });
         }
 
-        return NextResponse.json({ success: true, data, message: 'Alert updated successfully' });
+        return NextResponse.json({ success: true, data, message: 'Alert config updated successfully' });
     } catch (error) {
         return NextResponse.json({ 
             success: false, 
