@@ -146,11 +146,7 @@ export function botIsAdmin(userId: number): boolean {
  * @returns Proxied URL that goes through our backend
  */
 export function getProxiedMediaUrl(url: string, platform: string): string {
-  // Only proxy fbcdn URLs (Facebook/Instagram CDN)
-  if (!url.includes('fbcdn.net') && !url.includes('cdninstagram.com')) {
-    return url;
-  }
-  
-  const baseUrl = API_BASE_URL || 'https://api-xtfetch.up.railway.app';
-  return `${baseUrl}/api/v1/proxy?url=${encodeURIComponent(url)}&platform=${platform}&inline=1`;
+  // DISABLED: Direct URLs work fine, no need for proxy
+  // Proxy was causing issues with URL encoding and timeouts
+  return url;
 }
