@@ -157,28 +157,24 @@ export function detectQualities(result: DownloadResult): QualityInfo {
 // ============================================================================
 
 /**
- * Build quality button label with optional resolution and filesize
- * Examples: "🎬 HD (720p) 15MB", "🎬 HD (720p)", "🎬 HD 15MB", "🎬 HD"
+ * Build quality button label with optional resolution
+ * For YouTube: hide filesize (estimated, changes after merge)
+ * Examples: "🎬 HD (720p)", "🎬 HD", "📹 SD (480p)"
  */
 function buildQualityButtonLabel(
     icon: string,
     type: string,
     label?: string,
-    filesize?: number
+    _filesize?: number, // Ignored - filesize hidden from buttons
+    _isYouTube: boolean = false // Reserved for future use
 ): string {
     let text = `${icon} ${type}`;
     
-    if (label && filesize) {
-        // Has resolution + filesize: "🎬 HD (720p) 15MB"
-        text += ` (${label}) ${formatFilesize(filesize)}`;
-    } else if (label) {
-        // Has resolution only: "🎬 HD (720p)"
+    // Only show resolution label, NOT filesize
+    // Filesize is estimated and changes after merge/compression
+    if (label) {
         text += ` (${label})`;
-    } else if (filesize) {
-        // Has filesize only: "🎬 HD 15MB"
-        text += ` ${formatFilesize(filesize)}`;
     }
-    // Neither: just "🎬 HD"
     
     return text;
 }

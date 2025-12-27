@@ -124,6 +124,7 @@ Contact: @suntaw`,
         processing: '⏳ Processing {platform}...',
         download_complete: '📥 Download complete!',
         select_quality: '📥 Select quality:',
+        select_quality_youtube: '📥 Select quality:\n\n⚠️ File sizes are estimates. Final size may differ after merge.',
 
         // Errors
         error_generic: '❌ Download failed. Please try again.',
@@ -286,6 +287,7 @@ Kontak: @suntaw`,
         processing: '⏳ Memproses {platform}...',
         download_complete: '📥 Download selesai!',
         select_quality: '📥 Pilih kualitas:',
+        select_quality_youtube: '📥 Pilih kualitas:\n\n⚠️ Ukuran file adalah estimasi. Hasil akhir bisa berbeda setelah proses merge.',
 
         // Errors
         error_generic: '❌ Download gagal. Silakan coba lagi.',

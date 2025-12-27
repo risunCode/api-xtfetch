@@ -746,33 +746,21 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
         }
         
         case 'history': {
-            const { botDownloadGetHistory } = await import('../commands/history');
-            const userId = ctx.from?.id;
-            if (!userId) {
-                await ctx.reply('❌ User not found');
-                return;
-            }
-            
-            const history = await botDownloadGetHistory(userId, 5);
-            
-            if (!history || history.length === 0) {
-                const msg = lang === 'id' ? '📜 Belum ada riwayat download.' : '📜 No download history yet.';
-                await ctx.reply(msg);
-                return;
-            }
-            
-            const header = lang === 'id' ? '📜 *Riwayat Download Terakhir*\n\n' : '📜 *Recent Downloads*\n\n';
-            const items = history.map((h, i) => {
-                const date = new Date(h.created_at).toLocaleDateString();
-                return `${i + 1}. ${h.platform} - ${date}`;
-            }).join('\n');
-            
-            await ctx.reply(header + items, { parse_mode: 'Markdown' });
+            // History feature disabled - too complex for Telegram
+            const msg = lang === 'id' 
+                ? '📜 Fitur riwayat belum tersedia di Telegram.\n\nGunakan website untuk melihat riwayat download.'
+                : '📜 History feature not yet available on Telegram.\n\nUse the website to view download history.';
+            await ctx.reply(msg);
             break;
         }
         
         case 'donate': {
-            // Both /premium and /donate show the same donation info
+            // Show donation info with action keyboard
+            const keyboard = new InlineKeyboard()
+                .text('🛒 Donasi Sekarang', 'donate_contact')
+                .row()
+                .text('🔑 Saya Punya API Key', 'donate_enter_key');
+            
             const message = lang === 'id'
                 ? `💝 *Paket Donasi DownAria*\n\n` +
                   `Dengan berdonasi, kamu mendukung pengembangan bot!\n\n` +
@@ -795,7 +783,7 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
                   `• Rp5,000 / 30 days (PROMO!)\n\n` +
                   `📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
             
-            await ctx.reply(message, { parse_mode: 'Markdown' });
+            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
             break;
         }
         
@@ -814,10 +802,36 @@ async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise
         }
         
         case 'menu': {
-            const { t, detectLanguage } = await import('../i18n');
+            const { detectLanguage } = await import('../i18n');
             const detectedLang = detectLanguage(ctx.from?.language_code);
             const { menuKeyboard } = await import('../keyboards');
-            await ctx.reply(t('menu_title', detectedLang), { 
+            
+            // Get greeting based on time (UTC+7 for Indonesia)
+            const getGreeting = (lang: 'en' | 'id'): string => {
+                const now = new Date();
+                const hour = (now.getUTCHours() + 7) % 24;
+                
+                if (lang === 'id') {
+                    if (hour >= 5 && hour < 11) return 'Selamat pagi';
+                    if (hour >= 11 && hour < 15) return 'Selamat siang';
+                    if (hour >= 15 && hour < 18) return 'Selamat sore';
+                    return 'Selamat malam';
+                } else {
+                    if (hour >= 5 && hour < 12) return 'Good morning';
+                    if (hour >= 12 && hour < 17) return 'Good afternoon';
+                    if (hour >= 17 && hour < 21) return 'Good evening';
+                    return 'Good night';
+                }
+            };
+            
+            const username = ctx.from?.first_name || ctx.from?.username || 'User';
+            const greeting = getGreeting(detectedLang);
+            
+            const menuText = detectedLang === 'id'
+                ? `📋 *Menu DownAria Bot*\n\n${greeting}, ${username}! 👋\n\n────────────────────\n\nKirim link video dari:\n• YouTube • Instagram • TikTok\n• Twitter/X • Facebook • Weibo\n\n────────────────────`
+                : `📋 *DownAria Bot Menu*\n\n${greeting}, ${username}! 👋\n\n────────────────────\n\nSend a video link from:\n• YouTube • Instagram • TikTok\n• Twitter/X • Facebook • Weibo\n\n────────────────────`;
+            
+            await ctx.reply(menuText, { 
                 parse_mode: 'Markdown',
                 reply_markup: menuKeyboard(),
             });

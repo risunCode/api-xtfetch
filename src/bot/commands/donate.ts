@@ -249,7 +249,7 @@ donateComposer.callbackQuery('donate_enter_key', async (ctx: Context) => {
     cleanupAwaitingEntries();
 
     const keyboard = new InlineKeyboard()
-        .text('❌ Batal', 'cmd:donate');
+        .text('❌ Batal', 'donate_cancel_input');
 
     const message = lang === 'id'
         ? `🔑 *Masukkan API Key*
@@ -274,6 +274,22 @@ _Format:_ \`xtf_live_xxxxx...\`
         messageId: msg.message_id,
         timestamp: Date.now()
     });
+});
+
+// Handle cancel API key input - just delete the message
+donateComposer.callbackQuery('donate_cancel_input', async (ctx: Context) => {
+    await ctx.answerCallbackQuery('Cancelled');
+    
+    const userId = ctx.from?.id;
+    if (userId) {
+        awaitingApiKey.delete(userId);
+    }
+    
+    try {
+        await ctx.deleteMessage();
+    } catch {
+        // Ignore if can't delete
+    }
 });
 
 // Handle unlink button

@@ -57,9 +57,9 @@ export const NAV = {
 export const MENU = {
     /** Main menu - /menu */
     main: () => new InlineKeyboard()
-        .text('📊 My Status', 'cmd:mystatus').text('📜 History', 'cmd:history').row()
-        .text('💝 Donasi', 'cmd:donate').text('🔒 Privacy', 'cmd:privacy').row()
-        .url('🌐 Website', WEBSITE_URL).text('❓ Help', 'cmd:help'),
+        .text('📊 My Status', 'cmd:mystatus').text('💝 Donasi', 'cmd:donate').row()
+        .text('🔒 Privacy', 'cmd:privacy').text('❓ Help', 'cmd:help').row()
+        .url('🌐 Website', WEBSITE_URL),
     
     /** Start menu - /start (slightly different from main) */
     start: () => new InlineKeyboard()

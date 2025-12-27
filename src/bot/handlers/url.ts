@@ -361,16 +361,19 @@ async function sendYouTubePreview(
     const caption = buildCaption(result, lang, premiumExpiryDays);
     const qualities = detectDetailedQualities(result);
     const keyboard = buildYouTubeKeyboard(originalUrl, visitorId, qualities);
+    
+    // Use YouTube-specific select quality message with filesize warning
+    const selectQualityMsg = t('select_quality_youtube', lang);
 
     try {
         if (result.thumbnail) {
             await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
-                caption: `${caption}\n\n${t('select_quality', lang)}`,
+                caption: `${caption}\n\n${selectQualityMsg}`,
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });
         } else {
-            await ctx.reply(`${caption}\n\n${t('select_quality', lang)}`, {
+            await ctx.reply(`${caption}\n\n${selectQualityMsg}`, {
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });

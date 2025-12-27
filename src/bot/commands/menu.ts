@@ -9,16 +9,36 @@ import { botIsAdmin } from '../config';
 
 export const menuComposer = new Composer<BotContext>();
 
+/**
+ * Get greeting based on current hour (UTC+7 for Indonesia)
+ */
+function getGreeting(lang: BotLanguage): string {
+    const now = new Date();
+    // Convert to UTC+7 (Indonesia WIB)
+    const hour = (now.getUTCHours() + 7) % 24;
+    
+    if (lang === 'id') {
+        if (hour >= 5 && hour < 11) return 'Selamat pagi';
+        if (hour >= 11 && hour < 15) return 'Selamat siang';
+        if (hour >= 15 && hour < 18) return 'Selamat sore';
+        return 'Selamat malam';
+    } else {
+        if (hour >= 5 && hour < 12) return 'Good morning';
+        if (hour >= 12 && hour < 17) return 'Good afternoon';
+        if (hour >= 17 && hour < 21) return 'Good evening';
+        return 'Good night';
+    }
+}
+
 function buildMenuKeyboard(lang: BotLanguage, isAdmin: boolean): InlineKeyboard {
     const keyboard = new InlineKeyboard()
         .text(t('btn_mystatus', lang), 'cmd:mystatus')
-        .text(t('btn_history', lang), 'cmd:history')
-        .row()
         .text(t('btn_donate', lang), 'cmd:donate')
-        .text(t('btn_privacy', lang), 'cmd:privacy')
         .row()
-        .url(t('btn_website', lang), 'https://downaria.vercel.app')
-        .text(t('btn_help', lang), 'cmd:help');
+        .text(t('btn_privacy', lang), 'cmd:privacy')
+        .text(t('btn_help', lang), 'cmd:help')
+        .row()
+        .url(t('btn_website', lang), 'https://downaria.vercel.app');
     
     // Add admin button only for admins
     if (isAdmin) {
@@ -32,8 +52,34 @@ menuComposer.command('menu', async (ctx) => {
     const lang = detectLanguage(ctx.from?.language_code);
     const userId = ctx.from?.id || 0;
     const isAdmin = botIsAdmin(userId);
+    const username = ctx.from?.first_name || ctx.from?.username || 'User';
+    const greeting = getGreeting(lang);
     
-    await ctx.reply(t('menu_title', lang), {
+    const menuText = lang === 'id'
+        ? `📋 *Menu DownAria Bot*
+
+${greeting}, ${username}! 👋
+
+────────────────────
+
+Kirim link video dari:
+• YouTube • Instagram • TikTok
+• Twitter/X • Facebook • Weibo
+
+────────────────────`
+        : `📋 *DownAria Bot Menu*
+
+${greeting}, ${username}! 👋
+
+────────────────────
+
+Send a video link from:
+• YouTube • Instagram • TikTok
+• Twitter/X • Facebook • Weibo
+
+────────────────────`;
+    
+    await ctx.reply(menuText, {
         parse_mode: 'Markdown',
         reply_markup: buildMenuKeyboard(lang, isAdmin),
     });
