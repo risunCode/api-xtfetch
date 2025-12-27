@@ -205,14 +205,20 @@ function getRateLimitConfig(pathname: string, tier: string): { requests: number;
 }
 
 // Security headers
+// NOTE: CSP relaxed for homepage to allow external fonts/icons (Google Fonts, FontAwesome)
 const SECURITY_HEADERS = {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'X-XSS-Protection': '1; mode=block',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
 };
+
+// Stricter CSP for API routes only
+const API_CSP = "default-src 'none'; frame-ancestors 'none'";
+
+// Relaxed CSP for homepage (needs external fonts/icons)
+const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data:; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
 // Service tier detection
 function getServiceTier(pathname: string, request: NextRequest): string {
@@ -480,6 +486,10 @@ export async function middleware(request: NextRequest) {
     Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
         response.headers.set(key, value);
     });
+
+    // Apply appropriate CSP based on route type
+    const isApiRoute = pathname.startsWith('/api/');
+    response.headers.set('Content-Security-Policy', isApiRoute ? API_CSP : PAGE_CSP);
 
     // Add service tier info to headers
     response.headers.set('X-Service-Tier', serviceTier);

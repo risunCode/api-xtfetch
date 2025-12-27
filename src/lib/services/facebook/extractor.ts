@@ -138,6 +138,14 @@ const isSkipImage = (url: string): boolean =>
     /emoji|sticker|static|rsrc|profile|avatar|\/cp0\/|\/[ps]\d+x\d+\/|_s\d+x\d+|\.webp\?/i.test(url);
 
 /**
+ * Check if URL is a muted video (no audio)
+ * Facebook sometimes returns muted versions for geo-restricted content
+ * Common patterns: muted_shared_audio, _nc_vs=...muted
+ */
+const isMutedUrl = (url: string): boolean => 
+    /muted|_nc_vs=.*muted|muted_shared_audio/i.test(url);
+
+/**
  * Parse engagement number string (handles K, M suffixes)
  */
 const parseEngagement = (s: string): number => {
@@ -192,6 +200,7 @@ const VIDEO_URL_PATTERNS = [
  * 
  * Prioritizes playable_url (muxed video+audio) over browser_native_* 
  * which often contains video-only streams without audio.
+ * Also detects and deprioritizes muted URLs (geo-restricted content).
  * 
  * @param html - HTML content to search
  * @returns Object with HD and SD video URLs if found
@@ -200,29 +209,35 @@ export function fbExtractVideos(html: string): FbVideoResult {
     const result: FbVideoResult = {};
     
     // Collect all found URLs with their priority and audio info
-    const hdCandidates: { url: string; priority: number; hasMuxedAudio: boolean }[] = [];
-    const sdCandidates: { url: string; priority: number; hasMuxedAudio: boolean }[] = [];
+    const hdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
+    const sdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
     
     for (const { pattern, quality, priority, hasMuxedAudio } of VIDEO_URL_PATTERNS) {
         const match = html.match(pattern);
         if (match?.[1]) {
             const url = utilDecodeUrl(match[1]);
+            const muted = isMutedUrl(url);
+            // Reduce priority significantly if URL is muted
+            const adjustedPriority = muted ? priority - 50 : priority;
+            
             if (quality === 'hd') {
-                hdCandidates.push({ url, priority, hasMuxedAudio });
+                hdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted });
             } else {
-                sdCandidates.push({ url, priority, hasMuxedAudio });
+                sdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted });
             }
         }
     }
     
-    // Sort by priority (highest first) - muxed audio URLs will be at top
+    // Sort by priority (highest first) - non-muted URLs will be at top
     // Secondary sort: prefer muxed audio over video-only at same priority
     hdCandidates.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
+        if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
         return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
     });
     sdCandidates.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
+        if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
         return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
     });
     
@@ -627,6 +642,7 @@ export function fbExtractMetadata(html: string): FbMetadata {
  * 
  * AUDIO FIX: Prioritizes playable_url and progressive_url patterns
  * which contain muxed video+audio over browser_native URLs.
+ * Also detects and deprioritizes muted URLs (geo-restricted content).
  * 
  * @param html - HTML content to parse
  * @returns Array of MediaFormat objects for story items
@@ -637,9 +653,11 @@ export function fbExtractStories(html: string): MediaFormat[] {
     let m;
     
     // Collect video-thumbnail pairs with audio priority
-    const storyBlocks: { videoUrl: string; isHD: boolean; thumbnail?: string; position: number; hasMuxedAudio: boolean }[] = [];
+    // isMuted flag helps deprioritize muted URLs when better alternatives exist
+    const storyBlocks: { videoUrl: string; isHD: boolean; thumbnail?: string; position: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
     
     // Pattern 1: progressive_url with quality metadata (HAS AUDIO)
+    // Collect ALL patterns first, then sort by audio quality
     FB_PATTERNS.storyVideo.lastIndex = 0;
     while ((m = FB_PATTERNS.storyVideo.exec(html)) !== null) {
         const url = utilDecodeUrl(m[1]);
@@ -654,87 +672,105 @@ export function fbExtractStories(html: string): MediaFormat[] {
                 thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
                 position: m.index,
                 hasMuxedAudio: true, // progressive_url has audio
+                isMuted: isMutedUrl(url),
             });
         }
     }
     
-    // Pattern 2: playable_url in story context (HAS AUDIO) - try if no progressive found
-    if (storyBlocks.length === 0) {
-        FB_PATTERNS.storyPlayableUrl.lastIndex = 0;
-        while ((m = FB_PATTERNS.storyPlayableUrl.exec(html)) !== null) {
-            const url = utilDecodeUrl(m[1]);
-            if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-                seenUrls.add(url);
-                const searchStart = Math.max(0, m.index - 2000);
-                const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
-                const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
-                storyBlocks.push({
-                    videoUrl: url,
-                    isHD: /720|1080|_hd/i.test(url),
-                    thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
-                    position: m.index,
-                    hasMuxedAudio: true, // playable_url has audio
-                });
-            }
+    // Pattern 2: playable_url in story context (HAS AUDIO)
+    FB_PATTERNS.storyPlayableUrl.lastIndex = 0;
+    while ((m = FB_PATTERNS.storyPlayableUrl.exec(html)) !== null) {
+        const url = utilDecodeUrl(m[1]);
+        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
+            seenUrls.add(url);
+            const searchStart = Math.max(0, m.index - 2000);
+            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
+            const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
+            storyBlocks.push({
+                videoUrl: url,
+                isHD: /720|1080|_hd/i.test(url),
+                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
+                position: m.index,
+                hasMuxedAudio: true, // playable_url has audio
+                isMuted: isMutedUrl(url),
+            });
         }
     }
     
     // Pattern 3: video.playable_url in story data (HAS AUDIO)
-    if (storyBlocks.length === 0) {
-        FB_PATTERNS.storyVideoData.lastIndex = 0;
-        while ((m = FB_PATTERNS.storyVideoData.exec(html)) !== null) {
-            const url = utilDecodeUrl(m[1]);
-            if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-                seenUrls.add(url);
-                storyBlocks.push({
-                    videoUrl: url,
-                    isHD: /720|1080|_hd/i.test(url),
-                    thumbnail: undefined,
-                    position: m.index,
-                    hasMuxedAudio: true,
-                });
-            }
+    FB_PATTERNS.storyVideoData.lastIndex = 0;
+    while ((m = FB_PATTERNS.storyVideoData.exec(html)) !== null) {
+        const url = utilDecodeUrl(m[1]);
+        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
+            seenUrls.add(url);
+            storyBlocks.push({
+                videoUrl: url,
+                isHD: /720|1080|_hd/i.test(url),
+                thumbnail: undefined,
+                position: m.index,
+                hasMuxedAudio: true,
+                isMuted: isMutedUrl(url),
+            });
         }
     }
     
     // Pattern 4: Fallback - any progressive_url (HAS AUDIO)
-    if (storyBlocks.length === 0) {
-        FB_PATTERNS.storyVideoFallback.lastIndex = 0;
-        while ((m = FB_PATTERNS.storyVideoFallback.exec(html)) !== null) {
-            const url = utilDecodeUrl(m[1]);
-            if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-                seenUrls.add(url);
-                const searchStart = Math.max(0, m.index - 2000);
-                const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
-                const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
-                storyBlocks.push({
-                    videoUrl: url,
-                    isHD: /720|1080|_hd/i.test(url),
-                    thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
-                    position: m.index,
-                    hasMuxedAudio: true, // progressive_url has audio
-                });
-            }
+    FB_PATTERNS.storyVideoFallback.lastIndex = 0;
+    while ((m = FB_PATTERNS.storyVideoFallback.exec(html)) !== null) {
+        const url = utilDecodeUrl(m[1]);
+        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
+            seenUrls.add(url);
+            const searchStart = Math.max(0, m.index - 2000);
+            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
+            const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
+            storyBlocks.push({
+                videoUrl: url,
+                isHD: /720|1080|_hd/i.test(url),
+                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
+                position: m.index,
+                hasMuxedAudio: true, // progressive_url has audio
+                isMuted: isMutedUrl(url),
+            });
         }
     }
     
     // Pattern 5: LAST RESORT - browser_native URLs (NO AUDIO)
     // Only use if absolutely nothing else found
-    if (storyBlocks.length === 0) {
-        const browserNativePattern = /"browser_native_(?:hd|sd)_url":"(https:[^"]+\.mp4[^"]*)"/g;
-        while ((m = browserNativePattern.exec(html)) !== null) {
-            const url = utilDecodeUrl(m[1]);
-            if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-                seenUrls.add(url);
-                storyBlocks.push({
-                    videoUrl: url,
-                    isHD: /hd_url/.test(m[0]),
-                    thumbnail: undefined,
-                    position: m.index,
-                    hasMuxedAudio: false, // browser_native has NO audio
-                });
-            }
+    const browserNativePattern = /"browser_native_(?:hd|sd)_url":"(https:[^"]+\.mp4[^"]*)"/g;
+    while ((m = browserNativePattern.exec(html)) !== null) {
+        const url = utilDecodeUrl(m[1]);
+        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
+            seenUrls.add(url);
+            storyBlocks.push({
+                videoUrl: url,
+                isHD: /hd_url/.test(m[0]),
+                thumbnail: undefined,
+                position: m.index,
+                hasMuxedAudio: false, // browser_native has NO audio
+                isMuted: isMutedUrl(url),
+            });
         }
+    }
+    
+    // Sort by audio quality: non-muted with audio > muted with audio > no audio
+    // This ensures we prefer URLs with actual audio over muted versions
+    storyBlocks.sort((a, b) => {
+        // Priority 1: Non-muted with audio (best)
+        const aScore = a.hasMuxedAudio && !a.isMuted ? 3 : a.hasMuxedAudio ? 2 : 1;
+        const bScore = b.hasMuxedAudio && !b.isMuted ? 3 : b.hasMuxedAudio ? 2 : 1;
+        if (bScore !== aScore) return bScore - aScore;
+        // Priority 2: HD over SD
+        if (a.isHD !== b.isHD) return a.isHD ? -1 : 1;
+        // Priority 3: Position (earlier in HTML = more relevant)
+        return a.position - b.position;
+    });
+    
+    // If all URLs are muted, log warning (for debugging)
+    const allMuted = storyBlocks.length > 0 && storyBlocks.every(b => b.isMuted);
+    if (allMuted) {
+        // All URLs are muted - this is a geo-restriction issue
+        // The video will play but without audio
+        console.warn('[FB Story] All video URLs are muted (geo-restricted content)');
     }
     
     // Collect all thumbnails as fallback
@@ -745,17 +781,21 @@ export function fbExtractStories(html: string): MediaFormat[] {
         if (isValidMedia(url) && !allThumbs.includes(url)) allThumbs.push(url);
     }
     
-    // Sort by position to maintain order
-    storyBlocks.sort((a, b) => a.position - b.position);
+    // Filter to get best non-muted URLs first
+    const nonMutedBlocks = storyBlocks.filter(b => !b.isMuted && b.hasMuxedAudio);
+    const mutedBlocks = storyBlocks.filter(b => b.isMuted || !b.hasMuxedAudio);
+    
+    // Use non-muted if available, otherwise fall back to muted
+    const blocksToUse = nonMutedBlocks.length > 0 ? nonMutedBlocks : mutedBlocks;
     
     let videoIdx = 0;
     let fallbackThumbIdx = 0;
     
     // Group HD/SD pairs if both exist
-    if (storyBlocks.some(v => v.isHD) && storyBlocks.some(v => !v.isHD)) {
-        const count = Math.ceil(storyBlocks.length / 2);
+    if (blocksToUse.some(v => v.isHD) && blocksToUse.some(v => !v.isHD)) {
+        const count = Math.ceil(blocksToUse.length / 2);
         for (let i = 0; i < count; i++) {
-            const pair = storyBlocks.slice(i * 2, i * 2 + 2);
+            const pair = blocksToUse.slice(i * 2, i * 2 + 2);
             const best = pair.find(v => v.isHD) || pair[0];
             if (best) {
                 const thumb = best.thumbnail || pair.find(p => p.thumbnail)?.thumbnail || allThumbs[fallbackThumbIdx++];
@@ -769,8 +809,8 @@ export function fbExtractStories(html: string): MediaFormat[] {
                 });
             }
         }
-    } else if (storyBlocks.length > 0) {
-        storyBlocks.forEach((v) => {
+    } else if (blocksToUse.length > 0) {
+        blocksToUse.forEach((v) => {
             const thumb = v.thumbnail || allThumbs[fallbackThumbIdx++];
             formats.push({
                 quality: `Story ${++videoIdx}`,
