@@ -1,6 +1,5 @@
 // scraper.ts - Main Facebook scraper logic
 import { httpGet } from '@/lib/http/client';
-import { FACEBOOK_HEADERS } from '@/lib/http/headers';
 import { sysConfigScraperTimeout } from '@/lib/config/system';
 import { extractContent, detectIssue } from './extractor';
 import { optimizeUrls, logCdnSelection } from './cdn';
@@ -107,8 +106,11 @@ async function fetchWithRetry(url: string, options: ScraperOptions, contentType?
     const isStory = contentType === 'story' || url.includes('/stories/') || url.includes('/share/s/');
     const isShortlink = /\/share\/[rvs]\/|fb\.watch|fbwat\.ch/i.test(url);
 
+    // Don't set Referer/Origin - let it be a fresh navigation request
+    // Setting platform causes httpGet to add Referer which Facebook may reject
     const customHeaders: Record<string, string> = {
         'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
     };
 
     // Step 1: First fetch - shortlinks NEED cookie, direct URLs try without first
@@ -118,8 +120,8 @@ async function fetchWithRetry(url: string, options: ScraperOptions, contentType?
         
         console.log(`[FB] -> Fetch ${useCookieFirst ? 'with' : 'without'} cookie...`);
         
+        // Don't pass platform to avoid Referer/Origin being set
         const res = await httpGet(url, { 
-            platform: 'facebook', 
             cookie: firstCookie, 
             timeout,
             headers: customHeaders,
@@ -140,7 +142,6 @@ async function fetchWithRetry(url: string, options: ScraperOptions, contentType?
                 await new Promise(r => setTimeout(r, 3000));
                 
                 const retryRes = await httpGet(url, { 
-                    platform: 'facebook', 
                     cookie, 
                     timeout,
                     headers: customHeaders,
