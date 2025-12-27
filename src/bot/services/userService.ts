@@ -36,7 +36,6 @@ export interface BotUserUpdateInput {
   username?: string | null;
   first_name?: string | null;
   language_code?: string;
-  is_premium?: boolean;
   api_key_id?: string | null;
   daily_downloads?: number;
   total_downloads?: number;
@@ -220,9 +219,9 @@ export async function botUserLinkApiKey(
   telegramId: number,
   apiKeyId: string
 ): Promise<{ data: BotUser | null; error: string | null }> {
+  // Only update api_key_id - is_premium is determined by api_key_id presence
   return botUserUpdate(telegramId, {
     api_key_id: apiKeyId,
-    is_premium: true,
   });
 }
 
@@ -232,9 +231,9 @@ export async function botUserLinkApiKey(
 export async function botUserUnlinkApiKey(
   telegramId: number
 ): Promise<{ data: BotUser | null; error: string | null }> {
+  // Only update api_key_id - is_premium is determined by api_key_id presence
   return botUserUpdate(telegramId, {
     api_key_id: null,
-    is_premium: false,
   });
 }
 

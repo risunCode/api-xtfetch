@@ -14,6 +14,7 @@ import { Composer, InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
 import { supabaseAdmin } from '@/lib/database/supabase';
 import { apiKeyValidate } from '@/lib/auth/apikeys';
+import { botUserLinkApiKey as botUserLinkApiKeyService } from '../services/userService';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -44,30 +45,15 @@ function getUserLanguage(ctx: Context): 'id' | 'en' {
 }
 
 /**
- * Link API key to Telegram user
+ * Link API key to Telegram user (wrapper around userService)
  */
 async function botUserLinkApiKey(userId: number, apiKeyId: string): Promise<boolean> {
-    const db = supabaseAdmin;
-    if (!db) return false;
-
-    try {
-        const { error } = await db
-            .from('bot_users')
-            .update({
-                api_key_id: apiKeyId,
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', userId);
-
-        if (error) {
-            console.error('[botUserLinkApiKey] Error:', error);
-            return false;
-        }
-        return true;
-    } catch (error) {
+    const { error } = await botUserLinkApiKeyService(userId, apiKeyId);
+    if (error) {
         console.error('[botUserLinkApiKey] Error:', error);
         return false;
     }
+    return true;
 }
 
 /**

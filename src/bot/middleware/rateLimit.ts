@@ -234,6 +234,13 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
         return next();
     }
 
+    // Skip rate limit for API key input (dwa_live_*, dwa_test_*, xtf_*)
+    // This allows users to link API key even when rate limited
+    const messageText = ctx.message?.text?.trim() || '';
+    if (messageText.startsWith('dwa_live_') || messageText.startsWith('dwa_test_') || messageText.startsWith('xtf_')) {
+        return next();
+    }
+
     const user = ctx.botUser;
     const telegramId = user.id;
     const lang = getUserLanguage(ctx);
