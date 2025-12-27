@@ -1071,6 +1071,8 @@ export function fbDetectContentType(url: string): FbContentType {
     if (/\/videos?\/|\/watch\/|\/share\/v\//.test(url)) return 'video';
     if (/\/photos?\//.test(url)) return 'photo';
     if (/\/posts\/|permalink|\/share\/p\//.test(url)) return 'post';
+    // story.php with story_fbid is typically a reel/video shared via short link
+    if (/story\.php\?.*story_fbid=/.test(url)) return 'post';
     return 'unknown';
 }
 
