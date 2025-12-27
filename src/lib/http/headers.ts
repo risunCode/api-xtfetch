@@ -46,9 +46,9 @@ export function getOrigin(platform: PlatformId): string {
 // USER AGENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-export const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15';
-export const MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+export const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
+export const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
+export const MOBILE_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
 
 let uaPoolCache: { data: Array<{ platform: string; user_agent: string; device_type: string; enabled: boolean; last_used_at: string | null }>; loadedAt: number } | null = null;
 const DEFAULT_UA_CACHE_TTL = 5 * 60 * 1000;
@@ -166,7 +166,7 @@ export const BROWSER_HEADERS: Record<string, string> = {
   'Accept-Encoding': 'gzip, deflate, br',
   'Cache-Control': 'max-age=0',
   'DNT': '1',
-  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'Sec-Ch-Ua': '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"',
   'Sec-Ch-Ua-Mobile': '?0',
   'Sec-Ch-Ua-Platform': '"Windows"',
   'Sec-Fetch-Dest': 'document',
@@ -199,7 +199,7 @@ export const FACEBOOK_HEADERS: Record<string, string> = {
   'DNT': '1',
   'Referer': 'https://www.facebook.com/',
   'Origin': 'https://www.facebook.com',
-  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'Sec-Ch-Ua': '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"',
   'Sec-Ch-Ua-Mobile': '?0',
   'Sec-Ch-Ua-Platform': '"Windows"',
   'Sec-Fetch-Dest': 'document',
@@ -275,21 +275,6 @@ export const FALLBACK_PROFILES: BrowserProfile[] = [
     is_chromium: true,
     priority: 10,
   },
-  {
-    id: 'fallback-firefox',
-    platform: 'all',
-    label: 'Firefox 134 Windows',
-    user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0',
-    sec_ch_ua: null,
-    sec_ch_ua_platform: null,
-    sec_ch_ua_mobile: '?0',
-    accept_language: 'en-US,en;q=0.5',
-    browser: 'firefox',
-    device_type: 'desktop',
-    os: 'windows',
-    is_chromium: false,
-    priority: 5,
-  },
 ];
 
 let profilesCache: { data: BrowserProfile[]; loadedAt: number } | null = null;
@@ -343,7 +328,7 @@ function filterByPlatform(profiles: BrowserProfile[], platform?: PlatformId, chr
 }
 
 function selectWeightedRandom(profiles: BrowserProfile[]): BrowserProfile {
-  if (profiles.length === 0) return FALLBACK_PROFILES[0];
+  // profiles will never be empty - getProfiles() guarantees FALLBACK_PROFILES as minimum
   if (profiles.length === 1) return profiles[0];
 
   const available = profiles.filter(p => p.id !== lastProfileId);
@@ -395,9 +380,11 @@ export function httpGetRandomProfile(chromiumOnly = false): BrowserProfile {
     return cached.profile;
   }
   
+  // Use DB cache if available, otherwise fallback
   const profiles = profilesCache?.data || FALLBACK_PROFILES;
   const filtered = chromiumOnly ? profiles.filter(p => p.is_chromium) : profiles;
-  const profile = selectWeightedRandom(filtered.length > 0 ? filtered : FALLBACK_PROFILES);
+  // filtered will have at least FALLBACK_PROFILES which has chromium profiles
+  const profile = selectWeightedRandom(filtered);
   
   syncProfileCache.set(cacheKey, { profile, expires: Date.now() + SYNC_PROFILE_CACHE_TTL });
   return profile;

@@ -105,46 +105,41 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- SEED DATA - User Agents (Latest Dec 2024)
+-- SEED DATA - User Agents (Updated Dec 2025 - Chrome 143)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 INSERT INTO useragent_pool (platform, user_agent, device_type, browser, version, os) VALUES
--- Chrome Desktop
-('all', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'desktop', 'chrome', '131', 'windows'),
-('all', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'desktop', 'chrome', '131', 'macos'),
-('all', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'desktop', 'chrome', '131', 'linux'),
--- Firefox Desktop
-('all', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0', 'desktop', 'firefox', '134', 'windows'),
-('all', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:134.0) Gecko/20100101 Firefox/134.0', 'desktop', 'firefox', '134', 'macos'),
--- Safari Desktop
-('all', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15', 'desktop', 'safari', '18.2', 'macos'),
--- Edge Desktop
-('all', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0', 'desktop', 'edge', '131', 'windows'),
--- Mobile Chrome
-('all', 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36', 'mobile', 'chrome', '131', 'android'),
-('tiktok', 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36', 'mobile', 'chrome', '131', 'android'),
--- Mobile Safari
-('all', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1', 'mobile', 'safari', '18.2', 'ios'),
-('tiktok', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1', 'mobile', 'safari', '18.2', 'ios');
+-- Chrome Desktop (v143)
+('all', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', 'desktop', 'chrome', '143', 'windows'),
+('all', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', 'desktop', 'chrome', '143', 'macos'),
+('all', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', 'desktop', 'chrome', '143', 'linux'),
+-- Safari Desktop (v18.5)
+('all', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15', 'desktop', 'safari', '18.5', 'macos'),
+-- Edge Desktop (v143)
+('all', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0', 'desktop', 'edge', '143', 'windows'),
+-- Mobile Chrome (v143)
+('all', 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36', 'mobile', 'chrome', '143', 'android'),
+('tiktok', 'Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36', 'mobile', 'chrome', '143', 'android'),
+-- Mobile Safari (iOS 18.5)
+('all', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1', 'mobile', 'safari', '18.5', 'ios'),
+('tiktok', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1', 'mobile', 'safari', '18.5', 'ios');
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- SEED DATA - Browser Profiles (Anti-Ban)
+-- SEED DATA - Browser Profiles (Anti-Ban) - Updated Dec 2025
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 INSERT INTO browser_profiles (platform, label, user_agent, sec_ch_ua, sec_ch_ua_platform, sec_ch_ua_mobile, accept_language, browser, device_type, os, is_chromium, priority) VALUES
 -- Chrome Windows (High Priority)
-('all', 'Chrome 131 Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 20),
+('all', 'Chrome 143 Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 20),
 -- Chrome macOS
-('all', 'Chrome 131 macOS', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"macOS"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'macos', true, 15),
--- Edge Windows
-('all', 'Edge 131 Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0', '"Microsoft Edge";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'edge', 'desktop', 'windows', true, 10),
--- Firefox (Non-Chromium, lower priority for FB/IG)
-('all', 'Firefox 134 Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0', NULL, NULL, '?0', 'en-US,en;q=0.5', 'firefox', 'desktop', 'windows', false, 5),
--- Safari macOS (Non-Chromium)
-('all', 'Safari 18.2 macOS', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15', NULL, NULL, '?0', 'en-US,en;q=0.9', 'safari', 'desktop', 'macos', false, 5),
+('all', 'Chrome 143 macOS', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"macOS"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'macos', true, 15),
+-- Edge Windows (v143)
+('all', 'Edge 143 Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0', '"Microsoft Edge";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'edge', 'desktop', 'windows', true, 10),
+-- Safari macOS
+('all', 'Safari 18.5 macOS', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15', NULL, NULL, '?0', 'en-US,en;q=0.9', 'safari', 'desktop', 'macos', false, 5),
 -- Instagram-specific (Chromium required)
-('instagram', 'Chrome 131 Windows (IG)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 25),
+('instagram', 'Chrome 143 Windows (IG)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 25),
 -- Facebook-specific (Chromium required)
-('facebook', 'Chrome 131 Windows (FB)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 25),
--- TikTok Mobile
-('tiktok', 'Chrome Mobile Android', 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36', '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"', '"Android"', '?1', 'en-US,en;q=0.9', 'chrome', 'mobile', 'android', true, 20);
+('facebook', 'Chrome 143 Windows (FB)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36', '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"Windows"', '?0', 'en-US,en;q=0.9', 'chrome', 'desktop', 'windows', true, 25),
+-- TikTok Mobile (Android 15)
+('tiktok', 'Chrome Mobile Android', 'Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36', '"Google Chrome";v="143", "Chromium";v="143", "Not_A Brand";v="24"', '"Android"', '?1', 'en-US,en;q=0.9', 'chrome', 'mobile', 'android', true, 20);
