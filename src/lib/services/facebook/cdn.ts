@@ -21,16 +21,16 @@ const CDN_MAP: Record<string, CdnInfo> = {
     'ams': { region: 'eu', location: 'Amsterdam', score: 50 },
     'fra': { region: 'eu', location: 'Frankfurt', score: 50 },
     'lhr': { region: 'eu', location: 'London', score: 50 },
+    // US (lowest priority - high latency from Singapore)
+    'bos': { region: 'us', location: 'Boston', score: 10 },
+    'iad': { region: 'us', location: 'Virginia', score: 10 },
+    'lax': { region: 'us', location: 'Los Angeles', score: 15 },
+    'sjc': { region: 'us', location: 'San Jose', score: 15 },
+    'xx.fbcdn': { region: 'us', location: 'US/Global', score: 5 },
 };
 
-// Jakarta CDN hostnames for replacement
-const JAKARTA_CDNS = [
-    'scontent.fbdj2-1.fna.fbcdn.net',
-    'scontent.fbdj1-1.fna.fbcdn.net',
-];
-
-// Global CDN - auto-routes to nearest edge (more reliable)
-const GLOBAL_CDN = 'scontent.xx.fbcdn.net';
+// Jakarta CDN hostname for replacement (closest to Singapore server)
+const JAKARTA_CDN = 'scontent.fbdj2-1.fna.fbcdn.net';
 
 export function getCdnInfo(url: string): CdnInfo {
     for (const [pattern, info] of Object.entries(CDN_MAP)) {
@@ -47,23 +47,23 @@ export function isUsCdn(url: string): boolean {
     return getCdnInfo(url).region === 'us';
 }
 
-// Replace US/EU CDN URLs with global CDN (auto-routes to nearest edge)
+// Replace non-Asia CDN URLs with Jakarta CDN (closest to Singapore server)
 // Facebook CDNs are interchangeable - same content, different edge location
 export function optimizeCdnUrl(url: string): string {
     const info = getCdnInfo(url);
     
-    // Already Asia CDN or global, no need to replace
-    if (info.region === 'asia' || url.includes('scontent.xx.fbcdn.net')) return url;
+    // Already Asia CDN, no need to replace
+    if (info.region === 'asia') return url;
     
-    // Replace US/EU CDN hostname with global CDN
-    // Pattern: scontent-bos5-1.xx.fbcdn.net, scontent.fra1-1.fna.fbcdn.net, etc.
+    // Replace US/EU/Unknown CDN hostname with Jakarta CDN
+    // Pattern: scontent-bos5-1.xx.fbcdn.net, scontent.fra1-1.fna.fbcdn.net, scontent.xx.fbcdn.net, etc.
     const replaced = url.replace(
         /scontent[-.][\w-]+\.(?:xx|fna)\.fbcdn\.net/,
-        GLOBAL_CDN
+        JAKARTA_CDN
     );
     
     if (replaced !== url) {
-        console.log(`[FB.CDN] Redirected: ${info.location} -> Global (xx)`);
+        console.log(`[FB.CDN] Redirected: ${info.location} -> Jakarta`);
     }
     
     return replaced;

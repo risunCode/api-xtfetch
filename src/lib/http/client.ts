@@ -221,18 +221,23 @@ export async function httpResolveUrl(
     }
   };
 
-  // For URLs that are known to require auth (stories, groups), use cookie from first try
-  const urlRequiresAuth = /\/stories\/|\/groups\//i.test(shortUrl);
+  // For URLs that are known to require auth (stories, groups, share links), use cookie from first try
+  const urlRequiresAuth = /\/stories\/|\/groups\/|\/share\/[a-zA-Z0-9]+\/?$/i.test(shortUrl);
   
   // First try: use cookie if URL requires auth, otherwise guest mode
   const firstResult = await doResolve(urlRequiresAuth && !!cookie);
   
   // Check if resolved to login page - retry with cookie if we didn't use it
-  if (cookie && !urlRequiresAuth && firstResult.resolved.includes('/login')) {
+  if (cookie && !urlRequiresAuth && (firstResult.resolved.includes('/login') || firstResult.resolved.includes('login.php'))) {
     console.log(`[httpResolveUrl] Detected login redirect, retrying with cookie...`);
     const retryResult = await doResolve(true);
     console.log(`[httpResolveUrl] Retry result: ${retryResult.resolved}`);
     return retryResult;
+  }
+  
+  // If still got login page even with cookie, log warning
+  if (firstResult.resolved.includes('/login') || firstResult.resolved.includes('login.php')) {
+    console.log(`[httpResolveUrl] Warning: Still redirected to login even with cookie`);
   }
 
   return firstResult;
