@@ -26,7 +26,6 @@ import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware/main
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
-import { getProxiedMediaUrl } from '../config';
 
 // ============================================================================
 // URL DETECTION
@@ -269,6 +268,9 @@ function buildSimpleCaption(result: DownloadResult, originalUrl: string): string
 /**
  * Send video directly (non-YouTube)
  * 
+ * Downloads video to buffer first, then uploads to Telegram.
+ * This bypasses Telegram's inability to fetch Facebook/Instagram CDN URLs.
+ * 
  * Smart quality logic:
  * - If HD filesize ≤ 40MB → Send HD directly, show only [🔗 Original]
  * - If HD filesize > 40MB → Send SD as fallback, show [🎬 HD (link)] [🔗 Original]
@@ -318,17 +320,43 @@ async function sendVideoDirectly(
         keyboard = buildVideoSuccessKeyboard(originalUrl);
     }
 
-    // Proxy URL for Facebook/Instagram CDN to avoid geo-blocking
     const platform = result.platform || 'facebook';
-    const videoUrl = getProxiedMediaUrl(videoToSend.url, platform);
-    const thumbUrl = result.thumbnail ? getProxiedMediaUrl(result.thumbnail, platform) : undefined;
+    const videoUrl = videoToSend.url;
+
+    // For Facebook/Instagram CDN: download first then upload as buffer
+    // Telegram servers can't fetch these URLs directly
+    const needsDownloadFirst = videoUrl.includes('fbcdn.net') || videoUrl.includes('cdninstagram.com');
 
     try {
-        await ctx.replyWithVideo(new InputFile({ url: videoUrl }), {
-            caption: caption || undefined,
-            parse_mode: 'Markdown',
-            reply_markup: keyboard,
-        });
+        if (needsDownloadFirst) {
+            // Download video to buffer
+            const response = await fetch(videoUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': '*/*',
+                    'Referer': 'https://www.facebook.com/',
+                },
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Download failed: ${response.status}`);
+            }
+            
+            const buffer = Buffer.from(await response.arrayBuffer());
+            
+            await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), {
+                caption: caption || undefined,
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        } else {
+            // Other platforms: use URL directly
+            await ctx.replyWithVideo(new InputFile({ url: videoUrl }), {
+                caption: caption || undefined,
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        }
         return true;
     } catch (error) {
         logger.error('telegram', error, 'SEND_VIDEO');
@@ -338,30 +366,53 @@ async function sendVideoDirectly(
             const fallbackCaption = lang === 'id'
                 ? `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
                   `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
-                  `⚠️ Video terlalu besar.`
+                  `⚠️ Gagal mengirim video.`
                 : `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
                   `${result.author ? escapeMarkdown(result.author) + '\n' : ''}\n` +
-                  `⚠️ Video too large.`;
+                  `⚠️ Failed to send video.`;
             
             const fallbackKeyboard = new InlineKeyboard()
                 .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), videoToSend.url)
                 .url('🔗 Original', originalUrl);
             
             // Try to send thumbnail with buttons
+            const thumbUrl = result.thumbnail;
             if (thumbUrl) {
-                await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
-                    caption: fallbackCaption,
-                    parse_mode: 'Markdown',
-                    reply_markup: fallbackKeyboard,
-                });
-            } else {
-                // No thumbnail, send text message with buttons
-                await ctx.reply(fallbackCaption, {
-                    parse_mode: 'Markdown',
-                    reply_markup: fallbackKeyboard,
-                    link_preview_options: { is_disabled: true },
-                });
+                // Download thumbnail too if it's fbcdn
+                if (thumbUrl.includes('fbcdn.net') || thumbUrl.includes('cdninstagram.com')) {
+                    try {
+                        const thumbResponse = await fetch(thumbUrl, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                'Referer': 'https://www.facebook.com/',
+                            },
+                        });
+                        if (thumbResponse.ok) {
+                            const thumbBuffer = Buffer.from(await thumbResponse.arrayBuffer());
+                            await ctx.replyWithPhoto(new InputFile(thumbBuffer, 'thumb.jpg'), {
+                                caption: fallbackCaption,
+                                parse_mode: 'Markdown',
+                                reply_markup: fallbackKeyboard,
+                            });
+                            return true;
+                        }
+                    } catch { /* fall through */ }
+                } else {
+                    await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
+                        caption: fallbackCaption,
+                        parse_mode: 'Markdown',
+                        reply_markup: fallbackKeyboard,
+                    });
+                    return true;
+                }
             }
+            
+            // No thumbnail or thumbnail failed, send text message with buttons
+            await ctx.reply(fallbackCaption, {
+                parse_mode: 'Markdown',
+                reply_markup: fallbackKeyboard,
+                link_preview_options: { is_disabled: true },
+            });
             return true;
         } catch (fallbackError) {
             logger.error('telegram', fallbackError, 'SEND_VIDEO_FALLBACK');
@@ -427,16 +478,33 @@ async function sendSinglePhoto(
     const caption = buildSimpleCaption(result, originalUrl);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
-    // Proxy URL for Facebook/Instagram CDN
-    const platform = result.platform || 'facebook';
-    const photoUrl = getProxiedMediaUrl(bestImages[0].url, platform);
+    const photoUrl = bestImages[0].url;
+    const needsDownloadFirst = photoUrl.includes('fbcdn.net') || photoUrl.includes('cdninstagram.com');
 
     try {
-        await ctx.replyWithPhoto(new InputFile({ url: photoUrl }), {
-            caption: caption || undefined,
-            parse_mode: 'Markdown',
-            reply_markup: keyboard,
-        });
+        if (needsDownloadFirst) {
+            // Download photo to buffer for Facebook/Instagram
+            const response = await fetch(photoUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://www.facebook.com/',
+                },
+            });
+            if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            
+            await ctx.replyWithPhoto(new InputFile(buffer, 'photo.jpg'), {
+                caption: caption || undefined,
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        } else {
+            await ctx.replyWithPhoto(new InputFile({ url: photoUrl }), {
+                caption: caption || undefined,
+                parse_mode: 'Markdown',
+                reply_markup: keyboard,
+            });
+        }
         return true;
     } catch (error) {
         logger.error('telegram', error, 'SEND_PHOTO');
@@ -511,17 +579,46 @@ async function sendPhotoAlbum(
     // Use simple caption (just username) for album
     const caption = buildSimpleCaption(result, originalUrl);
 
-    // Proxy URLs for Facebook/Instagram CDN
-    const platform = result.platform || 'facebook';
-    const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
-        type: 'photo' as const,
-        media: getProxiedMediaUrl(img.url, platform),
-        caption: index === 0 ? (caption || undefined) : undefined,
-        parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
-    }));
+    // Check if we need to download first (Facebook/Instagram CDN)
+    const needsDownloadFirst = bestImages.some(img => 
+        img.url.includes('fbcdn.net') || img.url.includes('cdninstagram.com')
+    );
 
     try {
-        await ctx.replyWithMediaGroup(mediaGroup);
+        if (needsDownloadFirst) {
+            // Download all images to buffers first
+            const downloadPromises = bestImages.slice(0, 10).map(async (img) => {
+                const response = await fetch(img.url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.facebook.com/',
+                    },
+                });
+                if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+                return Buffer.from(await response.arrayBuffer());
+            });
+            
+            const buffers = await Promise.all(downloadPromises);
+            
+            const mediaGroup: InputMediaPhoto[] = buffers.map((buffer, index) => ({
+                type: 'photo' as const,
+                media: new InputFile(buffer, `photo_${index}.jpg`),
+                caption: index === 0 ? (caption || undefined) : undefined,
+                parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
+            }));
+            
+            await ctx.replyWithMediaGroup(mediaGroup);
+        } else {
+            // Other platforms: use URLs directly
+            const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
+                type: 'photo' as const,
+                media: img.url,
+                caption: index === 0 ? (caption || undefined) : undefined,
+                parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
+            }));
+            
+            await ctx.replyWithMediaGroup(mediaGroup);
+        }
         
         const keyboard = buildPhotoKeyboard(originalUrl);
         await ctx.reply(t('download_complete', lang), { reply_markup: keyboard });

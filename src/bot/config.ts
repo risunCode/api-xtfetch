@@ -30,13 +30,13 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.RAIL
 // ============================================================================
 
 /** Download limit per reset period for free users */
-export const FREE_DOWNLOAD_LIMIT = 10;
+export const FREE_DOWNLOAD_LIMIT = 8;
 
 /** Reset period in hours for free users */
-export const FREE_RESET_HOURS = 6;
+export const FREE_RESET_HOURS = 12;
 
 /** Cooldown between downloads in seconds (free users) */
-export const FREE_COOLDOWN_SECONDS = 5;
+export const FREE_COOLDOWN_SECONDS = 4;
 
 /** Premium download limit (0 = unlimited) */
 export const PREMIUM_DOWNLOAD_LIMIT = 0;
@@ -131,22 +131,4 @@ export function botIsAdmin(userId: number): boolean {
     console.log(`[botIsAdmin] User ${userId} not in admin list: [${TELEGRAM_ADMIN_IDS.join(', ')}]`);
   }
   return isAdmin;
-}
-
-// ============================================================================
-// Media Proxy Helper
-// ============================================================================
-
-/**
- * Wrap media URL with proxy endpoint for Telegram
- * This helps when CDN URLs are geo-restricted or blocked
- * 
- * @param url - Original media URL
- * @param platform - Platform identifier (facebook, instagram, etc.)
- * @returns Proxied URL that goes through our backend
- */
-export function getProxiedMediaUrl(url: string, platform: string): string {
-  // DISABLED: Direct URLs work fine, no need for proxy
-  // Proxy was causing issues with URL encoding and timeouts
-  return url;
 }
