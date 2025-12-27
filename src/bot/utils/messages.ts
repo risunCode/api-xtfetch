@@ -104,14 +104,14 @@ Just paste a link to get started! 🚀`;
  * Help message
  */
 export function helpMessage(): string {
-  return `📖 *How to Use DownAria Bot*
+  return `📖 *Cara Menggunakan DownAria Bot*
 
-*Step 1:* Copy a video link from any supported platform
-*Step 2:* Paste it here
-*Step 3:* Wait for the download
-*Step 4:* Enjoy your video! 🎉
+*Langkah 1:* Copy link video dari platform yang didukung
+*Langkah 2:* Paste di sini
+*Langkah 3:* Tunggu proses download
+*Langkah 4:* Nikmati video kamu! 🎉
 
-*Supported Platforms:*
+*Platform yang Didukung:*
 • 📘 Facebook - Videos, Reels, Stories
 • 📸 Instagram - Reels, Posts, Stories
 • 𝕏 Twitter/X - Videos, GIFs
@@ -120,17 +120,17 @@ export function helpMessage(): string {
 • 🔴 Weibo - Videos
 
 *Commands:*
-/start - Main menu
-/help - This help message
-/stats - Your download statistics
-/premium - Premium features info
+/start - Menu utama
+/help - Bantuan ini
+/mystatus - Statistik download kamu
+/donate - Info donasi & VIP
 
 *Tips:*
-• Make sure the link is public
-• Some platforms may require cookies
-• Large files may take longer
+• Pastikan link bersifat publik
+• Beberapa platform memerlukan cookies
+• File besar mungkin memerlukan waktu lebih lama
 
-Need help? Contact @${ADMIN_CONTACT_USERNAME}`;
+Butuh bantuan? Hubungi @${ADMIN_CONTACT_USERNAME}`;
 }
 
 // ============================================================================
@@ -284,7 +284,7 @@ export function rateLimitMessage(resetInSeconds: number): string {
 You're sending requests too quickly!
 Please wait *${resetInSeconds} seconds* before your next download.
 
-💡 *Tip:* Upgrade to premium for faster downloads!`;
+💡 *Tip:* Upgrade ke VIP untuk download lebih cepat!`;
 }
 
 /**
@@ -297,7 +297,7 @@ You've used all *${limit}* free downloads for today.
 
 *Options:*
 • Wait until tomorrow for reset
-• Upgrade to premium for unlimited downloads`;
+• Upgrade ke VIP untuk unlimited downloads`;
 
   if (resetTime) {
     message += `\n\n🕐 Resets at: ${resetTime}`;
@@ -307,32 +307,32 @@ You've used all *${limit}* free downloads for today.
 }
 
 // ============================================================================
-// Premium Messages
+// VIP Messages
 // ============================================================================
 
 /**
- * Premium info message (for free users)
+ * VIP info message (for free users)
  */
 export function premiumInfoMessage(): string {
-  return `⭐ *Premium Features*
+  return `⭐ *VIP Features*
 
-Upgrade to premium and enjoy:
+Upgrade ke VIP dan nikmati:
 
-✅ *Unlimited downloads* - No daily limits
-✅ *Faster processing* - Priority queue
-✅ *No cooldown* - Download back-to-back
-✅ *HD Quality* - Best available quality
-✅ *Priority support* - Direct admin access
+✅ *Unlimited downloads* - Tanpa batas harian
+✅ *Faster processing* - Prioritas antrian
+✅ *No cooldown* - Download tanpa jeda
+✅ *HD Quality* - Kualitas terbaik
+✅ *Priority support* - Akses langsung ke admin
 
-*How to get premium:*
-1. Contact @${ADMIN_CONTACT_USERNAME} to purchase an API key
-2. Click "I Have an API Key" below to link it
+*Cara mendapatkan VIP:*
+1. Hubungi @${ADMIN_CONTACT_USERNAME} untuk membeli API key
+2. Klik "Saya Punya API Key" untuk menghubungkan
 
-Already have a key? Tap the button below! 👇`;
+Sudah punya key? Tap tombol di bawah! 👇`;
 }
 
 /**
- * Premium status message (for premium users)
+ * VIP status message (for VIP users)
  */
 export function premiumStatusMessage(apiKey: ApiKeyInfo): string {
   const maskedKey = maskApiKey(apiKey.key);
@@ -345,19 +345,19 @@ export function premiumStatusMessage(apiKey: ApiKeyInfo): string {
     downloadsText = `${apiKey.downloadsUsed || 0} / ${apiKey.downloadsLimit}`;
   }
 
-  return `⭐ *Premium Status*
+  return `⭐ *VIP Status*
 
 🔑 *API Key:* \`${maskedKey}\`
 📅 *Expires:* ${expiryText}
 📥 *Downloads:* ${downloadsText}
 
-You have access to all premium features:
+Kamu memiliki akses ke semua fitur VIP:
 ✅ Unlimited downloads
 ✅ No cooldown
 ✅ HD quality
 ✅ Priority support
 
-Thank you for being a premium user! 💎`;
+Terima kasih sudah menjadi VIP! 💎`;
 }
 
 /**
@@ -366,27 +366,27 @@ Thank you for being a premium user! 💎`;
 export function apiKeyLinkPromptMessage(): string {
   return `🔑 *Link Your API Key*
 
-Please send your API key to activate premium features.
+Kirim API key kamu untuk mengaktifkan fitur VIP.
 
-Your API key should look like:
-\`xtf_xxxxxxxxxxxxxxxxxxxx\`
+API key kamu seharusnya seperti:
+\`dwa_live_xxxxxxxxxxxxxxxxxxxx\`
 
-Send it now or tap Cancel to go back.`;
+Kirim sekarang atau tap Cancel untuk kembali.`;
 }
 
 /**
  * API key linked success
  */
 export function apiKeyLinkedMessage(): string {
-  return `✅ *API Key Linked Successfully!*
+  return `✅ *API Key Berhasil Terhubung!*
 
-You now have access to premium features:
+Kamu sekarang memiliki akses ke fitur VIP:
 • Unlimited downloads
 • No cooldown
 • HD quality priority
 • Priority support
 
-Enjoy your premium experience! 🎉`;
+Nikmati pengalaman VIP kamu! 🎉`;
 }
 
 /**
@@ -404,12 +404,12 @@ Please check your key and try again, or contact @${ADMIN_CONTACT_USERNAME} for a
  * API key unlinked message
  */
 export function apiKeyUnlinkedMessage(): string {
-  return `🔓 *API Key Unlinked*
+  return `🔓 *API Key Terputus*
 
-Your API key has been unlinked from this account.
-You're now on the free tier with ${FREE_DOWNLOAD_LIMIT} downloads per day.
+API key kamu telah diputus dari akun ini.
+Kamu sekarang di tier gratis dengan ${FREE_DOWNLOAD_LIMIT} download per hari.
 
-You can link a new API key anytime from the Premium menu.`;
+Kamu bisa menghubungkan API key baru kapan saja dari menu Donasi.`;
 }
 
 // ============================================================================
@@ -424,22 +424,22 @@ export function statsMessage(
   isPremium: boolean,
   totalDownloads: number
 ): string {
-  const tierBadge = isPremium ? '⭐ Premium' : '🆓 Free';
+  const tierBadge = isPremium ? '⭐ VIP' : '🆓 Free';
   const dailyLimit = isPremium ? '∞' : FREE_DOWNLOAD_LIMIT.toString();
   const remaining = isPremium ? '∞' : stats.remaining.toString();
 
-  return `📊 *Your Statistics*
+  return `📊 *Statistik Kamu*
 
-*Account:* ${tierBadge}
+*Akun:* ${tierBadge}
 
-*Today:*
+*Hari ini:*
 • Downloads: ${stats.dailyDownloads} / ${dailyLimit}
 • Remaining: ${remaining}
 
-*All Time:*
+*Sepanjang waktu:*
 • Total downloads: ${totalDownloads}
 
-${isPremium ? '💎 Enjoying unlimited downloads!' : '💡 Upgrade to premium for unlimited downloads!'}`;
+${isPremium ? '💎 Menikmati unlimited downloads!' : '💡 Upgrade ke VIP untuk unlimited downloads!'}`;
 }
 
 /**

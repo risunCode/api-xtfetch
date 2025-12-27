@@ -55,9 +55,24 @@ function getBotInstance(): Bot<BotContext> {
             if (messageDate) {
                 const now = Math.floor(Date.now() / 1000);
                 const age = now - messageDate;
-                if (age > STALE_THRESHOLD_SECONDS) {
+                
+                // For regular messages: ignore if too old
+                if (ctx.message && age > STALE_THRESHOLD_SECONDS) {
                     console.log(`[Bot] Ignoring stale message (${age}s old) from user ${ctx.from?.id}`);
                     return; // Don't process stale messages
+                }
+                
+                // For callbacks: allow older callbacks but give feedback if very old
+                if (ctx.callbackQuery) {
+                    const CALLBACK_STALE_THRESHOLD = 300; // 5 minutes
+                    if (age > CALLBACK_STALE_THRESHOLD) {
+                        console.log(`[Bot] Stale callback (${age}s old) from user ${ctx.from?.id}`);
+                        await ctx.answerCallbackQuery({
+                            text: '⏰ Tombol ini sudah kadaluarsa. Silakan kirim URL baru.',
+                            show_alert: true
+                        });
+                        return;
+                    }
                 }
             }
             await next();

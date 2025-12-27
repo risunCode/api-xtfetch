@@ -182,12 +182,14 @@ function getLimitExceededMessage(used: number, lang: 'id' | 'en'): string {
     if (lang === 'id') {
         return `❌ Batas harian tercapai (${used}/${FREE_DAILY_LIMIT})\n\n` +
             `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
-            `💝 Upgrade ke Paket Donasi mulai Rp5.000/30 hari!`;
+            `💝 Upgrade ke Paket Donasi mulai Rp5.000\n` +
+            `🌐 Atau akses via website tanpa batas!`;
     }
     
     return `❌ Daily limit reached (${used}/${FREE_DAILY_LIMIT})\n\n` +
         `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
-        `💝 Upgrade to Donation Plan from Rp5,000/30 days!`;
+        `💝 Upgrade to Donation Plan from Rp5,000\n` +
+        `🌐 Or access via website with no limits!`;
 }
 
 /**
@@ -258,9 +260,12 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
         await ctx.reply(message, {
             reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
             reply_markup: {
-                inline_keyboard: [[
-                    { text: lang === 'id' ? '💝 Paket Donasi' : '💝 Donation Plan', callback_data: 'have_api_key' },
-                ]],
+                inline_keyboard: [
+                    [
+                        { text: '🌐 Website', url: 'https://downaria.vercel.app' },
+                        { text: lang === 'id' ? '💝 Paket Donasi' : '💝 Donation Plan', callback_data: 'cmd:donate' },
+                    ],
+                ],
             },
         });
         return; // Stop processing

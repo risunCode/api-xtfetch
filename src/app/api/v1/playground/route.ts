@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
         'http://localhost:3001', // Frontend dev
     ];
     
-    // In development, allow localhost
+    // In development, allow localhost and direct API calls (no origin)
     const isDev = process.env.NODE_ENV === 'development';
     const isAllowedOrigin = origin && (
         ALLOWED_ORIGINS.includes(origin) || 
@@ -139,8 +139,11 @@ export async function POST(request: NextRequest) {
         (isDev && referer.startsWith('http://localhost:'))
     );
     
-    // Must have valid origin OR referer from frontend
-    if (!isAllowedOrigin && !isAllowedReferer) {
+    // In dev mode, allow direct API calls (no origin/referer) for testing
+    const allowDirectApiCall = isDev && !origin && !referer;
+    
+    // Must have valid origin OR referer from frontend (or direct call in dev)
+    if (!isAllowedOrigin && !isAllowedReferer && !allowDirectApiCall) {
         return NextResponse.json(
             { 
                 success: false, 

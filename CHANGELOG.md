@@ -1,6 +1,21 @@
-# Changelog - XTFetch Backend API
+# Changelog - DownAria Backend API
 
-All notable changes to the XTFetch Backend API will be documented in this file.
+All notable changes to the DownAria Backend API will be documented in this file.
+
+## [December 27, 2025] - Documentation & Branding Fixes
+
+### 📝 Documentation Updates
+- **API Key Instructions** - Fixed "downaria.com/api" → "Contact @{ADMIN_CONTACT_USERNAME}"
+- **Bot Messages** - Updated all "Premium" references to "VIP" or "Donator"
+- **Help Command** - Updated to use `/donate` instead of `/premium`
+- **API Key Format** - Updated example from `xtf_*` to `dwa_live_*`
+
+### 🤖 Bot Message Improvements
+- All bot messages now in Indonesian for consistency
+- VIP status messages updated with correct branding
+- Rate limit messages now mention VIP instead of Premium
+
+---
 
 ## [December 26, 2025] - Security Hardening & Bot Improvements
 

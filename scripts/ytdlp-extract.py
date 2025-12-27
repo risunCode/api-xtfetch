@@ -38,7 +38,10 @@ def extract(url: str, cookie_file: str = None) -> dict:
         'no_warnings': True,
         'extract_flat': False,
         'skip_download': True,
-        'format': 'best',
+        # Request ALL formats including separate audio/video streams
+        'format': 'bestvideo+bestaudio/best',
+        'youtube_include_dash_manifest': True,
+        'youtube_include_hls_manifest': True,
     }
     
     temp_cookie_file = None

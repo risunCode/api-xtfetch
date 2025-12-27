@@ -67,7 +67,7 @@ const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
     geminiRateWindow: 1,
     maintenanceMode: false,
     maintenanceType: 'off',
-    maintenanceMessage: '🔧 DownAria is under maintenance. Please try again later.',
+    maintenanceMessage: 'DownAria is under maintenance. Please try again later.',
     apiKeyRequired: false,
     lastUpdated: new Date().toISOString()
 };

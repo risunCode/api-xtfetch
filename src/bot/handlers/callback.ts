@@ -123,17 +123,17 @@ async function botCallbackHaveApiKey(ctx: BotContext): Promise<void> {
 
 To get unlimited downloads:
 
-1️⃣ Get an API key at downaria.com/api
+1️⃣ Get an API key from @${ADMIN_CONTACT_USERNAME}
 2️⃣ Send your key using this command:
    \`/apikey YOUR_API_KEY_HERE\`
 
-*Benefits of Premium:*
+*Benefits of VIP:*
 • ✅ Unlimited downloads
 • ✅ No cooldown between downloads
 • ✅ Priority support
 • ✅ Higher quality options
 
-Don't have a key? Get one at downaria.com/api`;
+Don't have a key? Contact @${ADMIN_CONTACT_USERNAME}`;
 
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(message, {
@@ -408,7 +408,7 @@ async function botCallbackDownloadQuality(
         }
         
         await ctx.answerCallbackQuery({ 
-            text: '⏰ Session expired. Please send the URL again.',
+            text: '⏰ Sesi kadaluarsa. Kirim URL baru untuk download.',
             show_alert: true 
         });
         return;

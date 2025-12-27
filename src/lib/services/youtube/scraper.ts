@@ -232,47 +232,56 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         // Execute Python script (use 'python' on Windows, 'python3' on Linux/Mac)
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         
-        // Try to get cookie from pool for age-restricted/private videos
-        const poolCookie = await cookiePoolGetRotating('youtube');
-        if (poolCookie) {
-            // Write cookie to temp file for yt-dlp (Netscape format)
-            const tempDir = os.tmpdir();
-            cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
-            
-            // Log cookie format for debugging
-            const cookiePreview = poolCookie.substring(0, 50);
-            const isJson = poolCookie.trim().startsWith('[');
-            const isNetscape = poolCookie.trim().startsWith('#');
-            logger.debug('youtube', `Cookie format: ${isJson ? 'JSON' : isNetscape ? 'Netscape' : 'Raw'}, preview: ${cookiePreview}...`);
-            
-            // Convert cookie string to Netscape format
-            const netscapeCookie = convertToNetscapeFormat(poolCookie);
-            
-            // Log converted format
-            const lineCount = netscapeCookie.split('\n').filter(l => l && !l.startsWith('#')).length;
-            logger.debug('youtube', `Converted to Netscape: ${lineCount} cookie entries`);
-            
-            await fs.writeFile(cookieFilePath, netscapeCookie, 'utf-8');
-            usedCookie = true;
-        }
-        
-        logger.debug('youtube', `Extracting with yt-dlp: ${cleanUrl}`);
+        // First attempt: WITHOUT cookie to get all formats including separate audio
+        // When authenticated, YouTube returns only combined formats (no separate audio)
+        logger.debug('youtube', `Extracting with yt-dlp (no cookie): ${cleanUrl}`);
         const startTime = Date.now();
 
         // Build args array (NO shell interpretation) - prevents command injection
-        const args = [scriptPath, cleanUrl];
-        if (cookieFilePath) {
-            args.push(cookieFilePath);
-        }
+        let args = [scriptPath, cleanUrl];
 
         // Use execFile instead of exec - arguments passed as array, not string
-        const { stdout, stderr } = await execFileAsync(pythonCmd, args, {
+        let execResult = await execFileAsync(pythonCmd, args, {
             timeout: 90000, // 90s timeout (YouTube can be slow)
             maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        });
+        }).catch(e => ({ stdout: '', stderr: e.message || String(e) }));
+        
+        let { stdout, stderr } = execResult;
+        
+        // Check if we need to retry with cookie (age-restricted, private, etc.)
+        const needsCookie = !stdout || 
+            stderr?.includes('Sign in') || 
+            stderr?.includes('age') || 
+            stderr?.includes('private') ||
+            stderr?.includes('confirm your age');
+        
+        if (needsCookie) {
+            // Retry with cookie from pool
+            const poolCookie = await cookiePoolGetRotating('youtube');
+            if (poolCookie) {
+                logger.debug('youtube', `Retrying with cookie for: ${cleanUrl}`);
+                
+                // Write cookie to temp file for yt-dlp (Netscape format)
+                const tempDir = os.tmpdir();
+                cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
+                const netscapeCookie = convertToNetscapeFormat(poolCookie);
+                await fs.writeFile(cookieFilePath, netscapeCookie, 'utf-8');
+                usedCookie = true;
+                
+                // Retry with cookie
+                args = [scriptPath, cleanUrl, cookieFilePath];
+                const retryResult = await execFileAsync(pythonCmd, args, {
+                    timeout: 90000,
+                    maxBuffer: 10 * 1024 * 1024,
+                }).catch(e => ({ stdout: '', stderr: e.message || String(e) }));
+                
+                stdout = retryResult.stdout;
+                stderr = retryResult.stderr;
+            }
+        }
         
         const extractTime = Date.now() - startTime;
-        logger.debug('youtube', `yt-dlp extraction took ${extractTime}ms`);
+        logger.debug('youtube', `yt-dlp extraction took ${extractTime}ms${usedCookie ? ' (with cookie)' : ''}`);
 
         if (stderr) {
             logger.warn('youtube', `yt-dlp stderr: ${stderr}`);
