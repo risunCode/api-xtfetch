@@ -64,7 +64,7 @@ const P = {
 // Block finding - find relevant HTML section (larger blocks for better extraction)
 const BLOCK_KEYS: Record<FbContentType, string[]> = {
     video: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"browser_native'],
-    reel: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"unified_stories"'],
+    reel: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"browser_native', '"unified_stories"'],
     story: ['"story_bucket_owner"', '"story_card_seen_state"', '"attachments"'],
     post: ['"all_subattachments"', '"photo_image"', '"full_image"', '"large_share"', '"viewer_image"'],
     group: ['"group_feed"', '"all_subattachments"', '"full_image"', '"viewer_image"'],
@@ -185,19 +185,28 @@ function detectQuality(url: string): 'HD' | 'SD' {
 
 /**
  * Check if URL has muted audio track (no sound)
- * Facebook DASH URLs with _nc_vs containing "dash_muted" have no audio
- * Progressive URLs without _nc_vs always have audio
+ * 
+ * Rules:
+ * 1. Progressive URLs (tag=progressive_*) = ALWAYS have audio
+ * 2. DASH URLs with _nc_vs containing "dash_muted" = NO audio
+ * 3. DASH URLs with _nc_vs containing "passthrough_everstore" = HAS audio
+ * 4. URLs without _nc_vs = likely progressive = HAS audio
  */
 function hasMutedAudio(url: string): boolean {
-    // No _nc_vs parameter = progressive URL = always has audio
-    if (!url.includes('_nc_vs=')) {
-        return false;
+    // Rule 1: Progressive tag = always has audio
+    if (url.includes('tag=progressive')) {
+        return false; // NOT muted
     }
     
-    // Check if _nc_vs contains "dash_muted" (URL encoded or not)
-    // dash_muted = ZGFzaF9tdXRlZA in base64
+    // Rule 4: No _nc_vs = progressive URL = has audio
+    if (!url.includes('_nc_vs=')) {
+        return false; // NOT muted
+    }
+    
+    // Rule 2 & 3: Check _nc_vs content
+    // Direct check for muted indicators in URL
     if (url.includes('dash_muted') || url.includes('ZGFzaF9tdXRlZA')) {
-        return true;
+        return true; // MUTED
     }
     
     // Try to decode _nc_vs and check for muted indicator
@@ -206,14 +215,18 @@ function hasMutedAudio(url: string): boolean {
         if (ncvsMatch) {
             const decoded = Buffer.from(decodeURIComponent(ncvsMatch[1]), 'base64').toString('utf-8');
             if (decoded.includes('dash_muted') || decoded.includes('muted_shared_audio')) {
-                return true;
+                return true; // MUTED
+            }
+            // passthrough_everstore = has real audio
+            if (decoded.includes('passthrough_everstore')) {
+                return false; // NOT muted
             }
         }
     } catch {
-        // If decode fails, assume it might be muted to be safe
+        // Decode failed - assume not muted if no obvious indicators
     }
     
-    return false;
+    return false; // Default: assume has audio
 }
 
 function extractVideos(html: string, filterToFirstAsset: boolean = false): VideoCandidate[] {
@@ -821,6 +834,29 @@ export function extractContent(html: string, type: FbContentType, url?: string):
         const stories = extractStories(decoded);
         formats.push(...stories.formats);
         pattern = `stories (${stories.storyCount} unique)`;
+    }
+    // For reels/videos, prioritize video extraction
+    else if (type === 'reel' || type === 'video') {
+        const block = findBlock(decoded, type);
+        const thumbnail = extractThumbnail(block);
+        
+        // Extract videos - filter to first asset for reels
+        const videos = extractVideos(block, true);
+        for (const v of videos) {
+            formats.push({
+                quality: v.quality,
+                type: 'video',
+                url: v.url,
+                format: 'mp4',
+                thumbnail,
+                hasMuxedAudio: v.hasMuxedAudio,
+                _priority: v.priority,
+            } as MediaFormat);
+        }
+        
+        if (videos.length > 0) {
+            pattern = `video (${videos.length > 1 ? 'HD/SD' : 'single'})`;
+        }
     }
     // For posts/photos, search entire HTML for images first
     else if (type === 'post' || type === 'photo' || type === 'group') {

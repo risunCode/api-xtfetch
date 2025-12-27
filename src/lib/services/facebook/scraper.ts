@@ -1,5 +1,6 @@
 // scraper.ts - Main Facebook scraper logic
 import { httpGet } from '@/lib/http/client';
+import { FACEBOOK_HEADERS } from '@/lib/http/headers';
 import { sysConfigScraperTimeout } from '@/lib/config/system';
 import { extractContent, detectIssue } from './extractor';
 import { optimizeUrls, logCdnSelection } from './cdn';
@@ -59,40 +60,84 @@ function detectContentType(url: string, html: string): FbContentType {
     return 'post';
 }
 
+// Resolve shortlink URL - for /share/r/, /share/v/, fb.watch
+// Note: Facebook shortlinks need login, so we just normalize and let fetchWithRetry handle with cookie
+async function resolveUrl(url: string): Promise<string> {
+    const isShortlink = /\/share\/[rvs]\/|fb\.watch|fbwat\.ch/i.test(url);
+    if (!isShortlink) return url;
+    
+    console.log(`[FB] -> Shortlink detected (needs cookie)`);
+    return url;
+}
+
+// Detect if HTML is a login page
+function isLoginPage(html: string): boolean {
+    if (!html || html.length < 1000) return true;
+    
+    // Strong indicators of login page
+    const loginIndicators = [
+        'id="login_form"',
+        'name="login"',
+        'Log in to Facebook',
+        'Log Into Facebook', 
+        'You must log in to continue',
+        'must log in',
+        '/login/?next=',
+    ];
+    
+    // Check for login indicators
+    for (const indicator of loginIndicators) {
+        if (html.includes(indicator)) {
+            // But also check if we have video data (logged in view can have login form in header)
+            const hasVideoData = html.includes('"progressive_url"') || 
+                                html.includes('"playable_url"') ||
+                                html.includes('"browser_native');
+            if (hasVideoData) return false; // Has video data, not a login page
+            return true;
+        }
+    }
+    
+    return false;
+}
+
 // Fetch with retry - uses httpGet which handles UA rotation from browser pool
 async function fetchWithRetry(url: string, options: ScraperOptions, contentType?: FbContentType): Promise<string | null> {
     const timeout = options.timeout || sysConfigScraperTimeout('facebook');
     const cookie = options.cookie;
     const isStory = contentType === 'story' || url.includes('/stories/') || url.includes('/share/s/');
+    const isShortlink = /\/share\/[rvs]\/|fb\.watch|fbwat\.ch/i.test(url);
 
-    // Custom headers for Facebook
     const customHeaders: Record<string, string> = {
         'Sec-Fetch-Site': 'none',
     };
 
-    // Step 1: First fetch
+    // Step 1: First fetch - shortlinks NEED cookie, direct URLs try without first
     try {
+        const useCookieFirst = isShortlink || isStory;
+        const firstCookie = useCookieFirst ? cookie : undefined;
+        
+        console.log(`[FB] -> Fetch ${useCookieFirst ? 'with' : 'without'} cookie...`);
+        
         const res = await httpGet(url, { 
             platform: 'facebook', 
-            cookie, 
+            cookie: firstCookie, 
             timeout,
             headers: customHeaders,
         });
 
-        if (res.data && res.data.length > 100000) {
+        // Check if we got good data
+        if (res.data && res.data.length > 100000 && !isLoginPage(res.data)) {
             return res.data;
         }
         
-        // Check if login page or too small
-        const hasLoginForm = res.data?.includes('id="login_form"') || res.data?.includes('name="login"');
-        const isLoginPage = hasLoginForm || res.data?.includes('Log in to Facebook');
-        
-        if (isLoginPage || (res.data?.length || 0) < 100000) {
-            // Step 2: Wait and retry with cookie (longer wait for stories)
-            if (cookie) {
-                const waitTime = isStory ? 5000 : 4000;
-                console.log(`[FB] -> Retry in ${waitTime/1000}s (login page detected)...`);
-                await new Promise(r => setTimeout(r, waitTime));
+        // Check if login page
+        if (isLoginPage(res.data || '')) {
+            console.log(`[FB] -> Login page detected`);
+            
+            // If we didn't use cookie, retry with cookie
+            if (!useCookieFirst && cookie) {
+                console.log(`[FB] -> Retry with cookie...`);
+                await new Promise(r => setTimeout(r, 3000));
                 
                 const retryRes = await httpGet(url, { 
                     platform: 'facebook', 
@@ -101,24 +146,23 @@ async function fetchWithRetry(url: string, options: ScraperOptions, contentType?
                     headers: customHeaders,
                 });
                 
-                // For stories, check if we still got login page
-                if (isStory) {
-                    const stillLoginPage = retryRes.data?.includes('id="login_form"') || retryRes.data?.includes('Log in to Facebook');
-                    if (stillLoginPage) {
-                        console.log(`[FB] -> Story requires fresh cookie/login`);
-                        return null; // Will trigger COOKIE_REQUIRED error
-                    }
-                }
-                
-                if (retryRes.data && retryRes.data.length > 30000) {
+                if (retryRes.data && !isLoginPage(retryRes.data)) {
                     return retryRes.data;
                 }
+                
+                // Still login page after cookie
+                console.log(`[FB] -> Still login page, cookie may be expired`);
+            } else if (useCookieFirst) {
+                // Already used cookie but still login page
+                console.log(`[FB] -> Cookie expired or invalid`);
             }
         }
         
+        // Return whatever we got (might be small but valid)
         return res.data || null;
         
     } catch (e: unknown) {
+        console.log(`[FB] -> Fetch error: ${e instanceof Error ? e.message : 'unknown'}`);
         return null;
     }
 }
@@ -142,55 +186,52 @@ function mapErrorCode(code: string): ScraperErrorCode {
 
 // Main scraper function
 export async function scrapeFacebook(url: string, options: ScraperOptions = {}): Promise<ScraperResult> {
-    // Normalize URL (use web.facebook.com for stories)
-    const normalizedUrl = normalizeUrl(url);
+    // 1. Validate URL first
+    if (!isValidFbUrl(url)) {
+        return createError(ScraperErrorCode.INVALID_URL, 'URL tidak valid');
+    }
+
+    // 2. Resolve shortlinks (share/r/, share/v/, fb.watch)
+    const resolvedUrl = await resolveUrl(url);
+    
+    // 3. Normalize URL (use web.facebook.com for stories)
+    const normalizedUrl = normalizeUrl(resolvedUrl);
     
     // Log: processing
     console.log(`[FB] -> Processing: ${normalizedUrl}`);
 
-    // 1. Validate URL
-    if (!isValidFbUrl(normalizedUrl)) {
-        return createError(ScraperErrorCode.INVALID_URL, 'URL tidak valid');
-    }
-
-    // 1.5. Pre-detect content type from URL (for better fetch handling)
+    // 4. Pre-detect content type from URL (for better fetch handling)
     const isStoryUrl = /\/stories\/|\/share\/s\//.test(normalizedUrl);
-    const preContentType: FbContentType | undefined = isStoryUrl ? 'story' : undefined;
+    const isReelUrl = /\/reel\/|\/share\/r\//.test(normalizedUrl);
+    const preContentType: FbContentType | undefined = isStoryUrl ? 'story' : isReelUrl ? 'reel' : undefined;
 
-    // 2. Fetch page with retry (pass content type for story-specific handling)
+    // 5. Fetch page with retry (pass content type for type-specific handling)
     const html = await fetchWithRetry(normalizedUrl, options, preContentType);
     if (!html) {
-        // For stories, give more specific error
-        if (isStoryUrl) {
-            return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Story memerlukan cookie yang valid. Coba refresh cookie.');
+        // For stories/shortlinks, give more specific error
+        if (isStoryUrl || /\/share\/[rvs]\//.test(normalizedUrl)) {
+            return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten memerlukan cookie yang valid');
         }
         return createError(ScraperErrorCode.NETWORK_ERROR, 'Gagal mengambil halaman');
     }
 
-    // 3. Check for issues (login required, unavailable, etc)
+    // 6. Check for issues (login required, unavailable, etc)
     const issue = detectIssue(html);
     if (issue) {
         console.log(`[FB] x Issue: ${issue.code}`);
         return createError(mapErrorCode(issue.code), issue.message);
     }
 
-    // 3.5. Check if we got a login page
-    const hasLoginForm = html.includes('id="login_form"') || html.includes('name="login"');
-    const hasLoginText = html.includes('Log in to Facebook') || html.includes('Log Into Facebook');
-    const needsLogin = html.length < 30000 && (hasLoginForm || hasLoginText) && !html.includes('"actorID"');
-    if (needsLogin) {
-        console.log(`[FB] x Login required`);
-        // For stories, give more specific error
-        if (isStoryUrl) {
-            return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Story memerlukan login. Cookie mungkin expired.');
-        }
-        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten memerlukan login');
+    // 7. Final login check - if still login page after all retries
+    if (isLoginPage(html)) {
+        console.log(`[FB] x Login required (final check)`);
+        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten memerlukan login. Cookie mungkin expired.');
     }
 
-    // 4. Detect content type
+    // 8. Detect content type
     const contentType = detectContentType(normalizedUrl, html);
 
-    // 5. Extract content (logging handled inside extractContent)
+    // 9. Extract content (logging handled inside extractContent)
     const { formats, metadata } = extractContent(html, contentType, normalizedUrl);
 
     if (formats.length === 0) {
@@ -202,7 +243,7 @@ export async function scrapeFacebook(url: string, options: ScraperOptions = {}):
         return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada media ditemukan');
     }
 
-    // 6. Optimize URLs (CDN selection + sorting)
+    // 10. Optimize URLs (CDN selection + sorting)
     const optimized = optimizeUrls(formats);
 
     // Log CDN selection
@@ -210,7 +251,7 @@ export async function scrapeFacebook(url: string, options: ScraperOptions = {}):
         logCdnSelection(optimized[0].url);
     }
 
-    // 7. Clean up internal fields and build ScraperData
+    // 11. Clean up internal fields and build ScraperData
     const cleaned: MediaFormat[] = optimized.map(({ _priority, ...f }) => f);
     const thumbnail = cleaned.find(f => f.thumbnail)?.thumbnail || cleaned[0]?.url || '';
     const hasVideo = cleaned.some(f => f.type === 'video');
