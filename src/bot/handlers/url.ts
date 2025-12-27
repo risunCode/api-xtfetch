@@ -387,6 +387,11 @@ async function sendVideoDirectly(
     // Use simple caption (just username) for non-YouTube
     let caption = buildSimpleCaption(result, originalUrl);
     
+    // Get optimized video URL for HD+Sound button (direct CDN link has audio)
+    const videoUrlForButton = videoToSend.url.includes('fbcdn.net') 
+        ? optimizeCdnUrl(videoToSend.url) 
+        : videoToSend.url;
+    
     // Build appropriate keyboard based on whether we're using fallback
     let keyboard;
     if (hdExceedsLimit && hdVideo) {
@@ -396,8 +401,8 @@ async function sendVideoDirectly(
         if (caption) caption += '\n';
         caption += '⚠️ HD > 40MB';
     } else {
-        // HD sent successfully (or no HD available) - show only Original link
-        keyboard = buildVideoSuccessKeyboard(originalUrl);
+        // HD sent successfully - show HD+Sound link (direct CDN has audio) + Origin URL
+        keyboard = buildVideoSuccessKeyboard(originalUrl, videoUrlForButton);
     }
 
     const videoUrl = videoToSend.url;

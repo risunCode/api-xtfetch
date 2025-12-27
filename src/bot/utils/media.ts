@@ -422,17 +422,24 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
   let caption = buildSimpleCaption(result, originalUrl);
   let keyboard: InlineKeyboard;
   
+  // Get optimized video URL for HD+Sound button (direct CDN link has audio)
+  const videoUrlForButton = videoToSend.url.includes('fbcdn.net') 
+    ? optimizeCdnUrl(videoToSend.url) 
+    : videoToSend.url;
+  
   if (hdExceedsLimit && hdVideo) {
     // HD exceeds limit - sending SD as fallback
     const optimizedHdUrl = hdVideo.url.includes('fbcdn.net') ? optimizeCdnUrl(hdVideo.url) : hdVideo.url;
     keyboard = new InlineKeyboard()
       .url('🎬 HD', optimizedHdUrl)
-      .url('🔗 Original', originalUrl);
+      .url('🔗 Origin URL', originalUrl);
     if (caption) caption += '\n';
     caption += '⚠️ HD > 40MB';
   } else {
-    // HD sent successfully - show only Original link
-    keyboard = new InlineKeyboard().url('🔗 Original', originalUrl);
+    // HD sent successfully - show HD+Sound link (direct CDN has audio) + Origin URL
+    keyboard = new InlineKeyboard()
+      .url('🔊 HD+Sound', videoUrlForButton)
+      .url('🔗 Origin URL', originalUrl);
   }
 
   const videoUrl = videoToSend.url;
@@ -524,7 +531,7 @@ async function sendSinglePhotoMedia(options: SendMediaOptions): Promise<SendMedi
 
   const bestImages = deduplicateImages(images);
   const caption = buildSimpleCaption(result, originalUrl);
-  const keyboard = new InlineKeyboard().url('🔗 Original', originalUrl);
+  const keyboard = new InlineKeyboard().url('🔗 Origin URL', originalUrl);
   const photoUrl = bestImages[0].url;
   
   let buffer: Buffer | null = null;
@@ -600,7 +607,7 @@ async function sendPhotoAlbumMedia(options: SendMediaOptions): Promise<SendMedia
     
     // Send completion message with keyboard
     const completeMsg = lang === 'id' ? '✅ Download selesai!' : '✅ Download complete!';
-    const keyboard = new InlineKeyboard().url('🔗 Original', originalUrl);
+    const keyboard = new InlineKeyboard().url('🔗 Origin URL', originalUrl);
     await sendMessage(options, completeMsg, keyboard);
     
     if (processingMsgId) {

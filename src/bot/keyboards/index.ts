@@ -92,17 +92,23 @@ export const MENU = {
 // ═══════════════════════════════════════════════════════════════
 
 export const DOWNLOAD = {
-    /** Video sent successfully - only Original URL */
-    success: (originalUrl: string) => new InlineKeyboard()
-        .url('🔗 Original', originalUrl),
+    /** Video sent successfully - HD+Sound link + Origin URL */
+    success: (originalUrl: string, videoUrl?: string) => {
+        const kb = new InlineKeyboard();
+        if (videoUrl) {
+            kb.url('🔊 HD+Sound', videoUrl);
+        }
+        kb.url('🔗 Origin URL', originalUrl);
+        return kb;
+    },
     
-    /** Video fallback (HD > 40MB, sent SD) - HD link + Original */
+    /** Video fallback (HD > 40MB, sent SD) - HD link + Origin URL */
     fallback: (hdUrl: string, originalUrl: string) => new InlineKeyboard()
-        .url('🎬 HD', hdUrl).url('🔗 Original', originalUrl),
+        .url('🎬 HD', hdUrl).url('🔗 Origin URL', originalUrl),
     
-    /** Photo - only Original URL */
+    /** Photo - only Origin URL */
     photo: (originalUrl: string) => new InlineKeyboard()
-        .url('🔗 Original', originalUrl),
+        .url('🔗 Origin URL', originalUrl),
     
     /** Download success with stats link */
     successWithStats: (url: string) => new InlineKeyboard()
