@@ -327,31 +327,55 @@ async function sendVideoDirectly(
     // Telegram servers can't fetch these URLs directly
     const needsDownloadFirst = videoUrl.includes('fbcdn.net') || videoUrl.includes('cdninstagram.com');
 
+    // Helper: fetch with retry for CDN URLs (handles transient network failures)
+    const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(`[Bot.Video] Attempt ${attempt}/${maxRetries}: ${url.substring(0, 60)}...`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s per attempt
+                
+                const response = await fetch(url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': '*/*',
+                        'Referer': 'https://www.facebook.com/',
+                    },
+                    signal: controller.signal,
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const buffer = Buffer.from(await response.arrayBuffer());
+                console.log(`[Bot.Video] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+                return buffer;
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : 'Unknown error';
+                console.log(`[Bot.Video] Attempt ${attempt} failed: ${msg}`);
+                
+                if (attempt < maxRetries) {
+                    // Exponential backoff: 2s, 4s
+                    const delay = 2000 * attempt;
+                    console.log(`[Bot.Video] Retrying in ${delay}ms...`);
+                    await new Promise(r => setTimeout(r, delay));
+                } else {
+                    throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
+                }
+            }
+        }
+        throw new Error('Retry logic error');
+    };
+
     try {
         if (needsDownloadFirst) {
-            // Download video to buffer with timeout
+            // Download video to buffer with retry logic
             console.log(`[Bot.Video] Downloading from CDN: ${videoUrl.substring(0, 80)}...`);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
-            
-            const response = await fetch(videoUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': '*/*',
-                    'Referer': 'https://www.facebook.com/',
-                },
-                signal: controller.signal,
-            });
-            
-            clearTimeout(timeoutId);
-            console.log(`[Bot.Video] Download response: ${response.status}`);
-            
-            if (!response.ok) {
-                throw new Error(`Download failed: ${response.status}`);
-            }
-            
-            const buffer = Buffer.from(await response.arrayBuffer());
-            console.log(`[Bot.Video] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB, uploading to Telegram...`);
+            const buffer = await fetchWithRetry(videoUrl);
+            console.log(`[Bot.Video] Uploading to Telegram...`);
             
             await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), {
                 caption: caption || undefined,

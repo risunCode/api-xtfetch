@@ -90,7 +90,7 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
     cacheTtlPlaygroundUrl: 120000,
     httpTimeout: 15000,
     httpMaxRedirects: 10,
-    scraperTimeoutFacebook: 10000,
+    scraperTimeoutFacebook: 20000,
     scraperTimeoutInstagram: 15000,
     scraperTimeoutTwitter: 15000,
     scraperTimeoutTiktok: 10000,

@@ -2,6 +2,20 @@
 
 All notable changes to the DownAria Backend API will be documented in this file.
 
+## [December 27, 2025] - Facebook CDN Retry Logic
+
+### Network Reliability
+- **Bot Video Download** - Added retry logic with exponential backoff (3 attempts, 25s timeout each)
+- **Facebook Scraper Timeout** - Increased default from 10s to 20s for US CDN latency
+- **Logging** - Added attempt tracking for CDN downloads
+
+### Technical Details
+- `sendVideoDirectly()` now retries failed downloads with 2s, 4s backoff delays
+- Handles transient ETIMEDOUT errors from Facebook US CDN (bos5-1)
+- Total max wait time: ~75s (3 attempts x 25s + backoff delays)
+
+---
+
 ## [December 27, 2025] - Documentation & Branding Fixes
 
 ### 📝 Documentation Updates
