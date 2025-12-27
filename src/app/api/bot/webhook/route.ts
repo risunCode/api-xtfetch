@@ -57,24 +57,24 @@ async function getHandler() {
       }
     }
     
+    // Secret token validation: Grammy checks x-telegram-bot-api-secret-token header
+    // We already validate IP, but secret token adds extra security layer
     handleUpdate = webhookCallback(bot, 'std/http', {
       timeoutMilliseconds: 25_000,
       onTimeout: 'return',
+      secretToken: TELEGRAM_WEBHOOK_SECRET || undefined,
     });
+    
+    console.log('[Webhook] Handler created with secretToken:', TELEGRAM_WEBHOOK_SECRET ? 'SET' : 'NOT SET');
   }
   return handleUpdate;
 }
-      // NOTE: Secret token validation disabled - using IP validation instead
-      // secretToken: TELEGRAM_WEBHOOK_SECRET || undefined,
 
 // ============================================================================
 // Webhook Handler
 // ============================================================================
 
 export async function POST(request: NextRequest) {
-  console.log('[Webhook] === INCOMING REQUEST ===');
-  console.log('[Webhook] Headers:', Object.fromEntries(request.headers.entries()));
-  
   // Check if bot is configured
   if (!botConfigIsValid()) {
     console.error('[Webhook] Bot not configured');
@@ -86,34 +86,23 @@ export async function POST(request: NextRequest) {
     || request.headers.get('x-real-ip') 
     || 'unknown';
   
-  console.log('[Webhook] Client IP:', clientIp, 'Valid:', isFromTelegram(clientIp));
+  const isValidIp = isFromTelegram(clientIp);
+  console.log('[Webhook] IP check:', { clientIp, isValid: isValidIp });
   
-  if (!isFromTelegram(clientIp)) {
-    console.warn('[Webhook] Rejected: Not from Telegram IP', { ip: clientIp });
+  if (!isValidIp) {
+    console.warn('[Webhook] Rejected: Not from Telegram IP');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Try to read body
   try {
-    const bodyText = await request.text();
-    console.log('[Webhook] Body:', bodyText.substring(0, 500));
-    
-    // Re-create request with body for handler
-    const newRequest = new Request(request.url, {
-      method: 'POST',
-      headers: request.headers,
-      body: bodyText,
-    });
-
     const handler = await getHandler();
     if (!handler) {
       console.error('[Webhook] Handler not initialized');
       return NextResponse.json({ error: 'Bot not ready' }, { status: 503 });
     }
 
-    console.log('[Webhook] Passing to Grammy handler...');
-    const response = await handler(newRequest);
-    console.log('[Webhook] Grammy response status:', response.status);
+    // Pass request directly to Grammy - don't consume body first!
+    const response = await handler(request);
     return response;
   } catch (error) {
     console.error('[Webhook] Error:', error);
