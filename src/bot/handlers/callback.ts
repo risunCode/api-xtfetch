@@ -197,17 +197,47 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
         const thumbUrl = result.thumbnail;
         const needsDownloadFirst = mediaUrl.includes('fbcdn.net') || mediaUrl.includes('cdninstagram.com');
         
+        // Helper: fetch with retry for CDN URLs
+        const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    console.log(`[Bot.Callback] Attempt ${attempt}/${maxRetries}: ${url.substring(0, 60)}...`);
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 25000);
+                    
+                    const response = await fetch(url, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Referer': 'https://www.facebook.com/',
+                        },
+                        signal: controller.signal,
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    
+                    const buffer = Buffer.from(await response.arrayBuffer());
+                    console.log(`[Bot.Callback] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+                    return buffer;
+                } catch (e) {
+                    const msg = e instanceof Error ? e.message : 'Unknown error';
+                    console.log(`[Bot.Callback] Attempt ${attempt} failed: ${msg}`);
+                    
+                    if (attempt < maxRetries) {
+                        const delay = 2000 * attempt;
+                        await new Promise(r => setTimeout(r, delay));
+                    } else {
+                        throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
+                    }
+                }
+            }
+            throw new Error('Retry logic error');
+        };
+        
         try {
             if (needsDownloadFirst) {
-                // Download to buffer first for Facebook/Instagram
-                const response = await fetch(mediaUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Referer': 'https://www.facebook.com/',
-                    },
-                });
-                if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-                const buffer = Buffer.from(await response.arrayBuffer());
+                // Download to buffer first for Facebook/Instagram with retry
+                const buffer = await fetchWithRetry(mediaUrl);
                 
                 if (format.type === 'video') {
                     await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), { caption, parse_mode: 'Markdown' });
@@ -233,11 +263,11 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
                 ? `📥 *${platformName}*\n\n` +
                   `${result.title ? result.title.substring(0, 200) + '\n' : ''}` +
                   `${result.author ? result.author + '\n' : ''}\n` +
-                  `⚠️ Video terlalu besar untuk dikirim langsung.`
+                  `⚠️ Gagal mengirim video.`
                 : `📥 *${platformName}*\n\n` +
                   `${result.title ? result.title.substring(0, 200) + '\n' : ''}` +
                   `${result.author ? result.author + '\n' : ''}\n` +
-                  `⚠️ Video too large to send directly.`;
+                  `⚠️ Failed to send video.`;
             
             const fallbackKeyboard = new InlineKeyboard()
                 .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), format.url)
