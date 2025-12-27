@@ -1,1295 +1,781 @@
-/**
- * Facebook Extraction Helpers
- * 
- * Pre-compiled regex patterns and single-pass extraction functions
- * for optimized Facebook scraping performance.
- * 
- * @module fb-extractor
- */
+// extractor.ts - Media extraction for Facebook scraper
+import { getCdnInfo } from './cdn';
+import type { MediaFormat, FbContentType, FbMetadata } from './index';
 
-import { utilDecodeUrl, utilDecodeHtml } from '@/lib/utils';
-import { httpPost, DESKTOP_USER_AGENT } from '@/lib/http';
-import type { MediaFormat } from '@/lib/types';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/** Extracted video URLs with quality variants */
-export interface FbVideoResult {
-    hd?: string;
-    sd?: string;
-    thumbnail?: string;
-}
-
-/** Extracted metadata from Facebook content */
-export interface FbMetadata {
-    thumbnail?: string;
-    author?: string;
-    title?: string;
-    description?: string;
-    likes: number;
-    comments: number;
-    shares: number;
-    views: number;
-    postedAt?: string;
-}
-
-/** Story media item */
-export interface FbStoryItem {
-    type: 'video' | 'image';
-    url: string;
-    thumbnail?: string;
-    quality?: string;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PRE-COMPILED PATTERNS (faster than creating new RegExp each time)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Combined video URL pattern - matches all Facebook video URL formats in single pass
- * Captures: browser_native_hd_url, browser_native_sd_url, playable_url_quality_hd, 
- *           playable_url, hd_src, sd_src, hd_src_no_ratelimit, sd_src_no_ratelimit
- */
-export const FB_VIDEO_PATTERN = /"(?:browser_native_(?:hd|sd)_url|playable_url(?:_quality_hd)?|(?:hd|sd)_src(?:_no_ratelimit)?)":"(https:[^"]+)"/g;
-
-/**
- * Individual patterns for specific extractions
- */
-export const FB_PATTERNS = {
-    // Thumbnail patterns
-    thumbnail: /"(?:previewImage|thumbnailImage|poster_image|preferred_thumbnail)"[^}]*?"uri":"(https:[^"]+)"/,
-    storyThumbnail: /"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/,
-    
-    // Author patterns
-    author: /"(?:owning_profile|owner)"[^}]*?"name":"([^"]+)"/,
-    authorAlt: /"actors":\[\{"__typename":"User","name":"([^"]+)"/,
-    authorReels: /"name":"([^"]+)","enable_reels_tab_deeplink":true/,
-    
-    // Engagement patterns
-    likes: /"reaction_count":\{"count":(\d+)/,
-    likesAlt: /"i18n_reaction_count":"([\d,\.KMkm]+)"/,
-    comments: /"comment_count":\{"total_count":(\d+)/,
-    commentsAlt: /"comments":\{"total_count":(\d+)/,
-    shares: /"share_count":\{"count":(\d+)/,
-    sharesAlt: /"reshares":\{"count":(\d+)/,
-    views: /"video_view_count":(\d+)/,
-    viewsAlt: /"play_count":(\d+)/,
-    
-    // Content patterns - more specific to avoid UI text
-    // Primary: message in comet_sections (actual post content)
-    messageComet: /"comet_sections"[^}]*?"message":\{"text":"([^"]{3,})"/,
-    // Secondary: message near story/post context
-    messageStory: /"story"[^}]{0,200}"message":\{"text":"([^"]{3,})"/,
-    // Tertiary: generic message (may catch UI text)
-    message: /"message":\{"text":"([^"]{10,})"/,
-    // Caption fallback
-    caption: /"caption":"([^"]{10,})"/,
-    creationTime: /"(?:creation|created|publish)_time":(\d{10})/,
-    
-    // Story video patterns - PRIORITIZE MUXED AUDIO
-    // Pattern with quality metadata (progressive_url with HD/SD) - HAS AUDIO
-    storyVideo: /"progressive_url":"(https:[^"]+\.mp4[^"]*)","failure_reason":null,"metadata":\{"quality":"(HD|SD)"\}/g,
-    storyVideoFallback: /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g,
-    
-    // Additional story video patterns for better audio coverage
-    storyPlayableUrl: /"playable_url":"(https:[^"]+\.mp4[^"]*)"/g,
-    storyVideoData: /"video":\{[^}]*"playable_url":"(https:[^"]+\.mp4[^"]*)"/g,
-    unifiedStoryVideo: /"unified_stories"[^}]*"playable_url":"(https:[^"]+\.mp4[^"]*)"/g,
-    
-    // Story image pattern (t51.82787 = story image type)
-    storyImage: /https:\/\/scontent[^"'\s<>\\]+t51\.82787[^"'\s<>\\]+\.jpg[^"'\s<>\\]*/gi,
-    
-    // Post image patterns
-    viewerImage: /"viewer_image":\{"height":(\d+),"width":(\d+),"uri":"(https:[^"]+)"/g,
-    photoImage: /"photo_image":\{"uri":"(https:[^"]+)"/g,
-    imageUri: /"image":\{"uri":"(https:[^"]+t39\.30808[^"]+)"/g,
-    
-    // Subattachments (multi-image posts)
-    subattachments: /"all_subattachments":\{"count":(\d+)/,
-    
-    // DASH video format
-    dashVideo: /"height":(\d+)[^}]*?"base_url":"(https:[^"]+\.mp4[^"]*)"/g,
-} as const;
-
-/** Skip SIDs - profile pictures, avatars, etc. */
-const SKIP_SIDS = ['bd9a62', '23dd7b', '50ce42', '9a7156', '1d2534', 'e99d92', 'a6c039', '72b077', 'ba09c1', 'f4d7c3', '0f7a8c', '3c5e9a', 'd41d8c'];
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Clean escaped characters from URL/string
- */
-const clean = (s: string): string => s.replace(/\\\//g, '/').replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
-
-/**
- * Check if URL is a valid Facebook media URL
- */
-const isValidMedia = (url: string): boolean => url?.length > 30 && /fbcdn|scontent/.test(url) && !/<|>/.test(url);
-
-/**
- * Check if image should be skipped (profile pics, avatars, emojis, etc.)
- */
-const isSkipImage = (url: string): boolean => 
-    SKIP_SIDS.some(s => url.includes(`_nc_sid=${s}`)) || 
-    /emoji|sticker|static|rsrc|profile|avatar|\/cp0\/|\/[ps]\d+x\d+\/|_s\d+x\d+|\.webp\?/i.test(url);
-
-/**
- * Check if URL is a muted video (no audio)
- * Facebook sometimes returns muted versions for geo-restricted content
- * Common patterns: muted_shared_audio, _nc_vs=...muted
- */
-const isMutedUrl = (url: string): boolean => 
-    /muted|_nc_vs=.*muted|muted_shared_audio/i.test(url);
-
-/**
- * Parse engagement number string (handles K, M suffixes)
- */
-const parseEngagement = (s: string): number => {
-    const n = parseFloat(s.replace(/,/g, ''));
-    if (isNaN(n)) return 0;
-    if (/[kK]$/.test(s)) return Math.round(n * 1000);
-    if (/[mM]$/.test(s)) return Math.round(n * 1000000);
-    return Math.round(n);
-};
-
-/**
- * Decode unicode escape sequences in string
- */
-const decodeUnicode = (s: string): string => 
-    s.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SINGLE-PASS VIDEO EXTRACTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Video URL patterns with priority (higher = better, usually has audio)
- * 
- * AUDIO PRIORITY ORDER:
- * 1. progressive_url (85) - Regional CDN, muxed ✅ HAS AUDIO (FAST!)
- * 2. playable_url_quality_hd (100) - HD muxed (video+audio) ✅ HAS AUDIO
- * 3. playable_url (90) - SD muxed (video+audio) ✅ HAS AUDIO
- * 4. hd_src / sd_src (50-40) - legacy, usually muxed ✅ HAS AUDIO
- * 5. browser_native_hd_url (10) - HD video-only ❌ NO AUDIO
- * 6. browser_native_sd_url (5) - SD video-only ❌ NO AUDIO
- * 
- * IMPORTANT: browser_native_* URLs are VIDEO-ONLY streams without audio!
- * Always prefer playable_url/progressive_url variants which contain muxed video+audio.
- * 
- * CDN NOTE: progressive_url often comes from regional CDN (e.g. scontent.fbdj2-1.fna = Singapore)
- * while playable_url may come from US CDN (video-bos5-1 = Boston). Prefer regional for speed!
- */
-const VIDEO_URL_PATTERNS = [
-    // MUXED (video+audio) - HIGHEST PRIORITY
-    { pattern: /"playable_url_quality_hd":"(https:[^"]+)"/, quality: 'hd', priority: 100, hasMuxedAudio: true },
-    { pattern: /"playable_url":"(https:[^"]+)"/, quality: 'sd', priority: 90, hasMuxedAudio: true },
-    
-    // Legacy src patterns - usually muxed
-    { pattern: /"hd_src_no_ratelimit":"(https:[^"]+)"/, quality: 'hd', priority: 60, hasMuxedAudio: true },
-    { pattern: /"sd_src_no_ratelimit":"(https:[^"]+)"/, quality: 'sd', priority: 55, hasMuxedAudio: true },
-    { pattern: /"hd_src":"(https:[^"]+)"/, quality: 'hd', priority: 50, hasMuxedAudio: true },
-    { pattern: /"sd_src":"(https:[^"]+)"/, quality: 'sd', priority: 45, hasMuxedAudio: true },
-    
-    // VIDEO-ONLY - LOWEST PRIORITY (only use if no muxed available)
-    { pattern: /"browser_native_hd_url":"(https:[^"]+)"/, quality: 'hd', priority: 10, hasMuxedAudio: false },
-    { pattern: /"browser_native_sd_url":"(https:[^"]+)"/, quality: 'sd', priority: 5, hasMuxedAudio: false },
+// Decode escaped strings - SINGLE function (replaces clean() and utilDecodeUrl)
+const DECODE: [RegExp, string][] = [
+    [/\\\//g, '/'], [/\\u0025/g, '%'], [/\\u0026/g, '&'],
+    [/\\u003C/g, '<'], [/\\u003E/g, '>'], [/\\u002F/g, '/'],
+    [/\\"/g, '"'], [/&amp;/g, '&'], [/&#x2F;/g, '/'], [/&#39;/g, "'"],
+    [/\\n/g, ''], [/\\t/g, ''],
 ];
 
-/**
- * Check if URL is from regional CDN (faster for Asia servers)
- * Regional CDNs: fbdj2 (Singapore), hkg (Hong Kong), nrt (Tokyo), etc.
- * US CDNs: bos5 (Boston), iad (Virginia), lax (LA), sjc (San Jose)
- */
-const isRegionalCdn = (url: string): boolean => 
-    /fbdj|fna\.fbcdn|hkg|nrt|sin|sgp/i.test(url);
-
-const isUsCdn = (url: string): boolean =>
-    /bos\d|iad\d|lax\d|sjc\d|video-.*\.xx\.fbcdn/i.test(url);
-
-/**
- * Extract video URLs from HTML with audio priority
- * 
- * Prioritizes playable_url (muxed video+audio) over browser_native_* 
- * which often contains video-only streams without audio.
- * Also detects and deprioritizes muted URLs (geo-restricted content).
- * 
- * NEW: Also extracts progressive_url which often comes from regional CDN!
- * 
- * @param html - HTML content to search
- * @returns Object with HD and SD video URLs if found
- */
-export function fbExtractVideos(html: string): FbVideoResult {
-    const result: FbVideoResult = {};
-    
-    // Collect all found URLs with their priority and audio info
-    const hdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean; isRegional: boolean }[] = [];
-    const sdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean; isRegional: boolean }[] = [];
-    
-    // First, extract from standard patterns
-    for (const { pattern, quality, priority, hasMuxedAudio } of VIDEO_URL_PATTERNS) {
-        const match = html.match(pattern);
-        if (match?.[1]) {
-            const url = utilDecodeUrl(match[1]);
-            const muted = isMutedUrl(url);
-            const regional = isRegionalCdn(url);
-            // Reduce priority significantly if URL is muted
-            // BOOST priority if regional CDN (faster!)
-            let adjustedPriority = muted ? priority - 50 : priority;
-            if (regional && !muted) adjustedPriority += 15; // Boost regional CDN
-            
-            if (quality === 'hd') {
-                hdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted, isRegional: regional });
-            } else {
-                sdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted, isRegional: regional });
-            }
-        }
-    }
-    
-    // NEW: Extract progressive_url (often regional CDN with audio!)
-    // Pattern: "progressive_url":"https://..." with optional quality metadata
-    const progressivePattern = /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g;
-    let progMatch;
-    const seenUrls = new Set(hdCandidates.map(c => c.url).concat(sdCandidates.map(c => c.url)));
-    
-    while ((progMatch = progressivePattern.exec(html)) !== null) {
-        const url = utilDecodeUrl(progMatch[1]);
-        if (seenUrls.has(url)) continue;
-        seenUrls.add(url);
-        
-        const muted = isMutedUrl(url);
-        const regional = isRegionalCdn(url);
-        const isHD = /720|1080|_hd|gen2_720/i.test(url);
-        
-        // Progressive URLs have audio and often from regional CDN
-        // Base priority 85, boost if regional
-        let priority = 85;
-        if (regional && !muted) priority += 15; // Regional boost
-        if (muted) priority -= 50;
-        
-        const candidate = { url, priority, hasMuxedAudio: true, isMuted: muted, isRegional: regional };
-        
-        if (isHD) {
-            hdCandidates.push(candidate);
-        } else {
-            sdCandidates.push(candidate);
-        }
-    }
-    
-    // Also check DASH videos (base_url pattern) - often regional
-    const dashPattern = /"height":(\d+)[^}]*?"base_url":"(https:[^"]+\.mp4[^"]*)"/g;
-    let dashMatch;
-    while ((dashMatch = dashPattern.exec(html)) !== null) {
-        const height = parseInt(dashMatch[1]);
-        const url = utilDecodeUrl(dashMatch[2]);
-        if (seenUrls.has(url) || height < 360) continue;
-        seenUrls.add(url);
-        
-        const muted = isMutedUrl(url);
-        const regional = isRegionalCdn(url);
-        const isHD = height >= 720;
-        
-        let priority = 70;
-        if (regional && !muted) priority += 15;
-        if (muted) priority -= 50;
-        
-        const candidate = { url, priority, hasMuxedAudio: true, isMuted: muted, isRegional: regional };
-        
-        if (isHD) {
-            hdCandidates.push(candidate);
-        } else {
-            sdCandidates.push(candidate);
-        }
-    }
-    // Sort by priority (highest first) - regional CDN preferred
-    // Priority already boosted for regional, but add secondary sort for same priority
-    hdCandidates.sort((a, b) => {
-        if (b.priority !== a.priority) return b.priority - a.priority;
-        // Prefer regional CDN at same priority
-        if (a.isRegional !== b.isRegional) return a.isRegional ? -1 : 1;
-        if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
-        return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
-    });
-    sdCandidates.sort((a, b) => {
-        if (b.priority !== a.priority) return b.priority - a.priority;
-        if (a.isRegional !== b.isRegional) return a.isRegional ? -1 : 1;
-        if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
-        return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
-    });
-    
-    // Log selected URL for debugging
-    if (hdCandidates.length > 0) {
-        const best = hdCandidates[0];
-        console.log(`[Facebook.Extract] HD selected: ${best.isRegional ? 'REGIONAL' : 'US'} CDN, priority=${best.priority}, muxed=${best.hasMuxedAudio}`);
-        result.hd = best.url;
-    }
-    if (sdCandidates.length > 0 && sdCandidates[0].url !== result.hd) {
-        result.sd = sdCandidates[0].url;
-    }
-    
-    // If only SD found but it's high quality, use as HD
-    if (!result.hd && result.sd) {
-        result.hd = result.sd;
-        result.sd = undefined;
-    }
-    
-    // Extract thumbnail
-    const thumbMatch = html.match(FB_PATTERNS.thumbnail);
-    if (thumbMatch && /scontent|fbcdn/.test(thumbMatch[1])) {
-        result.thumbnail = clean(thumbMatch[1]);
-    }
-    
-    return result;
+// Decode unicode escape sequences like \u00e0 -> à
+function decodeUnicode(s: string): string {
+    return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => 
+        String.fromCharCode(parseInt(hex, 16))
+    );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TARGETED BLOCK FINDER
-// ═══════════════════════════════════════════════════════════════════════════════
+export const decode = (s: string): string => {
+    let result = DECODE.reduce((r, [p, v]) => r.replace(p, v), s);
+    // Decode unicode escapes for text content (names, titles)
+    result = decodeUnicode(result);
+    return result;
+};
 
-/**
- * Find the relevant video block in HTML to reduce search area
- * 
- * Instead of parsing entire 500KB+ HTML, this finds the ~20KB block
- * containing the video data, significantly improving performance.
- * 
- * @param html - Full HTML content
- * @param videoId - Optional video ID to target specific content
- * @returns Substring of HTML containing video data
- * 
- * @example
- * ```typescript
- * const block = fbFindVideoBlock(html, '123456789');
- * const { hd, sd } = fbExtractVideos(block);
- * ```
- */
-export function fbFindVideoBlock(html: string, videoId?: string): string {
-    const MAX_BLOCK_SIZE = 25000;
-    const CONTEXT_BEFORE = 2000;
-    const CONTEXT_AFTER = 20000;
+// Consolidated patterns - SINGLE source of truth
+const P = {
+    video: {
+        progressive: /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g,
+        playableHd: /"playable_url_quality_hd":"(https:[^"]+\.mp4[^"]*)"/g,
+        playable: /"playable_url":"(https:[^"]+\.mp4[^"]*)"/g,
+        browserHd: /"browser_native_hd_url":"(https:[^"]+\.mp4[^"]*)"/g,
+        browserSd: /"browser_native_sd_url":"(https:[^"]+\.mp4[^"]*)"/g,
+        dash: /"base_url":"(https:[^"]+\.mp4[^"]*)"/g,
+        hdSrc: /"hd_src":"(https:[^"]+\.mp4[^"]*)"/g,
+        sdSrc: /"sd_src":"(https:[^"]+\.mp4[^"]*)"/g,
+    },
+    image: {
+        // High priority - specific image contexts (same as manual extractor)
+        viewerImage: /"viewer_image":\{"height":\d+,"width":\d+,"uri":"(https:[^"]+)"/g,
+        imageWithSize: /"image":\{"height":\d+,"width":\d+,"uri":"(https:[^"]+)"/g,
+        photoImage: /"photo_image":\{"uri":"(https:[^"]+)"/g,
+        fullWidthImage: /"full_width_image":\{"uri":"(https:[^"]+)"/g,
+        fullImage: /"full_image":\{"uri":"(https:[^"]+)"/g,
+        largeShare: /"large_share":\{"uri":"(https:[^"]+)"/g,
+        // Medium priority - generic image URIs
+        imageUri: /"uri":"(https:\/\/scontent[^"]+)"/g,
+        // Fallback - raw URLs in HTML
+        rawImage: /https:\/\/scontent[^"'\s<>\\]+\.(?:jpg|jpeg)[^"'\s<>\\]*/g,
+    },
+    meta: {
+        author: /"owning_profile":\{[^}]*"name":"([^"]+)"/,
+        authorAlt: /"owner":\{[^}]*"name":"([^"]+)"/,
+        authorName: /"name":"([^"]+)"[^}]*"__typename":"(?:User|Page)"/,
+        timestamp: /"publish_time":(\d+)/,
+        title: /"title":\{"text":"([^"]+)"/,
+    },
+    thumb: /"(?:preferred_thumbnail|previewImage|thumbnailImage)":\{(?:"image":\{)?"uri":"(https:[^"]+)"/,
+};
+
+// Block finding - find relevant HTML section (larger blocks for better extraction)
+const BLOCK_KEYS: Record<FbContentType, string[]> = {
+    video: ['"progressive_url":', '"playable_url":', '"browser_native'],
+    reel: ['"progressive_url":', '"playable_url":', '"unified_stories"'],
+    story: ['"story_bucket_owner"', '"story_card_seen_state"', '"attachments"'],
+    post: ['"all_subattachments"', '"photo_image"', '"full_image"', '"large_share"', '"viewer_image"'],
+    group: ['"group_feed"', '"all_subattachments"', '"full_image"', '"viewer_image"'],
+    photo: ['"photo_image"', '"full_image"', '"viewer_image"'],
+};
+
+function findBlock(html: string, type: FbContentType): string {
+    const keys = BLOCK_KEYS[type] || BLOCK_KEYS.post;
     
-    // Priority keys to search for
-    const videoKeys = [
-        '"browser_native_hd_url":',
-        '"browser_native_sd_url":',
-        '"playable_url_quality_hd":',
-        '"playable_url":',
-        '"videoPlayerOriginData"',
-    ];
-    
-    // If videoId provided, try to find it first
-    if (videoId) {
-        const idPatterns = [
-            `"video_id":"${videoId}"`,
-            `"id":"${videoId}"`,
-            `/videos/${videoId}`,
-            `/reel/${videoId}`,
-        ];
-        
-        for (const pattern of idPatterns) {
-            const pos = html.indexOf(pattern);
-            if (pos > -1) {
-                // Search around the video ID for video URLs
-                const searchStart = Math.max(0, pos - 5000);
-                const searchEnd = Math.min(html.length, pos + 50000);
-                const searchArea = html.substring(searchStart, searchEnd);
-                
-                // Check if this area has video URLs
-                for (const key of videoKeys) {
-                    if (searchArea.includes(key)) {
-                        return searchArea;
-                    }
-                }
-            }
+    // For posts, search for all_subattachments first (multi-image posts)
+    if (type === 'post' || type === 'group' || type === 'photo') {
+        const subAttachPos = html.indexOf('"all_subattachments"');
+        if (subAttachPos > -1) {
+            // Get a large block around subattachments to capture all images
+            return html.substring(Math.max(0, subAttachPos - 5000), Math.min(html.length, subAttachPos + 100000));
         }
     }
     
-    // Find first occurrence of video URL keys
-    for (const key of videoKeys) {
+    for (const key of keys) {
         const pos = html.indexOf(key);
         if (pos > -1) {
-            const start = Math.max(0, pos - CONTEXT_BEFORE);
-            const end = Math.min(html.length, pos + CONTEXT_AFTER);
-            return html.substring(start, end);
+            // Larger block for posts/groups to capture all images
+            const blockSize = (type === 'post' || type === 'group' || type === 'photo') ? 100000 : 35000;
+            return html.substring(Math.max(0, pos - 5000), Math.min(html.length, pos + blockSize));
         }
     }
-    
-    // Fallback: return first 100KB
-    return html.substring(0, 100000);
+    // Fallback: search larger area for images
+    return html.substring(0, 200000);
 }
 
-/**
- * Find the relevant post/image block in HTML
- * 
- * @param html - Full HTML content
- * @param postId - Optional post ID to target specific content
- * @returns Substring of HTML containing post data
- */
-export function fbFindPostBlock(html: string, postId?: string): string {
-    const MAX_SEARCH = 150000;
-    const CONTEXT_BEFORE = 2000;
-    const CONTEXT_AFTER = 50000;
-    
-    // Strategy 1: If postId provided, find the block containing that ID
-    if (postId) {
-        const idPatterns = [
-            `"post_id":"${postId}"`,
-            `"id":"${postId}"`,
-            `story_fbid=${postId}`,
-            `/posts/${postId}`,
-            `"fbid":"${postId}"`,
-            `pfbid${postId.substring(0, 10)}`, // pfbid partial match
-        ];
-        
-        for (const pattern of idPatterns) {
-            const pos = html.indexOf(pattern);
-            if (pos > -1) {
-                const start = Math.max(0, pos - CONTEXT_BEFORE);
-                const end = Math.min(html.length, pos + CONTEXT_AFTER);
-                const block = html.substring(start, end);
-                
-                // Verify this block has media content
-                if (block.includes('all_subattachments') || block.includes('viewer_image') || block.includes('photo_image')) {
-                    return block;
-                }
-            }
-        }
+// Issue detection - patterns must be specific to avoid false positives
+const ISSUES: [string, string, string][] = [
+    ['/checkpoint/', 'CHECKPOINT', 'Akun memerlukan verifikasi'],
+    ['id="login_form"', 'LOGIN_REQUIRED', 'Konten memerlukan login'],
+    ['"UnavailableAttachment"', 'UNAVAILABLE', 'Konten tidak tersedia'],
+    ["content isn't available", 'NOT_FOUND', 'Konten tidak ditemukan'],
+    ['This video is private', 'PRIVATE', 'Video ini privat'],
+    ['This content is no longer available', 'DELETED', 'Konten sudah dihapus'],
+];
+
+export function detectIssue(html: string): { code: string; message: string } | null {
+    for (const [pattern, code, message] of ISSUES) {
+        if (html.includes(pattern)) return { code, message };
     }
-    
-    // Strategy 2: Find "comet_sections" which contains the main post content
-    // This is more reliable than just looking for subattachments
-    const cometKey = '"comet_sections"';
-    const cometPos = html.indexOf(cometKey);
-    if (cometPos > -1) {
-        // Look for subattachments or viewer_image near comet_sections
-        const searchArea = html.substring(cometPos, Math.min(html.length, cometPos + 80000));
-        
-        const subKey = '"all_subattachments":{"count":';
-        const subPos = searchArea.indexOf(subKey);
-        if (subPos > -1) {
-            const absolutePos = cometPos + subPos;
-            const nodesStart = html.indexOf('"nodes":[', absolutePos);
-            if (nodesStart > -1 && nodesStart - absolutePos < 100) {
-                let depth = 1, nodesEnd = nodesStart + 9;
-                for (let i = nodesStart + 9; i < html.length && i < nodesStart + 50000; i++) {
-                    if (html[i] === '[') depth++;
-                    if (html[i] === ']') { depth--; if (depth === 0) { nodesEnd = i + 1; break; } }
-                }
-                return html.substring(Math.max(0, absolutePos - 500), nodesEnd);
-            }
-        }
-        
-        // Look for viewer_image in comet_sections area
-        const viewerPos = searchArea.indexOf('"viewer_image":');
-        if (viewerPos > -1) {
-            const absolutePos = cometPos + viewerPos;
-            return html.substring(Math.max(0, absolutePos - 500), Math.min(html.length, absolutePos + 30000));
-        }
-    }
-    
-    // Strategy 3: Look for "story" object which contains post data
-    const storyKey = '"story":{"';
-    let storyPos = html.indexOf(storyKey);
-    // Skip if it's too early (likely header/nav data)
-    if (storyPos > -1 && storyPos < 50000) {
-        storyPos = html.indexOf(storyKey, 50000);
-    }
-    if (storyPos > -1) {
-        const searchArea = html.substring(storyPos, Math.min(html.length, storyPos + 80000));
-        if (searchArea.includes('all_subattachments') || searchArea.includes('viewer_image')) {
-            return searchArea;
-        }
-    }
-    
-    // Strategy 4: Fallback - look for subattachments anywhere (original logic)
-    const subKey = '"all_subattachments":{"count":';
-    const subPos = html.indexOf(subKey);
-    if (subPos > -1) {
-        const nodesStart = html.indexOf('"nodes":[', subPos);
-        if (nodesStart > -1 && nodesStart - subPos < 100) {
-            let depth = 1, nodesEnd = nodesStart + 9;
-            for (let i = nodesStart + 9; i < html.length && i < nodesStart + 50000; i++) {
-                if (html[i] === '[') depth++;
-                if (html[i] === ']') { depth--; if (depth === 0) { nodesEnd = i + 1; break; } }
-            }
-            return html.substring(Math.max(0, subPos - 500), nodesEnd);
-        }
-    }
-    
-    // Strategy 5: Look for viewer_image
-    const viewerKey = '"viewer_image":';
-    const viewerPos = html.indexOf(viewerKey);
-    if (viewerPos > -1) {
-        return html.substring(Math.max(0, viewerPos - 500), Math.min(html.length, viewerPos + 30000));
-    }
-    
-    // Fallback
-    return html.length > MAX_SEARCH ? html.substring(0, MAX_SEARCH) : html;
+    return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TAHOE API FALLBACK
-// ═══════════════════════════════════════════════════════════════════════════════
+// Video extraction - SINGLE pass
+interface VideoCandidate {
+    url: string;
+    quality: 'HD' | 'SD';
+    hasMuxedAudio: boolean;
+    priority: number;
+    assetId?: string; // xpv_asset_id from efg parameter
+}
 
-const FB_TAHOE_URL = 'https://www.facebook.com/video/tahoe/async/';
-
-/**
- * Try to extract video via Facebook Tahoe API
- * More reliable than HTML scraping for video-only content
- * 
- * @param videoId - Facebook video ID (numeric)
- * @param cookie - Optional cookie for authenticated requests
- * @returns Video URLs or null if failed
- */
-export async function fbTryTahoe(
-    videoId: string, 
-    cookie?: string
-): Promise<FbVideoResult | null> {
-    if (!videoId || !/^\d+$/.test(videoId)) return null;
-    
-    const url = `${FB_TAHOE_URL}${videoId}/?chain=true&isvideo=true&payloadtype=primary`;
-    
+// Extract xpv_asset_id from URL's efg parameter (base64 encoded JSON)
+function extractAssetId(url: string): string | undefined {
     try {
-        const res = await httpPost(url, new URLSearchParams({ '__a': '1' }).toString(), {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': DESKTOP_USER_AGENT,
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                ...(cookie ? { 'Cookie': cookie } : {}),
-            },
-            timeout: 10000,
-        });
+        const efgMatch = url.match(/efg=([^&]+)/);
+        if (!efgMatch) return undefined;
         
-        if (!res.data) return null;
-        
-        // Response format: "for (;;);" + JSON
-        const jsonStr = typeof res.data === 'string' 
-            ? res.data.replace(/^for\s*\(\s*;\s*;\s*\)\s*;/, '')
-            : JSON.stringify(res.data);
-        const data = JSON.parse(jsonStr);
-        
-        // Extract from jsmods.instances
-        const instances = data?.jsmods?.instances || [];
-        for (const instance of instances) {
-            const config = instance[1];
-            const params = instance[2];
-            if (config?.[0] === 'VideoConfig' && params?.[0]?.videoData) {
-                const vd = params[0].videoData;
-                return {
-                    hd: vd.hd_src || vd.hd_src_no_ratelimit || vd.playable_url_quality_hd,
-                    sd: vd.sd_src || vd.sd_src_no_ratelimit || vd.playable_url,
-                    thumbnail: vd.thumbnail_src || vd.poster,
-                };
-            }
-        }
-        
-        // Alternative: check payload directly
-        const payload = data?.payload;
-        if (payload?.video) {
-            return {
-                hd: payload.video.hd_src || payload.video.browser_native_hd_url,
-                sd: payload.video.sd_src || payload.video.browser_native_sd_url,
-                thumbnail: payload.video.thumbnail_src,
-            };
-        }
-        
-        return null;
+        // Decode URL encoding then base64
+        const efgEncoded = decodeURIComponent(efgMatch[1]);
+        const efgJson = Buffer.from(efgEncoded, 'base64').toString('utf-8');
+        const efg = JSON.parse(efgJson);
+        return efg.xpv_asset_id?.toString();
     } catch {
-        return null;
+        return undefined;
     }
 }
 
+// Detect quality from URL patterns and bitrate
+function detectQuality(url: string): 'HD' | 'SD' {
+    // HD indicators (720p+)
+    const hdPatterns = [
+        /720p/i, /1080p/i, /_720p/i, /_1080p/i,
+        /dash_h264-basic-gen2_720p/i,
+        /dash_baseline_1_v1/i, // Usually 720p
+        /gen2_720p/i,
+        /quality_hd/i,
+        /hd_src/i,
+        /browser_native_hd/i,
+    ];
+    
+    // SD indicators (360p, 480p, sve_sd)
+    const sdPatterns = [
+        /360p/i, /480p/i, /_360p/i, /_480p/i,
+        /sve_sd/i, // Facebook's SD tag
+        /gen2_360p/i,
+        /progressive_h264-basic-gen2_360p/i,
+        /quality_sd/i,
+        /sd_src/i,
+        /browser_native_sd/i,
+    ];
+    
+    // Check SD first (more specific)
+    for (const p of sdPatterns) {
+        if (p.test(url)) return 'SD';
+    }
+    
+    // Check HD
+    for (const p of hdPatterns) {
+        if (p.test(url)) return 'HD';
+    }
+    
+    // Fallback: check bitrate from URL
+    const bitrateMatch = url.match(/bitrate=(\d+)/);
+    if (bitrateMatch) {
+        const bitrate = parseInt(bitrateMatch[1]);
+        // < 600kbps = SD, >= 600kbps = HD
+        return bitrate < 600000 ? 'SD' : 'HD';
+    }
+    
+    // Default to HD if can't determine
+    return 'HD';
+}
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// METADATA EXTRACTION
-// ═══════════════════════════════════════════════════════════════════════════════
+function extractVideos(html: string, filterToFirstAsset: boolean = false): VideoCandidate[] {
+    const candidates: VideoCandidate[] = [];
+    const seen = new Set<string>();
 
-/**
- * Extract metadata from Facebook HTML
- * 
- * Extracts author, engagement stats, thumbnail, and other metadata
- * in a single pass through the HTML.
- * 
- * @param html - HTML content to parse
- * @returns Extracted metadata object
- */
-export function fbExtractMetadata(html: string): FbMetadata {
-    const result: FbMetadata = {
-        likes: 0,
-        comments: 0,
-        shares: 0,
-        views: 0,
-    };
-    
-    // Extract thumbnail
-    const thumbMatch = html.match(FB_PATTERNS.thumbnail);
-    if (thumbMatch && /scontent|fbcdn/.test(thumbMatch[1])) {
-        result.thumbnail = clean(thumbMatch[1]);
+    const configs: { pattern: RegExp; priority: number }[] = [
+        { pattern: P.video.playableHd, priority: 100 },
+        { pattern: P.video.playable, priority: 95 },
+        { pattern: P.video.progressive, priority: 90 },
+        { pattern: P.video.hdSrc, priority: 85 },
+        { pattern: P.video.sdSrc, priority: 80 },
+        { pattern: P.video.browserHd, priority: 70 },
+        { pattern: P.video.browserSd, priority: 65 },
+        { pattern: P.video.dash, priority: 60 },
+    ];
+
+    for (const { pattern, priority } of configs) {
+        pattern.lastIndex = 0;
+        let m;
+        while ((m = pattern.exec(html)) !== null) {
+            const url = decode(m[1]);
+            const urlKey = url.split('?')[0];
+            if (seen.has(urlKey) || !url.includes('.mp4')) continue;
+            seen.add(urlKey);
+
+            const cdnBoost = getCdnInfo(url).score;
+            const quality = detectQuality(url);
+            const assetId = extractAssetId(url);
+
+            candidates.push({
+                url,
+                quality,
+                hasMuxedAudio: true,
+                priority: priority + cdnBoost + (quality === 'HD' ? 10 : 0),
+                assetId,
+            });
+        }
     }
+
+    const sorted = candidates.sort((a, b) => b.priority - a.priority);
     
-    // Extract author (try multiple patterns)
-    const authorPatterns = [FB_PATTERNS.authorReels, FB_PATTERNS.author, FB_PATTERNS.authorAlt];
-    for (const pattern of authorPatterns) {
-        const match = html.match(pattern);
-        if (match?.[1] && match[1] !== 'Facebook' && !/^(User|Page|Video|Photo|Post)$/i.test(match[1])) {
-            result.author = decodeUnicode(match[1]);
-            break;
+    if (filterToFirstAsset && sorted.length > 0) {
+        const firstAssetId = sorted.find(v => v.assetId)?.assetId;
+        if (firstAssetId) {
+            return sorted.filter(v => v.assetId === firstAssetId);
         }
     }
     
-    // Extract engagement - likes
-    const likeMatch = html.match(FB_PATTERNS.likes) || html.match(FB_PATTERNS.likesAlt);
-    if (likeMatch) result.likes = parseEngagement(likeMatch[1]);
+    return sorted;
+}
+
+// Helper to check if URL is valid post image
+function isValidImage(url: string): boolean {
+    // Must be Facebook CDN
+    if (!/scontent|fbcdn/.test(url)) return false;
+    // Skip emoji/sticker/static resources
+    if (/emoji|sticker|rsrc|static\.xx|icon|badge|reaction/i.test(url)) return false;
+    // Skip profile pics (t39.30808-1) but allow post images (t39.30808-6, t51.82787)
+    if (/t39\.30808-1/.test(url)) return false;
+    // Skip small thumbnails (but allow stp=dst- which is just resized, not thumbnail)
+    // _s.jpg and _t.jpg are small/thumbnail versions
+    if (/\/p\d+x\d+\/|_s\d+x\d+|\/s\d+x\d+\/|\/c\d+\.\d+|cp0|_nc_.*=p\d+|_[st]\.jpg/.test(url)) return false;
+    // Accept if has image extension OR is fbcdn/scontent URL with image type indicator
+    const hasExtension = /\.(?:jpg|jpeg|png|webp)/i.test(url);
+    const isFbImageType = /t39\.30808-6|t51\.82787|t51\.29350|t51\.2885-15/.test(url);
+    return hasExtension || isFbImageType;
+}
+
+// Strip stp= parameter from URL to get full resolution
+function stripStpParam(url: string): string {
+    // Case 1: stp= is first param: ?stp=xxx&... -> ?...
+    // Case 2: stp= is not first: &stp=xxx&... -> &...
+    // Case 3: stp= is only param: ?stp=xxx -> (remove entirely)
     
-    // Extract engagement - comments
-    const commentMatch = html.match(FB_PATTERNS.comments) || html.match(FB_PATTERNS.commentsAlt);
-    if (commentMatch) result.comments = parseEngagement(commentMatch[1]);
+    // First, try to remove ?stp=xxx& (first param with more params after)
+    let result = url.replace(/\?stp=[^&]+&/, '?');
+    if (result !== url) return result;
     
-    // Extract engagement - shares
-    const shareMatch = html.match(FB_PATTERNS.shares) || html.match(FB_PATTERNS.sharesAlt);
-    if (shareMatch) result.shares = parseEngagement(shareMatch[1]);
+    // Then, try to remove &stp=xxx (not first param)
+    result = url.replace(/&stp=[^&]+/, '');
+    if (result !== url) return result;
     
-    // Extract engagement - views
-    const viewMatch = html.match(FB_PATTERNS.views) || html.match(FB_PATTERNS.viewsAlt);
-    if (viewMatch) result.views = parseEngagement(viewMatch[1]);
-    
-    // Extract description/message - prioritize more specific patterns
-    // to avoid catching UI text like "Upload photo and try image creation..."
-    let description: string | undefined;
-    
-    // Priority 1: comet_sections message (actual post content)
-    const cometMatch = html.match(FB_PATTERNS.messageComet);
-    if (cometMatch?.[1] && cometMatch[1].length >= 10) {
-        description = cometMatch[1];
-    }
-    
-    // Priority 2: story context message
-    if (!description) {
-        const storyMatch = html.match(FB_PATTERNS.messageStory);
-        if (storyMatch?.[1] && storyMatch[1].length >= 10) {
-            description = storyMatch[1];
-        }
-    }
-    
-    // Priority 3: generic message (filter out known UI text)
-    if (!description) {
-        const msgMatch = html.match(FB_PATTERNS.message);
-        if (msgMatch?.[1] && msgMatch[1].length >= 10) {
-            const text = msgMatch[1];
-            // Skip known Facebook UI text patterns
-            const isUIText = /^(Unggah foto|Upload photo|Try image|Coba pembuatan|Create with AI|Buat dengan)/i.test(text);
-            if (!isUIText) {
-                description = text;
-            }
-        }
-    }
-    
-    // Priority 4: caption fallback
-    if (!description) {
-        const captionMatch = html.match(FB_PATTERNS.caption);
-        if (captionMatch?.[1] && captionMatch[1].length >= 10) {
-            const text = captionMatch[1];
-            const isUIText = /^(Unggah foto|Upload photo|Try image|Coba pembuatan|Create with AI|Buat dengan)/i.test(text);
-            if (!isUIText) {
-                description = text;
-            }
-        }
-    }
-    
-    if (description) {
-        result.description = decodeUnicode(description.replace(/\\n/g, '\n'));
-    }
-    
-    // Extract posted time
-    const timeMatch = html.match(FB_PATTERNS.creationTime);
-    if (timeMatch) {
-        result.postedAt = new Date(parseInt(timeMatch[1]) * 1000).toISOString();
-    }
-    
+    // Finally, try to remove ?stp=xxx (only param)
+    result = url.replace(/\?stp=[^&]+$/, '');
     return result;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// STORY EXTRACTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Extract stories (videos and images) from Facebook HTML
- * 
- * Stories have a different structure than regular posts, using
- * progressive_url for videos and t51.82787 pattern for images.
- * 
- * AUDIO FIX: Prioritizes playable_url and progressive_url patterns
- * which contain muxed video+audio over browser_native URLs.
- * Also detects and deprioritizes muted URLs (geo-restricted content).
- * 
- * @param html - HTML content to parse
- * @returns Array of MediaFormat objects for story items
- */
-export function fbExtractStories(html: string): MediaFormat[] {
-    const formats: MediaFormat[] = [];
-    const seenUrls = new Set<string>();
-    let m;
+// Extract images from post - targeted extraction based on post_id
+function extractPostImages(html: string): { urls: string[]; pattern: string } {
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    let patternUsed = 'none';
     
-    // Collect video-thumbnail pairs with audio priority
-    // isMuted flag helps deprioritize muted URLs when better alternatives exist
-    const storyBlocks: { videoUrl: string; isHD: boolean; thumbnail?: string; position: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
-    
-    // Pattern 1: progressive_url with quality metadata (HAS AUDIO)
-    // Collect ALL patterns first, then sort by audio quality
-    FB_PATTERNS.storyVideo.lastIndex = 0;
-    while ((m = FB_PATTERNS.storyVideo.exec(html)) !== null) {
-        const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url)) {
-            seenUrls.add(url);
-            const searchStart = Math.max(0, m.index - 2000);
-            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
-            const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
-            storyBlocks.push({
-                videoUrl: url,
-                isHD: m[2] === 'HD',
-                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
-                position: m.index,
-                hasMuxedAudio: true, // progressive_url has audio
-                isMuted: isMutedUrl(url),
-            });
-        }
-    }
-    
-    // Pattern 2: playable_url in story context (HAS AUDIO)
-    FB_PATTERNS.storyPlayableUrl.lastIndex = 0;
-    while ((m = FB_PATTERNS.storyPlayableUrl.exec(html)) !== null) {
-        const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-            seenUrls.add(url);
-            const searchStart = Math.max(0, m.index - 2000);
-            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
-            const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
-            storyBlocks.push({
-                videoUrl: url,
-                isHD: /720|1080|_hd/i.test(url),
-                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
-                position: m.index,
-                hasMuxedAudio: true, // playable_url has audio
-                isMuted: isMutedUrl(url),
-            });
-        }
-    }
-    
-    // Pattern 3: video.playable_url in story data (HAS AUDIO)
-    FB_PATTERNS.storyVideoData.lastIndex = 0;
-    while ((m = FB_PATTERNS.storyVideoData.exec(html)) !== null) {
-        const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-            seenUrls.add(url);
-            storyBlocks.push({
-                videoUrl: url,
-                isHD: /720|1080|_hd/i.test(url),
-                thumbnail: undefined,
-                position: m.index,
-                hasMuxedAudio: true,
-                isMuted: isMutedUrl(url),
-            });
-        }
-    }
-    
-    // Pattern 4: Fallback - any progressive_url (HAS AUDIO)
-    FB_PATTERNS.storyVideoFallback.lastIndex = 0;
-    while ((m = FB_PATTERNS.storyVideoFallback.exec(html)) !== null) {
-        const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-            seenUrls.add(url);
-            const searchStart = Math.max(0, m.index - 2000);
-            const nearbyHtml = html.substring(searchStart, m.index + m[0].length);
-            const thumbMatch = nearbyHtml.match(FB_PATTERNS.storyThumbnail);
-            storyBlocks.push({
-                videoUrl: url,
-                isHD: /720|1080|_hd/i.test(url),
-                thumbnail: thumbMatch ? clean(thumbMatch[1]) : undefined,
-                position: m.index,
-                hasMuxedAudio: true, // progressive_url has audio
-                isMuted: isMutedUrl(url),
-            });
-        }
-    }
-    
-    // Pattern 5: LAST RESORT - browser_native URLs (NO AUDIO)
-    // Only use if absolutely nothing else found
-    const browserNativePattern = /"browser_native_(?:hd|sd)_url":"(https:[^"]+\.mp4[^"]*)"/g;
-    while ((m = browserNativePattern.exec(html)) !== null) {
-        const url = utilDecodeUrl(m[1]);
-        if (!seenUrls.has(url) && /scontent|fbcdn/.test(url)) {
-            seenUrls.add(url);
-            storyBlocks.push({
-                videoUrl: url,
-                isHD: /hd_url/.test(m[0]),
-                thumbnail: undefined,
-                position: m.index,
-                hasMuxedAudio: false, // browser_native has NO audio
-                isMuted: isMutedUrl(url),
-            });
-        }
-    }
-    
-    // Sort by audio quality: non-muted with audio > muted with audio > no audio
-    // This ensures we prefer URLs with actual audio over muted versions
-    storyBlocks.sort((a, b) => {
-        // Priority 1: Non-muted with audio (best)
-        const aScore = a.hasMuxedAudio && !a.isMuted ? 3 : a.hasMuxedAudio ? 2 : 1;
-        const bScore = b.hasMuxedAudio && !b.isMuted ? 3 : b.hasMuxedAudio ? 2 : 1;
-        if (bScore !== aScore) return bScore - aScore;
-        // Priority 2: HD over SD
-        if (a.isHD !== b.isHD) return a.isHD ? -1 : 1;
-        // Priority 3: Position (earlier in HTML = more relevant)
-        return a.position - b.position;
-    });
-    
-    // If all URLs are muted, log warning (for debugging)
-    const allMuted = storyBlocks.length > 0 && storyBlocks.every(b => b.isMuted);
-    if (allMuted) {
-        // All URLs are muted - this is a geo-restriction issue
-        // The video will play but without audio
-        console.warn('[FB Story] All video URLs are muted (geo-restricted content)');
-    }
-    
-    // Collect all thumbnails as fallback
-    const allThumbs: string[] = [];
-    const thumbRe = /"(?:previewImage|story_thumbnail|poster_image)":\{"uri":"(https:[^"]+)"/g;
-    while ((m = thumbRe.exec(html)) !== null) {
-        const url = clean(m[1]);
-        if (isValidMedia(url) && !allThumbs.includes(url)) allThumbs.push(url);
-    }
-    
-    // Filter to get best non-muted URLs first
-    const nonMutedBlocks = storyBlocks.filter(b => !b.isMuted && b.hasMuxedAudio);
-    const mutedBlocks = storyBlocks.filter(b => b.isMuted || !b.hasMuxedAudio);
-    
-    // Use non-muted if available, otherwise fall back to muted
-    const blocksToUse = nonMutedBlocks.length > 0 ? nonMutedBlocks : mutedBlocks;
-    
-    let videoIdx = 0;
-    let fallbackThumbIdx = 0;
-    
-    // Group HD/SD pairs if both exist
-    if (blocksToUse.some(v => v.isHD) && blocksToUse.some(v => !v.isHD)) {
-        const count = Math.ceil(blocksToUse.length / 2);
-        for (let i = 0; i < count; i++) {
-            const pair = blocksToUse.slice(i * 2, i * 2 + 2);
-            const best = pair.find(v => v.isHD) || pair[0];
-            if (best) {
-                const thumb = best.thumbnail || pair.find(p => p.thumbnail)?.thumbnail || allThumbs[fallbackThumbIdx++];
-                formats.push({
-                    quality: `Story ${++videoIdx}`,
-                    type: 'video',
-                    url: best.videoUrl,
-                    format: 'mp4',
-                    itemId: `story-v-${videoIdx}`,
-                    thumbnail: thumb,
-                });
-            }
-        }
-    } else if (blocksToUse.length > 0) {
-        blocksToUse.forEach((v) => {
-            const thumb = v.thumbnail || allThumbs[fallbackThumbIdx++];
-            formats.push({
-                quality: `Story ${++videoIdx}`,
-                type: 'video',
-                url: v.videoUrl,
-                format: 'mp4',
-                itemId: `story-v-${videoIdx}`,
-                thumbnail: thumb,
-            });
-        });
-    }
-    
-    // Extract story images (t51.82787 pattern)
-    FB_PATTERNS.storyImage.lastIndex = 0;
-    const storyImages: string[] = [];
-    while ((m = FB_PATTERNS.storyImage.exec(html)) !== null) {
-        const url = clean(utilDecodeUrl(m[0]));
-        // Only high-res images
-        if (/s(1080|1440|2048)x/.test(url) && !seenUrls.has(url) && !storyImages.includes(url)) {
-            storyImages.push(url);
-        }
-    }
-    
-    storyImages.forEach((url, i) => {
-        seenUrls.add(url);
-        formats.push({
-            quality: `Story Image ${i + 1}`,
-            type: 'image',
-            url,
-            format: 'jpg',
-            itemId: `story-img-${i + 1}`,
-            thumbnail: url,
-        });
-    });
-    
-    return formats;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// IMAGE EXTRACTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Extract images from Facebook post HTML
- * 
- * Handles multiple image sources:
- * - all_subattachments (multi-image posts)
- * - viewer_image (single/gallery images)
- * - photo_image (photo posts)
- * 
- * @param html - HTML content to parse
- * @param targetPostId - Optional post ID to target specific content
- * @returns Array of MediaFormat objects for images
- */
-export function fbExtractImages(html: string, targetPostId?: string): MediaFormat[] {
-    const formats: MediaFormat[] = [];
-    const seenPaths = new Set<string>();
-    let idx = 0;
-    
-    const decoded = utilDecodeHtml(html);
-    const target = fbFindPostBlock(decoded, targetPostId);
-    
-    /**
-     * Add image to formats if not duplicate
-     */
-    const addImage = (imgUrl: string): boolean => {
-        const path = imgUrl.split('?')[0];
-        if (isSkipImage(imgUrl) || seenPaths.has(path)) return false;
-        // Skip profile pictures (t39.30808-1)
-        if (/t39\.30808-1\//.test(imgUrl)) return false;
+    const addUrl = (url: string): boolean => {
+        let cleanUrl = decode(url);
+        cleanUrl = stripStpParam(cleanUrl);
+        cleanUrl = cleanUrl.replace(/\?\?/, '?').replace(/\?$/, '');
         
-        // Debug: log the URL being added
-        console.log(`[Facebook.Image] Adding: ${imgUrl.substring(0, 100)}... (has query: ${imgUrl.includes('?')})`);
-        
-        seenPaths.add(path);
-        formats.push({
-            quality: `Image ${++idx}`,
-            type: 'image',
-            url: imgUrl,
-            format: 'jpg',
-            itemId: `img-${idx}`,
-            thumbnail: imgUrl,
-        });
+        const idMatch = cleanUrl.match(/(\d+_\d+_\d+)_n\.(?:jpg|webp)/) || cleanUrl.match(/(\d{10,})_/);
+        const key = idMatch ? idMatch[1] : cleanUrl.split('?')[0];
+        if (seen.has(key)) return false;
+        if (!isValidImage(cleanUrl)) return false;
+        seen.add(key);
+        urls.push(cleanUrl);
         return true;
     };
     
-    let m;
+    const postIdMatch = html.match(/"post_id":"(\d+)"/);
+    let targetBlock = html;
+    let blockType = 'full';
     
-    // Strategy 1: Extract from all_subattachments (multi-image posts)
-    const subMatch = target.match(FB_PATTERNS.subattachments);
-    if (subMatch) {
-        const expectedCount = parseInt(subMatch[1]) || 0;
-        const nodesStart = target.indexOf('"nodes":[', target.indexOf('"all_subattachments"'));
+    if (postIdMatch) {
+        const postId = postIdMatch[1];
+        const postIdPos = html.indexOf(`"post_id":"${postId}"`);
+        const subAttachPos = html.indexOf('"all_subattachments"');
         
-        if (nodesStart > -1) {
-            // Find the end of nodes array
-            let depth = 1, nodesEnd = nodesStart + 9;
-            for (let i = nodesStart + 9; i < target.length && i < nodesStart + 30000; i++) {
-                if (target[i] === '[') depth++;
-                if (target[i] === ']') { depth--; if (depth === 0) { nodesEnd = i + 1; break; } }
-            }
+        if (subAttachPos > -1) {
+            const nodesCheck = html.substring(subAttachPos, subAttachPos + 100);
+            const hasNodes = nodesCheck.includes('"nodes":[{');
             
-            const nodesBlock = target.substring(nodesStart, nodesEnd);
-            
-            // Extract viewer_image from nodes
-            FB_PATTERNS.viewerImage.lastIndex = 0;
-            while ((m = FB_PATTERNS.viewerImage.exec(nodesBlock)) !== null) {
-                const url = clean(m[3]);
-                if (/scontent|fbcdn/.test(url) && /t39\.30808|t51\.82787/.test(url)) {
-                    addImage(url);
-                }
+            if (hasNodes) {
+                targetBlock = html.substring(Math.max(0, subAttachPos - 2000), Math.min(html.length, subAttachPos + 50000));
+                blockType = 'multi-image';
+            } else {
+                targetBlock = html.substring(Math.max(0, postIdPos - 10000), Math.min(html.length, postIdPos + 15000));
+                blockType = 'single-image';
             }
-            
-            // If we got expected count, return early
-            if (idx >= expectedCount && idx > 0) return formats;
+        } else {
+            targetBlock = html.substring(Math.max(0, postIdPos - 10000), Math.min(html.length, postIdPos + 15000));
+            blockType = 'post-block';
         }
     }
     
-    // Strategy 2: Extract viewer_image (single/gallery images)
-    if (idx === 0) {
-        const candidates: { url: string; size: number }[] = [];
-        FB_PATTERNS.viewerImage.lastIndex = 0;
-        
-        while ((m = FB_PATTERNS.viewerImage.exec(target)) !== null) {
-            const height = parseInt(m[1]);
-            const width = parseInt(m[2]);
-            const url = clean(m[3]);
-            
-            if (/scontent|fbcdn/.test(url) && height >= 400 && width >= 400) {
-                if (/t39\.30808|t51\.82787/.test(url) && !/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\//.test(url)) {
-                    candidates.push({ url, size: height * width });
-                }
-            }
-        }
-        
-        // Sort by size (largest first) and dedupe
-        candidates.sort((a, b) => b.size - a.size);
-        const addedUrls = new Set<string>();
-        for (const c of candidates) {
-            const basePath = c.url.split('?')[0].replace(/_n\.jpg$/, '');
-            if (!addedUrls.has(basePath)) {
-                addedUrls.add(basePath);
-                addImage(c.url);
-            }
-        }
+    // Pattern 1: viewer_image
+    const viewerImageRe = /"viewer_image":\{[^}]*"uri":"(https:[^"]+)"/g;
+    let match;
+    while ((match = viewerImageRe.exec(targetBlock)) !== null) {
+        addUrl(match[1]);
+    }
+    if (urls.length > 0) {
+        patternUsed = `viewer_image (${blockType})`;
+        return { urls, pattern: patternUsed };
     }
     
-    // Strategy 3: Extract photo_image (use target block, not full HTML)
-    if (idx === 0) {
-        FB_PATTERNS.photoImage.lastIndex = 0;
-        const photoUrls: string[] = [];
-        
-        while ((m = FB_PATTERNS.photoImage.exec(target)) !== null && photoUrls.length < 5) {
-            const url = clean(m[1]);
-            if (/scontent|fbcdn/.test(url) && /t39\.30808-6/.test(url) && !photoUrls.includes(url)) {
-                photoUrls.push(url);
-            }
-        }
-        
-        for (const url of photoUrls) addImage(url);
+    // Pattern 2: photo_image
+    const photoImageRe = /"photo_image":\{"uri":"([^"]+)"/g;
+    while ((match = photoImageRe.exec(targetBlock)) !== null) {
+        addUrl(match[1]);
+    }
+    if (urls.length > 0) {
+        patternUsed = `photo_image (${blockType})`;
+        return { urls, pattern: patternUsed };
     }
     
-    // Strategy 4: Extract from preload links (only if in target block context)
-    if (idx === 0) {
-        const preloadRe = /<link[^>]+rel="preload"[^>]+href="(https:\/\/scontent[^"]+_nc_sid=127cfc[^"]+)"/i;
-        const preloadMatch = target.match(preloadRe);
-        if (preloadMatch) addImage(clean(preloadMatch[1]));
+    // Pattern 3: image with size
+    const imageWithSizeRe = /"image":\{"height":\d+,"width":\d+,"uri":"([^"]+)"/g;
+    while ((match = imageWithSizeRe.exec(targetBlock)) !== null) {
+        addUrl(match[1]);
+    }
+    if (urls.length > 0) {
+        patternUsed = `image_with_size (${blockType})`;
+        return { urls, pattern: patternUsed };
     }
     
-    // Strategy 5: Extract image URIs (use target block)
-    if (idx === 0) {
-        FB_PATTERNS.imageUri.lastIndex = 0;
-        while ((m = FB_PATTERNS.imageUri.exec(target)) !== null && idx < 3) {
-            const url = clean(m[1]);
-            if (/scontent|fbcdn/.test(url) && !/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\//.test(url)) {
-                addImage(url);
-            }
-        }
+    // Pattern 4: full_image
+    const fullImageRe = /"full_image":\{"uri":"([^"]+)"/g;
+    while ((match = fullImageRe.exec(targetBlock)) !== null) {
+        addUrl(match[1]);
     }
     
-    // Strategy 6: Fallback - raw t39.30808 URLs (use target block to avoid ads/suggested)
-    if (idx === 0) {
-        const t39Re = /https:\/\/scontent[^"'\s<>\\]+t39\.30808-6[^"'\s<>\\]+\.jpg/gi;
-        let count = 0;
-        while ((m = t39Re.exec(target)) !== null && count < 5) {
-            const url = utilDecodeUrl(m[0]);
-            if (!/\/[ps]\d{2,3}x\d{2,3}\/|\/cp0\/|_s\d+x\d+|\/s\d{2,3}x\d{2,3}\//.test(url)) {
-                if (addImage(url)) count++;
-            }
-        }
+    // Pattern 5: large_share
+    const largeShareRe = /"large_share":\{"uri":"([^"]+)"/g;
+    while ((match = largeShareRe.exec(targetBlock)) !== null) {
+        addUrl(match[1]);
     }
     
-    return formats;
+    if (urls.length > 0) {
+        patternUsed = `full_image/large_share (${blockType})`;
+    }
+    
+    return { urls, pattern: patternUsed };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DASH VIDEO EXTRACTION (for high-quality variants)
-// ═══════════════════════════════════════════════════════════════════════════════
+// Image extraction - returns formats and pattern used
+function extractImages(html: string): { formats: MediaFormat[]; pattern: string } {
+    const formats: MediaFormat[] = [];
+    const seen = new Set<string>();
+    let imageIdx = 0;
 
-/**
- * Extract DASH video variants with height information
- * 
- * DASH videos have explicit height metadata, useful for getting
- * specific quality variants (1080p, 720p, etc.)
- * 
- * @param html - HTML content to parse
- * @returns Array of video objects with height and URL
- */
-export function fbExtractDashVideos(html: string): { height: number; url: string }[] {
-    const videos: { height: number; url: string }[] = [];
-    let m;
-    
-    FB_PATTERNS.dashVideo.lastIndex = 0;
-    while ((m = FB_PATTERNS.dashVideo.exec(html)) !== null) {
-        const height = parseInt(m[1]);
-        if (height >= 360) {
-            videos.push({
-                height,
-                url: utilDecodeUrl(m[2]),
-            });
-        }
+    const addImage = (url: string): boolean => {
+        const urlKey = url.split('?')[0];
+        if (seen.has(urlKey) || !isValidImage(url)) return false;
+        seen.add(urlKey);
+        const itemId = `img-${imageIdx}`;
+        formats.push({
+            quality: `Image ${imageIdx + 1}`,
+            type: 'image',
+            url,
+            format: url.includes('.png') ? 'png' : 'jpg',
+            thumbnail: url,
+            imageIndex: imageIdx,
+            itemId, // For frontend carousel grouping
+        });
+        imageIdx++;
+        return true;
+    };
+
+    // Priority 0: Extract from post using targeted extraction
+    const { urls: postImages, pattern: postPattern } = extractPostImages(html);
+    for (const url of postImages) {
+        addImage(url);
     }
-    
-    // Sort by height (highest first)
-    videos.sort((a, b) => b.height - a.height);
-    
-    return videos;
-}
 
-/**
- * Get quality label from video height
- * 
- * @param height - Video height in pixels
- * @returns Quality label string
- */
-export function fbGetQualityLabel(height: number): string {
-    if (height >= 1080) return 'HD 1080p';
-    if (height >= 720) return 'HD 720p';
-    if (height >= 480) return 'SD 480p';
-    if (height >= 360) return 'SD 360p';
-    return `${height}p`;
-}
+    if (formats.length > 0) {
+        return { formats, pattern: postPattern };
+    }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONTENT TYPE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/** Facebook content types */
-export type FbContentType = 'post' | 'video' | 'reel' | 'story' | 'group' | 'photo' | 'unknown';
-
-/**
- * Detect content type from Facebook URL
- * 
- * @param url - Facebook URL
- * @returns Content type
- */
-export function fbDetectContentType(url: string): FbContentType {
-    if (/\/stories\//.test(url)) return 'story';
-    if (/\/groups\//.test(url)) return 'group';
-    if (/\/reel\/|\/share\/r\//.test(url)) return 'reel';
-    if (/\/videos?\/|\/watch\/|\/share\/v\//.test(url)) return 'video';
-    if (/\/photos?\//.test(url)) return 'photo';
-    if (/\/posts\/|permalink|\/share\/p\//.test(url)) return 'post';
-    // story.php with story_fbid is typically a reel/video shared via short link
-    if (/story\.php\?.*story_fbid=/.test(url)) return 'post';
-    return 'unknown';
-}
-
-/**
- * Extract video ID from Facebook URL
- * 
- * @param url - Facebook URL
- * @returns Video ID or null
- */
-export function fbExtractVideoId(url: string): string | null {
-    const match = url.match(/\/(?:reel|videos?)\/(\d+)/);
-    return match ? match[1] : null;
-}
-
-/**
- * Extract post ID from Facebook URL
- * 
- * @param url - Facebook URL
- * @returns Post ID or null
- */
-export function fbExtractPostId(url: string): string | null {
-    const patterns = [
-        /\/groups\/[^/]+\/permalink\/(\d+)/,
-        /\/groups\/[^/]+\/posts\/(\d+)/,
-        /\/posts\/(pfbid[a-zA-Z0-9]+)/,
-        /\/posts\/(\d+)/,
-        /\/permalink\/(\d+)/,
-        /story_fbid=(pfbid[a-zA-Z0-9]+)/,
-        /story_fbid=(\d+)/,
-        /\/photos?\/[^/]+\/(\d+)/,
-        /\/share\/p\/([a-zA-Z0-9]+)/,
-        /fbid=(\d+)/,
+    // Priority 1: Structured image patterns (fallback)
+    const structuredPatterns = [
+        P.image.viewerImage,
+        P.image.imageWithSize,
+        P.image.photoImage,
+        P.image.fullWidthImage,
+        P.image.fullImage,
+        P.image.largeShare,
     ];
-    
-    for (const re of patterns) {
-        const m = url.match(re);
-        if (m) return m[1];
+
+    for (const pattern of structuredPatterns) {
+        pattern.lastIndex = 0;
+        let m;
+        while ((m = pattern.exec(html)) !== null) {
+            addImage(decode(m[1]));
+        }
     }
-    
-    return null;
+
+    if (formats.length > 0) {
+        return { formats, pattern: 'structured_fallback' };
+    }
+
+    // Priority 2: Generic URI pattern
+    if (formats.length < 2) {
+        P.image.imageUri.lastIndex = 0;
+        let m;
+        while ((m = P.image.imageUri.exec(html)) !== null) {
+            addImage(decode(m[1]));
+        }
+    }
+
+    // Priority 3: Raw URL extraction
+    if (formats.length === 0) {
+        P.image.rawImage.lastIndex = 0;
+        let m;
+        while ((m = P.image.rawImage.exec(html)) !== null) {
+            addImage(decode(m[0]));
+        }
+    }
+
+    return { formats, pattern: formats.length > 0 ? 'raw_fallback' : 'none' };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// LIVE VIDEO DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Check if content is a live broadcast (not downloadable)
- */
-export function fbIsLiveVideo(html: string): boolean {
-    return html.includes('"is_live_streaming":true') || 
-           html.includes('"broadcast_status":"LIVE"') ||
-           html.includes('"is_live":true') ||
-           html.includes('LiveVideoStatus');
+// Story extraction - grouped by video_id with HD/SD variants
+interface StoryVideo {
+    videoId: string;
+    quality: 'HD' | 'SD';
+    url: string;
+    bitrate: number;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ERROR DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/** Age-restricted content patterns */
-const AGE_RESTRICTED_PATTERNS = [
-    'You must be 18 years or older',
-    'age-restricted',
-    'AdultContentWarning',
-    '"is_adult_content":true',
-    'content_age_gate',
-];
-
-/** Private/unavailable content patterns */
-const PRIVATE_CONTENT_PATTERNS = [
-    "This content isn't available",
-    "content isn't available right now",
-    "Sorry, this content isn't available",
-    'The link you followed may be broken',
-    'This video is no longer available',
-    'video may have been removed',
-];
-
-/** Content issue types */
-export type FbContentIssue = 'age_restricted' | 'private' | 'login_required' | null;
-
-/**
- * Detect content access issues in HTML
- * 
- * @param html - HTML content to check
- * @returns Issue type or null if no issues
- */
-export function fbDetectContentIssue(html: string): FbContentIssue {
-    const lower = html.toLowerCase();
+// Extract story thumbnail from HTML
+function extractStoryThumbnail(html: string): string | undefined {
+    // Pattern 1: previewImage in story context
+    const previewMatch = html.match(/"previewImage":\{[^}]*"uri":"(https:[^"]+)"/);
+    if (previewMatch) return decode(previewMatch[1]);
     
-    // Check if there's actual media content (skip error detection if media exists)
-    const hasMediaPatterns = 
-        html.includes('browser_native') || 
-        html.includes('all_subattachments') || 
-        html.includes('viewer_image') || 
-        html.includes('playable_url') || 
-        html.includes('photo_image');
+    // Pattern 2: thumbnailImage
+    const thumbMatch = html.match(/"thumbnailImage":\{[^}]*"uri":"(https:[^"]+)"/);
+    if (thumbMatch) return decode(thumbMatch[1]);
     
-    if (hasMediaPatterns) return null;
+    // Pattern 3: preferred_thumbnail
+    const prefMatch = html.match(/"preferred_thumbnail":\{[^}]*"uri":"(https:[^"]+)"/);
+    if (prefMatch) return decode(prefMatch[1]);
     
-    // Check for age restriction
-    for (const p of AGE_RESTRICTED_PATTERNS) {
-        if (html.includes(p) || lower.includes(p.toLowerCase())) {
-            return 'age_restricted';
+    // Pattern 4: story card image (scontent with story type indicator)
+    const storyImgMatch = html.match(/"image":\{"uri":"(https:\/\/scontent[^"]+t51\.29350[^"]+)"/);
+    if (storyImgMatch) return decode(storyImgMatch[1]);
+    
+    // Pattern 5: Any scontent image near story context
+    const anyImgMatch = html.match(/"uri":"(https:\/\/scontent[^"]+\.(?:jpg|webp)[^"]*)"/);
+    if (anyImgMatch) return decode(anyImgMatch[1]);
+    
+    return undefined;
+}
+
+function extractStories(html: string): { formats: MediaFormat[]; storyCount: number; thumbnail?: string } {
+    const formats: MediaFormat[] = [];
+    const storyVideos: StoryVideo[] = [];
+    const seen = new Set<string>();
+
+    // Extract thumbnail first
+    const thumbnail = extractStoryThumbnail(html);
+
+    // Pattern: "progressive_url":"URL","failure_reason":null,"metadata":{"quality":"HD|SD"}
+    const progressiveRe = /"progressive_url":"(https:[^"]+\.mp4[^"]*)","failure_reason":null,"metadata":\{"quality":"(HD|SD)"\}/g;
+    let m;
+
+    while ((m = progressiveRe.exec(html)) !== null) {
+        const url = decode(m[1]);
+        const quality = m[2] as 'HD' | 'SD';
+        const urlKey = url.split('?')[0];
+        
+        if (seen.has(urlKey)) continue;
+        seen.add(urlKey);
+
+        const bitrateMatch = url.match(/bitrate=(\d+)/);
+        const bitrate = bitrateMatch ? parseInt(bitrateMatch[1]) : (quality === 'HD' ? 1500000 : 500000);
+        storyVideos.push({ videoId: '', quality, url, bitrate });
+    }
+
+    // Group by pairs (SD + HD for same story appear consecutively)
+    const MAX_STORIES = 5;
+    let storyIdx = 0;
+    
+    for (let i = 0; i < storyVideos.length && storyIdx < MAX_STORIES; i += 2) {
+        storyIdx++;
+        const sdVideo = storyVideos[i];
+        const hdVideo = storyVideos[i + 1];
+        
+        if (hdVideo) {
+            const cdnInfo = getCdnInfo(hdVideo.url);
+            const itemId = `story-${storyIdx}`;
+            formats.push({
+                quality: 'HD',
+                type: 'video',
+                url: hdVideo.url,
+                format: 'mp4',
+                hasMuxedAudio: true,
+                thumbnail, // Add thumbnail to format
+                storyIndex: storyIdx,
+                itemId, // For frontend carousel grouping
+                _priority: 100 + cdnInfo.score,
+            } as MediaFormat & { storyIndex: number });
+        }
+        
+        if (sdVideo) {
+            const cdnInfo = getCdnInfo(sdVideo.url);
+            const itemId = `story-${storyIdx}`;
+            formats.push({
+                quality: 'SD',
+                type: 'video',
+                url: sdVideo.url,
+                format: 'mp4',
+                hasMuxedAudio: true,
+                thumbnail, // Add thumbnail to format
+                storyIndex: storyIdx,
+                itemId, // For frontend carousel grouping
+                _priority: 50 + cdnInfo.score,
+            } as MediaFormat & { storyIndex: number });
+        }
+    }
+
+    // Image stories (fallback)
+    const imagePattern = /https:\/\/scontent[^"'\s]+t51\.29350[^"'\s]+\.(?:jpg|webp)/gi;
+    while ((m = imagePattern.exec(html)) !== null) {
+        const url = decode(m[0]);
+        const urlKey = url.split('?')[0];
+        if (seen.has(urlKey)) continue;
+        if (/\/s\d+x\d+\/|_s\d+x\d+/.test(url)) continue;
+
+        seen.add(urlKey);
+        formats.push({
+            quality: 'Original',
+            type: 'image',
+            url,
+            format: 'jpg',
+            thumbnail: url,
+        });
+    }
+
+    return { formats, storyCount: storyIdx, thumbnail };
+}
+
+// Thumbnail extraction
+function extractThumbnail(html: string): string | undefined {
+    const m = html.match(P.thumb);
+    return m ? decode(m[1]) : undefined;
+}
+
+// Metadata extraction
+function extractMeta(html: string, type?: FbContentType): FbMetadata {
+    let author: string | undefined;
+    let title: string | undefined;
+    let description: string | undefined;
+    
+    // For stories, use story-specific patterns first
+    if (type === 'story') {
+        // Pattern 1: story_bucket_owner name
+        const storyOwnerMatch = html.match(/"story_bucket_owner":\{[^}]*"name":"([^"]+)"/);
+        if (storyOwnerMatch) author = storyOwnerMatch[1];
+        
+        // Pattern 2: owner in story context
+        if (!author) {
+            const ownerMatch = html.match(/"owner":\{[^}]*"name":"([^"]+)"/);
+            if (ownerMatch) author = ownerMatch[1];
+        }
+        
+        // Pattern 3: actorID context name
+        if (!author) {
+            const actorMatch = html.match(/"actorID":"[^"]+","name":"([^"]+)"/);
+            if (actorMatch) author = actorMatch[1];
         }
     }
     
-    // Check for private content
-    for (const p of PRIVATE_CONTENT_PATTERNS) {
-        const idx = html.indexOf(p);
-        if (idx > -1 && idx < 50000) {
-            return 'private';
+    // Fallback to general patterns
+    if (!author) {
+        author = html.match(P.meta.author)?.[1] || html.match(P.meta.authorAlt)?.[1];
+    }
+    
+    const timestamp = html.match(P.meta.timestamp)?.[1];
+    title = html.match(P.meta.title)?.[1];
+    
+    // Extract description/caption
+    // Pattern 1: message text in post
+    const messageMatch = html.match(/"message":\{"text":"([^"]+)"/);
+    if (messageMatch) description = messageMatch[1];
+    
+    // Pattern 2: comet_sections text
+    if (!description) {
+        const cometMatch = html.match(/"comet_sections":\{[^}]*"message":\{"text":"([^"]+)"/);
+        if (cometMatch) description = cometMatch[1];
+    }
+    
+    // Pattern 3: story text
+    if (!description) {
+        const storyTextMatch = html.match(/"story":\{[^}]*"message":\{"text":"([^"]+)"/);
+        if (storyTextMatch) description = storyTextMatch[1];
+    }
+    
+    // Pattern 4: og:description meta tag
+    if (!description) {
+        const ogDescMatch = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i) ||
+                           html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:description"/i);
+        if (ogDescMatch) description = ogDescMatch[1];
+    }
+    
+    // For stories without title, use author's name as title
+    if (!title && type === 'story' && author) {
+        title = `${decode(author)}'s Story`;
+    }
+    
+    // Extract engagement stats
+    const engagement: { likes?: number; comments?: number; shares?: number; views?: number } = {};
+    
+    // Reaction count (likes)
+    const reactionMatch = html.match(/"reaction_count":\{"count":(\d+)/);
+    if (reactionMatch) engagement.likes = parseInt(reactionMatch[1]);
+    
+    // Alternative: i18n_reaction_count
+    if (!engagement.likes) {
+        const i18nReactionMatch = html.match(/"i18n_reaction_count":"([\d,KMB.]+)"/i);
+        if (i18nReactionMatch) {
+            engagement.likes = parseEngagementCount(i18nReactionMatch[1]);
         }
     }
     
-    // Check for login requirement
-    if (html.length < 500000 && (html.includes('login_form') || html.includes('Log in to Facebook'))) {
-        return 'login_required';
+    // Comment count
+    const commentMatch = html.match(/"comment_count":\{"total_count":(\d+)/);
+    if (commentMatch) engagement.comments = parseInt(commentMatch[1]);
+    
+    // Alternative: comments.total_count
+    if (!engagement.comments) {
+        const altCommentMatch = html.match(/"comments":\{"total_count":(\d+)/);
+        if (altCommentMatch) engagement.comments = parseInt(altCommentMatch[1]);
     }
     
-    return null;
+    // Share count
+    const shareMatch = html.match(/"share_count":\{"count":(\d+)/);
+    if (shareMatch) engagement.shares = parseInt(shareMatch[1]);
+    
+    // View count (for videos/reels)
+    const viewMatch = html.match(/"video_view_count":(\d+)/) || html.match(/"play_count":(\d+)/);
+    if (viewMatch) engagement.views = parseInt(viewMatch[1]);
+
+    const hasEngagement = engagement.likes || engagement.comments || engagement.shares || engagement.views;
+
+    return {
+        author: author ? decode(author) : undefined,
+        title: title ? decode(title) : undefined,
+        description: description ? decode(description).substring(0, 500) : undefined,
+        timestamp: timestamp ? new Date(parseInt(timestamp) * 1000).toISOString() : undefined,
+        engagement: hasEngagement ? engagement : undefined,
+    };
 }
 
-/**
- * Check if content has unavailable attachment (deleted shared content)
- * 
- * @param html - HTML content to check
- * @returns True if attachment is unavailable
- */
-export function fbHasUnavailableAttachment(html: string): boolean {
-    return html.includes('"UnavailableAttachment"') || 
-           html.includes('"unavailable_attachment_style"') || 
-           (html.includes("This content isn't available") && html.includes('attachment'));
+// Parse engagement count strings like "1.2K", "3.5M", "1,234"
+function parseEngagementCount(str: string): number {
+    const cleaned = str.replace(/,/g, '').trim();
+    const match = cleaned.match(/([\d.]+)([KMB])?/i);
+    if (!match) return 0;
+    
+    const num = parseFloat(match[1]);
+    const suffix = match[2]?.toUpperCase();
+    
+    switch (suffix) {
+        case 'K': return Math.round(num * 1000);
+        case 'M': return Math.round(num * 1000000);
+        case 'B': return Math.round(num * 1000000000);
+        default: return Math.round(num);
+    }
+}
+
+// Resolve type for logging
+function resolveType(url: string, type: FbContentType): string {
+    if (type === 'story') return 'stories';
+    if (type === 'reel') return 'reel';
+    if (type === 'video') return 'video';
+    if (type === 'group') return 'group post';
+    if (type === 'photo') return 'photo';
+    if (/\/share\/p\//.test(url)) return 'public post (permalink)';
+    if (/\/posts\//.test(url)) return 'public post';
+    return 'post';
+}
+
+// Main extraction function
+export function extractContent(html: string, type: FbContentType, url?: string): { formats: MediaFormat[]; metadata: FbMetadata; pattern?: string } {
+    const decoded = decode(html);
+    const formats: MediaFormat[] = [];
+    let pattern = 'none';
+    
+    // Log: resolved type
+    const resolved = resolveType(url || '', type);
+    console.log(`[FB] -> Resolved: ${resolved}`);
+    
+    // For stories, search entire HTML
+    if (type === 'story') {
+        const stories = extractStories(decoded);
+        formats.push(...stories.formats);
+        pattern = `stories (${stories.storyCount} unique)`;
+    }
+    // For posts/photos, search entire HTML for images first
+    else if (type === 'post' || type === 'photo' || type === 'group') {
+        const images = extractImages(decoded);
+        if (images.formats.length > 0) {
+            formats.push(...images.formats);
+            pattern = images.pattern;
+        }
+    }
+    
+    // If no formats found, try block-based extraction
+    if (formats.length === 0) {
+        const block = findBlock(decoded, type);
+        const thumbnail = extractThumbnail(block);
+
+        // Extract videos - for reels/videos, filter to first asset only
+        const filterToFirst = type === 'reel' || type === 'video';
+        const videos = extractVideos(block, filterToFirst);
+        for (const v of videos) {
+            formats.push({
+                quality: v.quality,
+                type: 'video',
+                url: v.url,
+                format: 'mp4',
+                thumbnail,
+                hasMuxedAudio: v.hasMuxedAudio,
+                _priority: v.priority,
+            } as MediaFormat);
+        }
+        
+        if (videos.length > 0) {
+            pattern = `video (${videos.length > 1 ? 'HD/SD' : 'single'})`;
+        }
+
+        // Extract images from block if none found yet
+        if (formats.length === 0) {
+            const blockImages = extractImages(block);
+            formats.push(...blockImages.formats);
+            pattern = blockImages.pattern;
+        }
+    }
+
+    // Dedupe by URL path
+    const seen = new Set<string>();
+    const deduped = formats.filter(f => {
+        const key = f.url.split('?')[0];
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+
+    // Log: pattern and count
+    const mediaType = deduped.some(f => f.type === 'video') ? 'video' : 'image';
+    console.log(`[FB] -> Pattern: ${pattern}`);
+    console.log(`[FB] -> Found: ${deduped.length} ${mediaType}${deduped.length > 1 ? 's' : ''}`);
+
+    return {
+        formats: deduped,
+        metadata: extractMeta(decoded, type),
+        pattern,
+    };
 }

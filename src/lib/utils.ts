@@ -449,16 +449,9 @@ const SMALL_IMG_PATTERNS = [
 export async function utilValidateMediaUrl(url: string, platform: PlatformId, timeout = 3000): Promise<boolean> {
     if (TRUSTED_CDNS[platform]?.some(d => url.includes(d))) return true;
     try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), timeout);
-        const ua = platform === 'tiktok' ? DESKTOP_USER_AGENT : httpGetUserAgent(platform);
-        const res = await fetch(url, {
-            method: 'HEAD',
-            signal: ctrl.signal,
-            headers: { 'User-Agent': ua, 'Referer': platformGetReferer(platform) },
-        });
-        clearTimeout(tid);
-        return res.ok;
+        const { httpHead } = await import('@/lib/http/client');
+        const res = await httpHead(url, { platform, timeout });
+        return res.status >= 200 && res.status < 400;
     } catch { return false; }
 }
 
@@ -711,25 +704,12 @@ export function utilAddFormat(
  */
 export async function utilFetchFilesize(url: string, platform: PlatformId, timeout = 5000): Promise<number | undefined> {
     try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), timeout);
-        const ua = httpGetUserAgent(platform);
-        const referer = platformGetReferer(platform);
+        const { httpHead } = await import('@/lib/http/client');
+        const res = await httpHead(url, { platform, timeout });
         
-        const res = await fetch(url, {
-            method: 'HEAD',
-            signal: ctrl.signal,
-            headers: { 
-                'User-Agent': ua, 
-                'Referer': referer,
-                'Accept': '*/*',
-            },
-        });
-        clearTimeout(tid);
+        if (res.status < 200 || res.status >= 400) return undefined;
         
-        if (!res.ok) return undefined;
-        
-        const contentLength = res.headers.get('content-length');
+        const contentLength = res.headers['content-length'];
         if (contentLength) {
             const size = parseInt(contentLength, 10);
             return size > 0 ? size : undefined;

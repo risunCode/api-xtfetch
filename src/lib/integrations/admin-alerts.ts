@@ -168,16 +168,16 @@ async function sendAlert(
     // Send webhook if configured
     if (config.webhook_url) {
         try {
+            const axios = (await import('axios')).default;
             const payload = {
                 type: alertType,
                 timestamp: new Date().toISOString(),
                 data,
             };
             
-            await fetch(config.webhook_url, {
-                method: 'POST',
+            await axios.post(config.webhook_url, payload, {
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                timeout: 10000,
             });
             
             logger.debug('admin-alerts', `Alert sent: ${alertType}`);
@@ -203,17 +203,18 @@ async function sendAlert(
  */
 export async function testWebhook(webhookUrl: string): Promise<{ success: boolean; error?: string }> {
     try {
-        const response = await fetch(webhookUrl, {
-            method: 'POST',
+        const axios = (await import('axios')).default;
+        const response = await axios.post(webhookUrl, {
+            type: 'test',
+            timestamp: new Date().toISOString(),
+            message: 'XTFetch webhook test',
+        }, {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 'test',
-                timestamp: new Date().toISOString(),
-                message: 'XTFetch webhook test',
-            }),
+            timeout: 10000,
+            validateStatus: () => true,
         });
         
-        if (!response.ok) {
+        if (response.status < 200 || response.status >= 300) {
             return { success: false, error: `HTTP ${response.status}` };
         }
         

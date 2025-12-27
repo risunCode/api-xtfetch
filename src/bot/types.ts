@@ -140,6 +140,9 @@ export interface DownloadResult {
         type: 'video' | 'audio' | 'image';
         url: string;
         filesize?: number;
+        itemId?: string;      // For multi-item grouping (carousel/stories)
+        storyIndex?: number;  // For stories HD/SD grouping
+        imageIndex?: number;  // For multi-image posts
     }>;
     error?: string;
     errorCode?: string;

@@ -87,6 +87,7 @@ function buildMediaKeyboard(originalUrl: string, hdUrl?: string): InlineKeyboard
 /**
  * Send media result to chat
  * Standalone version for worker (doesn't need ctx)
+ * Supports multi-item (carousel/stories) by sending all items
  */
 async function workerSendMedia(
     chatId: number,
@@ -105,11 +106,117 @@ async function workerSendMedia(
 
     const caption = buildMinimalCaption(result);
 
-    // Find video and image formats
+    // Group formats by itemId for multi-item support
+    const groupedItems: Record<string, typeof result.formats> = {};
+    for (const format of result.formats) {
+        const itemId = format.itemId || 'main';
+        if (!groupedItems[itemId]) groupedItems[itemId] = [];
+        groupedItems[itemId].push(format);
+    }
+
+    const itemIds = Object.keys(groupedItems);
+    const isMultiItem = itemIds.length > 1;
+
+    // For multi-item (carousel/stories), send each item
+    if (isMultiItem) {
+        let sentCount = 0;
+        const keyboard = buildMediaKeyboard(originalUrl);
+
+        for (let i = 0; i < itemIds.length; i++) {
+            const itemId = itemIds[i];
+            const itemFormats = groupedItems[itemId];
+            
+            // Find best format for this item (prefer HD video, then SD, then image)
+            const videoFormats = itemFormats.filter(f => f.type === 'video');
+            const imageFormats = itemFormats.filter(f => f.type === 'image');
+            
+            const hdVideo = videoFormats.find(f => 
+                f.quality.toLowerCase().includes('hd') || 
+                f.quality.includes('1080') || 
+                f.quality.includes('720')
+            ) || videoFormats[0];
+            
+            const sdVideo = videoFormats.find(f => 
+                f.quality.toLowerCase().includes('sd') || 
+                f.quality.includes('480') || 
+                f.quality.includes('360')
+            );
+
+            let formatToSend = hdVideo || imageFormats[0];
+            let sendAsLink = false;
+
+            // Check if video is too large, fallback to SD
+            if (formatToSend?.type === 'video' && formatToSend.filesize && formatToSend.filesize > MAX_FILE_SIZE) {
+                if (sdVideo && (!sdVideo.filesize || sdVideo.filesize <= MAX_FILE_SIZE)) {
+                    formatToSend = sdVideo;
+                } else {
+                    // Both HD and SD too large - send as direct link
+                    sendAsLink = true;
+                }
+            }
+
+            if (!formatToSend) continue;
+
+            // Build caption: only first item gets full caption, others get index
+            const itemCaption = i === 0 ? caption : `${i + 1}/${itemIds.length}`;
+
+            try {
+                if (sendAsLink) {
+                    // Send direct link with play button
+                    const linkKeyboard = new InlineKeyboard()
+                        .url('▶️ Play Video', formatToSend.url)
+                        .url('🔗 Original', originalUrl);
+                    
+                    await api.sendMessage(chatId, `📥 ${itemCaption}\n\nVideo too large, tap to play:`, {
+                        reply_markup: linkKeyboard,
+                        link_preview_options: { is_disabled: true },
+                    });
+                } else if (formatToSend.type === 'video') {
+                    await api.sendVideo(chatId, new InputFile({ url: formatToSend.url }), {
+                        caption: itemCaption,
+                        reply_markup: i === 0 ? keyboard : undefined,
+                    });
+                } else {
+                    await api.sendPhoto(chatId, new InputFile({ url: formatToSend.url }), {
+                        caption: itemCaption,
+                        reply_markup: i === 0 ? keyboard : undefined,
+                    });
+                }
+                sentCount++;
+                
+                // Small delay between sends to avoid rate limiting
+                if (i < itemIds.length - 1) {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } catch (error) {
+                logger.warn('telegram', `Failed to send item ${i + 1}: ${error}`);
+                
+                // If send failed, try sending as direct link
+                if (!sendAsLink && formatToSend.type === 'video') {
+                    try {
+                        const linkKeyboard = new InlineKeyboard()
+                            .url('▶️ Play Video', formatToSend.url)
+                            .url('🔗 Original', originalUrl);
+                        
+                        await api.sendMessage(chatId, `📥 ${itemCaption}\n\nTap to play:`, {
+                            reply_markup: linkKeyboard,
+                            link_preview_options: { is_disabled: true },
+                        });
+                        sentCount++;
+                    } catch {
+                        // Ignore secondary failure
+                    }
+                }
+            }
+        }
+
+        return sentCount > 0;
+    }
+
+    // Single item - original logic
     const videoFormats = result.formats.filter(f => f.type === 'video');
     const imageFormats = result.formats.filter(f => f.type === 'image');
     
-    // Sort video formats by quality
     const hdVideo = videoFormats.find(f => 
         f.quality.toLowerCase().includes('hd') || 
         f.quality.includes('1080') || 
@@ -124,7 +231,6 @@ async function workerSendMedia(
 
     const imageFormat = imageFormats[0];
 
-    // Determine which format to send
     let formatToSend = hdVideo || imageFormat;
     let hdUrl: string | undefined;
 
@@ -134,7 +240,6 @@ async function workerSendMedia(
             hdUrl = formatToSend.url;
             formatToSend = sdVideo;
         } else {
-            // No suitable SD, send direct link instead
             const keyboard = buildMediaKeyboard(originalUrl, formatToSend.url);
             try {
                 await api.sendMessage(
@@ -175,7 +280,6 @@ async function workerSendMedia(
     } catch (error) {
         logger.error('telegram', error, 'WORKER_SEND_MEDIA');
         
-        // Fallback: send URL as text
         try {
             await api.sendMessage(
                 chatId,

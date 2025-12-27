@@ -140,10 +140,10 @@ async function sendCookieAlert(
             embed.fields.push({ name: 'Error', value: error.substring(0, 200), inline: false });
         }
 
-        await fetch(config.discord_webhook_url, {
-            method: 'POST',
+        const axios = (await import('axios')).default;
+        await axios.post(config.discord_webhook_url, { embeds: [embed] }, {
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ embeds: [embed] }),
+            timeout: 10000,
         });
 
         logger.debug('cookies', `Alert sent for ${platform} cookie ${type}`);

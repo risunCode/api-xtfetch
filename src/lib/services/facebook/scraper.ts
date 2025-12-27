@@ -1,446 +1,198 @@
-/**
- * Facebook Scraper Service (Refactored)
- * Supports: /share/p|r|v/, /posts/, /reel/, /videos/, /watch/, /stories/, /groups/, /photos/
- * 
- * Uses fb-extractor helpers for optimized extraction.
- * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
- */
+// scraper.ts - Main Facebook scraper logic
+import { httpGet } from '@/lib/http/client';
+import { sysConfigScraperTimeout } from '@/lib/config/system';
+import { extractContent, detectIssue } from './extractor';
+import { optimizeUrls, logCdnSelection } from './cdn';
+import type { ScraperResult, ScraperOptions } from '@/core/scrapers/types';
+import { ScraperErrorCode, createError } from '@/core/scrapers/types';
+import type { FbContentType, MediaFormat } from './index';
 
-import { MediaFormat } from '@/lib/types';
-import { utilDecodeHtml, utilExtractMeta } from '@/lib/utils';
-import { httpGet, httpGetRotatingHeaders, httpTrackRequest } from '@/lib/http';
-import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired, cookiePoolMarkCooldown, cookiePoolMarkLoginRedirect } from '@/lib/cookies';
-import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
-import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
-import { logger } from '../shared/logger';
-import {
-    fbExtractVideos,
-    fbExtractStories,
-    fbExtractImages,
-    fbExtractMetadata,
-    fbFindVideoBlock,
-    fbDetectContentType,
-    fbExtractVideoId,
-    fbExtractPostId,
-    fbDetectContentIssue,
-    fbHasUnavailableAttachment,
-    fbIsLiveVideo,
-    fbTryTahoe,
-    fbExtractDashVideos,
-    fbGetQualityLabel,
-    type FbContentType,
-} from './extractor';
+// URL validation
+const FB_DOMAINS = /facebook\.com|fb\.watch|fb\.com|fbwat\.ch/i;
+const isValidFbUrl = (url: string): boolean => FB_DOMAINS.test(url);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// Content type detection
+const TYPE_PATTERNS: [RegExp, FbContentType][] = [
+    [/\/stories\/|\/share\/s\//, 'story'],
+    [/\/reel\/|\/share\/r\//, 'reel'],
+    [/\/watch|\/videos?\/|fb\.watch|fbwat\.ch/, 'video'],
+    [/\/groups\//, 'group'],
+    [/\/photo|fbid=/, 'photo'],
+];
 
-const getResValue = (q: string): number => {
-    const m = q.match(/(\d{3,4})/);
-    return m ? parseInt(m[1]) : 0;
-};
-
-const mapContentIssue = (issue: ReturnType<typeof fbDetectContentIssue>): ScraperErrorCode | null => {
-    if (issue === 'age_restricted') return ScraperErrorCode.AGE_RESTRICTED;
-    if (issue === 'private') return ScraperErrorCode.PRIVATE_CONTENT;
-    if (issue === 'login_required') return ScraperErrorCode.COOKIE_REQUIRED;
-    return null;
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MAIN SCRAPER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions): Promise<ScraperResult> {
-    const startTime = Date.now();
-    console.log(`[Facebook.Scrape] Entry point - URL: ${inputUrl.substring(0, 80)}...`);
-
-    if (!platformMatches(inputUrl, 'facebook')) {
-        return createError(ScraperErrorCode.INVALID_URL, 'Invalid Facebook URL');
+function detectContentType(url: string, html: string): FbContentType {
+    for (const [pattern, type] of TYPE_PATTERNS) {
+        if (pattern.test(url)) return type;
     }
+    
+    // Check HTML content - prioritize image posts over video
+    // Key indicators for image posts (from yt-dlp patterns)
+    const hasSubattachments = html.includes('"all_subattachments"');
+    const hasPhotoImage = html.includes('"photo_image"');
+    const hasFullImage = html.includes('"full_image"');
+    const hasLargeShare = html.includes('"large_share"');
+    const hasViewerImage = html.includes('"viewer_image"');
+    
+    // Video indicators
+    const hasVideoId = html.includes('"video_id"');
+    const hasPlayableUrl = html.includes('"playable_url"');
+    const hasProgressiveUrl = html.includes('"progressive_url"');
+    
+    // If has subattachments (multi-image post) or photo patterns without video, treat as post
+    const hasImageIndicators = hasSubattachments || hasPhotoImage || hasFullImage || hasLargeShare || hasViewerImage;
+    const hasVideoIndicators = hasVideoId || hasPlayableUrl || hasProgressiveUrl;
+    
+    // Prioritize image posts - if has image indicators but no clear video, it's a post
+    if (hasImageIndicators && !hasVideoIndicators) return 'post';
+    if (hasSubattachments) return 'post'; // Multi-image posts always have this
+    if (hasVideoIndicators) return 'video';
+    
+    return 'post';
+}
 
-    const parsedCookie = cookieParse(options?.cookie, 'facebook') || undefined;
-    const hasCookie = !!parsedCookie;
-    const contentType = fbDetectContentType(inputUrl);
+// Fetch with retry - uses httpGet which handles UA rotation from browser pool
+async function fetchWithRetry(url: string, options: ScraperOptions): Promise<string | null> {
+    const timeout = options.timeout || sysConfigScraperTimeout('facebook');
+    const cookie = options.cookie;
 
-    // Stories always require cookie
-    if (contentType === 'story' && !parsedCookie) {
-        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Stories membutuhkan cookie. Admin cookie pool kosong atau tidak tersedia.');
-    }
-
-    logger.type('facebook', contentType);
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // MAIN SCRAPE STRATEGY
-    // ─────────────────────────────────────────────────────────────────────────
-    const doScrape = async (useCookie: boolean): Promise<ScraperResult> => {
-        try {
-            httpTrackRequest('facebook');
-            const headers = httpGetRotatingHeaders({ 
-                platform: 'facebook', 
-                cookie: useCookie && parsedCookie ? parsedCookie : undefined 
-            });
-            const timeout = sysConfigScraperTimeout('facebook');
-            
-            console.log(`[Facebook.Scrape] Starting fetch (cookie: ${useCookie}, timeout: ${timeout}ms)`);
-            logger.debug('facebook', `Fetching ${inputUrl.substring(0, 50)}... (cookie: ${useCookie})`);
-            const res = await httpGet(inputUrl, { headers, timeout });
-
-            if (res.finalUrl.includes('/checkpoint/')) {
-                // Cookie hit checkpoint - mark as expired
-                if (useCookie) {
-                    cookiePoolMarkExpired('Checkpoint required').catch(() => {});
-                }
-                throw new Error('CHECKPOINT_REQUIRED');
-            }
-
-            // Check for 2FA verification redirect - cookie needs re-authentication
-            if (res.finalUrl.includes('/two_step_verification/') || res.finalUrl.includes('two_step_verification')) {
-                logger.debug('facebook', `Redirected to 2FA verification: ${res.finalUrl}`);
-                if (useCookie) {
-                    cookiePoolMarkExpired('2FA verification required').catch(() => {});
-                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin memerlukan verifikasi 2FA. Coba gunakan cookie pribadimu di Settings.');
-                }
-                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
-            }
-
-            // Check for live video (not downloadable)
-            if (fbIsLiveVideo(res.data)) {
-                return createError(ScraperErrorCode.UNSUPPORTED_CONTENT, 'Live video tidak dapat didownload');
-            }
-
-            // Check for login redirect - but be careful with stories!
-            // Stories sometimes redirect through login but still work if cookie is valid
-            const isLoginPage = res.finalUrl.includes('/login.php') || res.finalUrl.includes('/login/?');
-            const isStoryContent = contentType === 'story' || res.finalUrl.includes('/stories/');
-            
-            if (isLoginPage) {
-                logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
-                
-                // For stories with cookie, this might be a false positive
-                // Check if the HTML actually contains story data before marking as expired
-                if (useCookie && isStoryContent) {
-                    // Check if we got actual story content despite login URL
-                    const hasStoryData = res.data.includes('"unified_stories"') || 
-                                        res.data.includes('"story_bucket"') || 
-                                        res.data.includes('"progressive_url"') ||
-                                        res.data.includes('"story_card_seen_state"');
-                    
-                    if (hasStoryData) {
-                        logger.debug('facebook', 'Login redirect but story data found, continuing extraction...');
-                        // Don't return error, continue with extraction
-                    } else {
-                        // Actually no story data, cookie is likely expired
-                        cookiePoolMarkLoginRedirect('Login redirect - no story data found').catch(() => {});
-                        return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin sedang bermasalah. Coba gunakan cookie pribadimu di Settings.');
-                    }
-                } else if (useCookie) {
-                    cookiePoolMarkLoginRedirect('Login redirect - cookie may be expired').catch(() => {});
-                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin sedang bermasalah. Coba gunakan cookie pribadimu di Settings.');
-                } else {
-                    return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
-                }
-            }
-
-            const html = res.data;
-            const finalUrl = res.finalUrl;
-            const decoded = utilDecodeHtml(html);
-
-            logger.debug('facebook', `Got ${(html.length / 1024).toFixed(0)}KB`);
-            logger.resolve('facebook', inputUrl, finalUrl);
-
-            // Check for error page
-            if (html.length < 10000 && html.includes('Sorry, something went wrong')) {
-                return createError(ScraperErrorCode.API_ERROR, 'Facebook returned error page');
-            }
-
-            // Check for content issues
-            const contentIssue = fbDetectContentIssue(html);
-            const errorCode = mapContentIssue(contentIssue);
-            
-            if (errorCode && !useCookie) {
-                if (errorCode === ScraperErrorCode.AGE_RESTRICTED) {
-                    return createError(ScraperErrorCode.AGE_RESTRICTED, 'Konten 18+. Admin cookie pool tidak tersedia.');
-                }
-                if (errorCode === ScraperErrorCode.PRIVATE_CONTENT) {
-                    return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Konten ini privat atau tidak tersedia.');
-                }
-                if (errorCode === ScraperErrorCode.COOKIE_REQUIRED) {
-                    return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
-                }
-            }
-
-            // Check for unavailable attachment in groups
-            const actualType = fbDetectContentType(finalUrl);
-            if (fbHasUnavailableAttachment(html) && actualType === 'group') {
-                return createError(ScraperErrorCode.PRIVATE_CONTENT, 'The shared content is no longer available or has been deleted.');
-            }
-
-            // ─────────────────────────────────────────────────────────────────
-            // EXTRACT MEDIA based on content type
-            // ─────────────────────────────────────────────────────────────────
-            let formats: MediaFormat[] = [];
-            const seenUrls = new Set<string>();
-
-            if (actualType === 'story') {
-                // Story extraction with retry
-                formats = fbExtractStories(decoded);
-                
-                if (formats.length === 0 && useCookie) {
-                    // Retry once - stories sometimes need time to load
-                    logger.debug('facebook', 'No stories found, retrying...');
-                    await new Promise(r => setTimeout(r, 500));
-                    const retry = await httpGet(finalUrl, { headers, timeout: timeout + 5000 });
-                    const retryHtml = utilDecodeHtml(retry.data);
-                    formats = fbExtractStories(retryHtml);
-                    
-                    // If still no stories, try extracting as video (some stories are just videos)
-                    if (formats.length === 0) {
-                        logger.debug('facebook', 'Still no stories, trying video extraction...');
-                        const block = fbFindVideoBlock(retryHtml);
-                        const { hd, sd, thumbnail } = fbExtractVideos(block);
-                        if (hd) {
-                            formats.push({ quality: 'HD', type: 'video', url: hd, format: 'mp4', itemId: 'story-video', thumbnail });
-                        }
-                        if (sd && sd !== hd) {
-                            formats.push({ quality: 'SD', type: 'video', url: sd, format: 'mp4', itemId: 'story-video', thumbnail });
-                        }
-                    }
-                }
-            } else if (actualType === 'video' || actualType === 'reel') {
-                // Video extraction
-                const videoId = fbExtractVideoId(finalUrl);
-                const block = fbFindVideoBlock(decoded, videoId || undefined);
-                const { hd, sd, thumbnail } = fbExtractVideos(block);
-                
-                if (hd) {
-                    formats.push({ quality: 'HD', type: 'video', url: hd, format: 'mp4', itemId: 'video-main', thumbnail });
-                    seenUrls.add(hd);
-                }
-                if (sd && sd !== hd) {
-                    formats.push({ quality: 'SD', type: 'video', url: sd, format: 'mp4', itemId: 'video-main', thumbnail });
-                    seenUrls.add(sd);
-                }
-                
-                // Try DASH videos if no HD/SD found
-                if (formats.length === 0) {
-                    const dashVideos = fbExtractDashVideos(block);
-                    const hdDash = dashVideos.find(v => v.height >= 720);
-                    const sdDash = dashVideos.find(v => v.height < 720 && v.height >= 360);
-                    
-                    if (hdDash) {
-                        formats.push({ quality: fbGetQualityLabel(hdDash.height), type: 'video', url: hdDash.url, format: 'mp4', itemId: 'video-main', thumbnail });
-                    }
-                    if (sdDash && sdDash.url !== hdDash?.url) {
-                        formats.push({ quality: fbGetQualityLabel(sdDash.height), type: 'video', url: sdDash.url, format: 'mp4', itemId: 'video-main', thumbnail });
-                    }
-                }
-                
-                // Try Tahoe API if still no video found
-                if (formats.length === 0) {
-                    const tahoeVideoId = fbExtractVideoId(finalUrl);
-                    if (tahoeVideoId) {
-                        const tahoeResult = await fbTryTahoe(tahoeVideoId, useCookie ? parsedCookie : undefined);
-                        if (tahoeResult) {
-                            const thumb = tahoeResult.thumbnail || thumbnail;
-                            if (tahoeResult.hd) {
-                                formats.push({ 
-                                    quality: 'HD', 
-                                    type: 'video', 
-                                    url: tahoeResult.hd, 
-                                    format: 'mp4', 
-                                    itemId: 'video-main',
-                                    thumbnail: thumb 
-                                });
-                                seenUrls.add(tahoeResult.hd);
-                            }
-                            if (tahoeResult.sd && tahoeResult.sd !== tahoeResult.hd && !seenUrls.has(tahoeResult.sd)) {
-                                formats.push({ 
-                                    quality: 'SD', 
-                                    type: 'video', 
-                                    url: tahoeResult.sd, 
-                                    format: 'mp4', 
-                                    itemId: 'video-main',
-                                    thumbnail: thumb 
-                                });
-                            }
-                        }
-                    }
-                }
-                
-                // Fallback to images if no video found
-                if (formats.length === 0) {
-                    formats = fbExtractImages(decoded, fbExtractPostId(finalUrl) || undefined);
-                }
-            } else {
-                // Post/Group/Photo extraction
-                const postId = fbExtractPostId(finalUrl);
-                const isPostShare = /\/share\/p\//.test(inputUrl);
-                const hasSubattachments = html.includes('all_subattachments');
-                
-                if (isPostShare || hasSubattachments) {
-                    // Prioritize images for post shares and multi-image posts
-                    formats = fbExtractImages(decoded, postId || undefined);
-                    
-                    if (formats.length === 0) {
-                        const block = fbFindVideoBlock(decoded, postId || undefined);
-                        const { hd, sd, thumbnail } = fbExtractVideos(block);
-                        if (hd) formats.push({ quality: 'HD', type: 'video', url: hd, format: 'mp4', itemId: 'video-main', thumbnail });
-                        if (sd && sd !== hd) formats.push({ quality: 'SD', type: 'video', url: sd, format: 'mp4', itemId: 'video-main', thumbnail });
-                    }
-                } else {
-                    // Try video first, then images
-                    const block = fbFindVideoBlock(decoded, postId || undefined);
-                    const { hd, sd, thumbnail } = fbExtractVideos(block);
-                    
-                    if (hd || sd) {
-                        if (hd) formats.push({ quality: 'HD', type: 'video', url: hd, format: 'mp4', itemId: 'video-main', thumbnail });
-                        if (sd && sd !== hd) formats.push({ quality: 'SD', type: 'video', url: sd, format: 'mp4', itemId: 'video-main', thumbnail });
-                    } else {
-                        formats = fbExtractImages(decoded, postId || undefined);
-                    }
-                }
-            }
-
-            // ─────────────────────────────────────────────────────────────────
-            // BUILD RESULT
-            // ─────────────────────────────────────────────────────────────────
-            if (formats.length === 0) {
-                if (errorCode === ScraperErrorCode.AGE_RESTRICTED) {
-                    return createError(ScraperErrorCode.AGE_RESTRICTED, 'Konten 18+. Coba dengan cookie lain.');
-                }
-                if (errorCode === ScraperErrorCode.PRIVATE_CONTENT) {
-                    return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Konten ini privat atau sudah dihapus.');
-                }
-                return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada media. Post mungkin hanya teks atau privat.');
-            }
-
-            // Deduplicate and sort formats
-            const seen = new Set<string>();
-            formats = formats.filter(f => {
-                if (seen.has(f.url)) return false;
-                seen.add(f.url);
-                return true;
-            });
-            formats.sort((a, b) => 
-                (a.type === 'video' ? 0 : 1) - (b.type === 'video' ? 0 : 1) || 
-                getResValue(b.quality) - getResValue(a.quality)
-            );
-
-            // Extract metadata
-            const meta = utilExtractMeta(html);
-            const fbMeta = fbExtractMetadata(decoded);
-            
-            let title = utilDecodeHtml(meta.title || 'Facebook Post')
-                .replace(/^[\d.]+K?\s*views.*?\|\s*/i, '')
-                .trim();
-            if (title.length > 100) title = title.substring(0, 100) + '...';
-            
-            if ((title === 'Facebook' || title === 'Facebook Post') && fbMeta.description) {
-                title = fbMeta.description.length > 80 
-                    ? fbMeta.description.substring(0, 80) + '...' 
-                    : fbMeta.description;
-            }
-
-            const engagement = (fbMeta.likes || fbMeta.comments || fbMeta.shares || fbMeta.views) 
-                ? { likes: fbMeta.likes, comments: fbMeta.comments, shares: fbMeta.shares, views: fbMeta.views }
-                : undefined;
-
-            logger.media('facebook', { 
-                videos: formats.filter(f => f.type === 'video').length, 
-                images: formats.filter(f => f.type === 'image').length 
-            });
-            logger.complete('facebook', Date.now() - startTime);
-
-            // Mark cookie as successful if used
-            if (useCookie) {
-                cookiePoolMarkSuccess().catch(() => {});
-            }
-
-            return {
-                success: true,
-                data: {
-                    title,
-                    thumbnail: meta.thumbnail || fbMeta.thumbnail || formats.find(f => f.thumbnail)?.thumbnail || '',
-                    author: fbMeta.author || 'Facebook',
-                    description: fbMeta.description,
-                    postedAt: fbMeta.postedAt,
-                    engagement,
-                    formats,
-                    url: inputUrl,
-                    type: formats.some(f => f.type === 'video') ? 'video' : 'image',
-                    usedCookie: useCookie,
-                }
-            };
-
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : 'Failed to fetch';
-            console.error(`[Facebook.Scrape] Exception caught: ${msg}`, e);
-            if (msg === 'CHECKPOINT_REQUIRED') {
-                return createError(ScraperErrorCode.CHECKPOINT_REQUIRED);
-            }
-            // Mark cookie error for network failures
-            if (useCookie) {
-                cookiePoolMarkError(msg).catch(() => {});
-            }
-            return createError(ScraperErrorCode.NETWORK_ERROR, msg);
-        }
+    // Custom headers for Facebook
+    const customHeaders: Record<string, string> = {
+        'Sec-Fetch-Site': 'none',
     };
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // EXECUTE STRATEGY CHAIN
-    // ─────────────────────────────────────────────────────────────────────────
-    const isStory = contentType === 'story';
-    const isGroup = contentType === 'group';
-    const isVideoShare = /\/share\/v\//.test(inputUrl);
+    // Step 1: First fetch
+    try {
+        const res = await httpGet(url, { 
+            platform: 'facebook', 
+            cookie, 
+            timeout,
+            headers: customHeaders,
+        });
 
-    // Track if cookie was already tried
-    let cookieAlreadyTried = false;
+        if (res.data && res.data.length > 100000) {
+            return res.data;
+        }
+        
+        // Check if login page or too small
+        const hasLoginForm = res.data?.includes('id="login_form"') || res.data?.includes('name="login"');
+        const isLoginPage = hasLoginForm || res.data?.includes('Log in to Facebook');
+        
+        if (isLoginPage || (res.data?.length || 0) < 100000) {
+            // Step 2: Wait 4s and retry with cookie
+            if (cookie) {
+                await new Promise(r => setTimeout(r, 4000));
+                
+                const retryRes = await httpGet(url, { 
+                    platform: 'facebook', 
+                    cookie, 
+                    timeout,
+                    headers: customHeaders,
+                });
+                
+                if (retryRes.data && retryRes.data.length > 30000) {
+                    return retryRes.data;
+                }
+            }
+        }
+        
+        return res.data || null;
+        
+    } catch (e: unknown) {
+        return null;
+    }
+}
 
-    // Stories always use cookie
-    if (isStory) {
-        return doScrape(true);
+// Map internal error codes to ScraperErrorCode
+function mapErrorCode(code: string): ScraperErrorCode {
+    const map: Record<string, ScraperErrorCode> = {
+        'INVALID_URL': ScraperErrorCode.INVALID_URL,
+        'NETWORK_ERROR': ScraperErrorCode.NETWORK_ERROR,
+        'CHECKPOINT': ScraperErrorCode.CHECKPOINT_REQUIRED,
+        'LOGIN_REQUIRED': ScraperErrorCode.COOKIE_REQUIRED,
+        'UNAVAILABLE': ScraperErrorCode.NOT_FOUND,
+        'NOT_FOUND': ScraperErrorCode.NOT_FOUND,
+        'PRIVATE': ScraperErrorCode.PRIVATE_CONTENT,
+        'DELETED': ScraperErrorCode.DELETED,
+        'NO_MEDIA': ScraperErrorCode.NO_MEDIA,
+    };
+    return map[code] || ScraperErrorCode.UNKNOWN;
+}
+
+
+// Main scraper function
+export async function scrapeFacebook(url: string, options: ScraperOptions = {}): Promise<ScraperResult> {
+    // Log: processing
+    console.log(`[FB] -> Processing: ${url}`);
+
+    // 1. Validate URL
+    if (!isValidFbUrl(url)) {
+        return createError(ScraperErrorCode.INVALID_URL, 'URL tidak valid');
     }
 
-    // Groups and video shares: try cookie first if available
-    if ((isGroup || isVideoShare) && hasCookie) {
-        logger.debug('facebook', `${isGroup ? 'Group' : 'Video share'} URL, trying with cookie first...`);
-        cookieAlreadyTried = true;
-        const cookieResult = await doScrape(true);
-        if (cookieResult.success && (cookieResult.data?.formats?.length || 0) > 0) {
-            const hasVideo = cookieResult.data?.formats?.some(f => f.type === 'video') || false;
-            if (!isVideoShare || hasVideo) return cookieResult;
-        }
+    // 2. Fetch page with retry
+    const html = await fetchWithRetry(url, options);
+    if (!html) {
+        return createError(ScraperErrorCode.NETWORK_ERROR, 'Gagal mengambil halaman');
     }
 
-    // Try without cookie first (guest mode)
-    const guestResult = await doScrape(false);
-
-    // Determine if retry with cookie is needed
-    const hasVideo = guestResult.data?.formats?.some(f => f.type === 'video') || false;
-    const shouldRetryVideoShare = isVideoShare && hasCookie && guestResult.success && !hasVideo;
-    
-    const shouldRetry = hasCookie && !cookieAlreadyTried && (
-        !guestResult.success || 
-        (guestResult.data?.formats?.length === 0) || 
-        guestResult.errorCode === ScraperErrorCode.AGE_RESTRICTED || 
-        guestResult.errorCode === ScraperErrorCode.COOKIE_REQUIRED || 
-        guestResult.errorCode === ScraperErrorCode.PRIVATE_CONTENT || 
-        guestResult.errorCode === ScraperErrorCode.NO_MEDIA || 
-        shouldRetryVideoShare
-    );
-
-    if (shouldRetry) {
-        logger.debug('facebook', 'Retrying with cookie...');
-        const cookieResult = await doScrape(true);
-        if (cookieResult.success && (cookieResult.data?.formats?.length || 0) > 0) {
-            return cookieResult;
-        }
-        // If both failed, return the cookie result (usually has better error message)
-        if (!guestResult.success && !cookieResult.success) {
-            return cookieResult;
-        }
+    // 3. Check for issues (login required, unavailable, etc)
+    const issue = detectIssue(html);
+    if (issue) {
+        console.log(`[FB] x Issue: ${issue.code}`);
+        return createError(mapErrorCode(issue.code), issue.message);
     }
 
-    return guestResult;
+    // 3.5. Check if we got a login page
+    const hasLoginForm = html.includes('id="login_form"') || html.includes('name="login"');
+    const hasLoginText = html.includes('Log in to Facebook') || html.includes('Log Into Facebook');
+    const needsLogin = html.length < 30000 && (hasLoginForm || hasLoginText) && !html.includes('"actorID"');
+    if (needsLogin) {
+        console.log(`[FB] x Login required`);
+        return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten memerlukan login');
+    }
+
+    // 4. Detect content type
+    const contentType = detectContentType(url, html);
+
+    // 5. Extract content (logging handled inside extractContent)
+    const { formats, metadata } = extractContent(html, contentType, url);
+
+    if (formats.length === 0) {
+        console.log(`[FB] x No media found`);
+        return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada media ditemukan');
+    }
+
+    // 6. Optimize URLs (CDN selection + sorting)
+    const optimized = optimizeUrls(formats);
+
+    // Log CDN selection
+    if (optimized[0]) {
+        logCdnSelection(optimized[0].url);
+    }
+
+    // 7. Clean up internal fields and build ScraperData
+    const cleaned: MediaFormat[] = optimized.map(({ _priority, ...f }) => f);
+    const thumbnail = cleaned.find(f => f.thumbnail)?.thumbnail || cleaned[0]?.url || '';
+    const hasVideo = cleaned.some(f => f.type === 'video');
+    const hasImage = cleaned.some(f => f.type === 'image');
+
+    return {
+        success: true,
+        data: {
+            title: metadata.title || 'Facebook Media',
+            thumbnail,
+            author: metadata.author || 'Unknown',
+            description: metadata.description,
+            formats: cleaned,
+            url,
+            postedAt: metadata.timestamp,
+            engagement: metadata.engagement,
+            type: hasVideo && hasImage ? 'mixed' : hasVideo ? 'video' : 'image',
+        },
+    };
+}
+
+// Platform check helper (for external use)
+export function platformMatches(url: string): boolean {
+    return isValidFbUrl(url);
 }

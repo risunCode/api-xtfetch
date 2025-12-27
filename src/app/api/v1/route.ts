@@ -46,6 +46,8 @@ export async function GET(request: NextRequest) {
         const searchParams = request.nextUrl.searchParams;
         const apiKey = searchParams.get('key');
         const url = searchParams.get('url');
+        const customCookie = searchParams.get('cookie'); // Optional: override cookie from pool
+        const skipCache = searchParams.get('skipCache') === 'true'; // Optional: bypass cache
 
         // Validate required parameters
         if (!apiKey) {
@@ -88,7 +90,7 @@ export async function GET(request: NextRequest) {
         }
         
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)
-        if (detectedPlatform) {
+        if (detectedPlatform && !skipCache) {
             let quickCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
                 quickCache = await cacheGetQuick<ScraperResult>(detectedPlatform, url);
@@ -119,9 +121,10 @@ export async function GET(request: NextRequest) {
         }
 
         // Step 3: Get cookie early for platforms that need it for URL resolution
+        // Priority: customCookie (from query) > poolCookie (from database)
         const earlyPlatform = detectedPlatform || platformDetect(url);
-        let poolCookie: string | null = null;
-        if (earlyPlatform) {
+        let poolCookie: string | null = customCookie;
+        if (!poolCookie && earlyPlatform) {
             poolCookie = await cookiePoolGetRotating(earlyPlatform, 'private');
         }
 
@@ -134,13 +137,13 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Refresh cookie if platform changed after resolution
-        if (urlResult.platform !== earlyPlatform) {
+        // Refresh cookie if platform changed after resolution (only if not using custom cookie)
+        if (!customCookie && urlResult.platform !== earlyPlatform) {
             poolCookie = await cookiePoolGetRotating(urlResult.platform, 'private');
         }
 
         // Step 5: Check cache with resolved URL (if URL was resolved)
-        if (urlResult.wasResolved) {
+        if (urlResult.wasResolved && !skipCache) {
             let resolvedCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
             try {
                 resolvedCache = await cacheGet<ScraperResult>(urlResult.platform, urlResult.resolvedUrl);

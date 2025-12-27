@@ -249,17 +249,18 @@ export async function callGeminiApi(
     }
     
     try {
-        const response = await fetch(url, {
-            method: 'POST',
+        const axios = (await import('axios')).default;
+        const response = await axios.post(url, body, {
             headers: {
                 'Content-Type': 'application/json',
                 'x-goog-api-key': apiKey,
             },
-            body: JSON.stringify(body),
+            timeout: 60000,
+            validateStatus: () => true,
         });
         
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
+        if (response.status < 200 || response.status >= 300) {
+            const errorData = response.data || {};
             const errorMsg = errorData?.error?.message || `HTTP ${response.status}`;
             
             // Check for rate limit (429) or quota exceeded
@@ -270,7 +271,7 @@ export async function callGeminiApi(
             
             // Parse retry-after header or default to 60 seconds
             let retryAfterSeconds = 60;
-            const retryAfter = response.headers.get('retry-after');
+            const retryAfter = response.headers['retry-after'];
             if (retryAfter) {
                 retryAfterSeconds = parseInt(retryAfter) || 60;
             } else if (errorMsg.includes('retry after')) {
@@ -287,7 +288,7 @@ export async function callGeminiApi(
             };
         }
         
-        const data = await response.json();
+        const data = response.data;
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         const tokensUsed = data?.usageMetadata?.totalTokenCount;
         

@@ -73,18 +73,21 @@ export async function authVerifySession(request: NextRequest): Promise<AuthResul
     
     try {
         // Call Supabase Auth API directly to verify token
-        const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        const axios = (await import('axios')).default;
+        const response = await axios.get(`${supabaseUrl}/auth/v1/user`, {
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'apikey': supabaseServiceKey,
             },
+            timeout: 10000,
+            validateStatus: () => true,
         });
         
-        if (!response.ok) {
+        if (response.status < 200 || response.status >= 300) {
             return { valid: false, error: 'Invalid or expired token' };
         }
         
-        const user = await response.json();
+        const user = response.data;
         
         // Get user profile with role
         if (!authClient) {
