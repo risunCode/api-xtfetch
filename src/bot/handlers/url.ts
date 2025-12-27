@@ -329,20 +329,29 @@ async function sendVideoDirectly(
 
     try {
         if (needsDownloadFirst) {
-            // Download video to buffer
+            // Download video to buffer with timeout
+            console.log(`[Bot.Video] Downloading from CDN: ${videoUrl.substring(0, 80)}...`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+            
             const response = await fetch(videoUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': '*/*',
                     'Referer': 'https://www.facebook.com/',
                 },
+                signal: controller.signal,
             });
+            
+            clearTimeout(timeoutId);
+            console.log(`[Bot.Video] Download response: ${response.status}`);
             
             if (!response.ok) {
                 throw new Error(`Download failed: ${response.status}`);
             }
             
             const buffer = Buffer.from(await response.arrayBuffer());
+            console.log(`[Bot.Video] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB, uploading to Telegram...`);
             
             await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), {
                 caption: caption || undefined,
