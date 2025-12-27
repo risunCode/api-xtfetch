@@ -20,6 +20,11 @@ export const TELEGRAM_ADMIN_IDS = (process.env.TELEGRAM_ADMIN_IDS || '')
   .filter(Boolean)
   .map(Number);
 
+/** Backend API URL for proxying media */
+export const API_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.RAILWAY_PUBLIC_DOMAIN 
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` 
+  : 'http://localhost:3002';
+
 // ============================================================================
 // Rate Limits
 // ============================================================================
@@ -126,4 +131,26 @@ export function botIsAdmin(userId: number): boolean {
     console.log(`[botIsAdmin] User ${userId} not in admin list: [${TELEGRAM_ADMIN_IDS.join(', ')}]`);
   }
   return isAdmin;
+}
+
+// ============================================================================
+// Media Proxy Helper
+// ============================================================================
+
+/**
+ * Wrap media URL with proxy endpoint for Telegram
+ * This helps when CDN URLs are geo-restricted or blocked
+ * 
+ * @param url - Original media URL
+ * @param platform - Platform identifier (facebook, instagram, etc.)
+ * @returns Proxied URL that goes through our backend
+ */
+export function getProxiedMediaUrl(url: string, platform: string): string {
+  // Only proxy fbcdn URLs (Facebook/Instagram CDN)
+  if (!url.includes('fbcdn.net') && !url.includes('cdninstagram.com')) {
+    return url;
+  }
+  
+  const baseUrl = API_BASE_URL || 'https://api-xtfetch.up.railway.app';
+  return `${baseUrl}/api/v1/proxy?url=${encodeURIComponent(url)}&platform=${platform}&inline=1`;
 }

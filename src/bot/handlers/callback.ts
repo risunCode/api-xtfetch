@@ -38,7 +38,7 @@ import {
     backKeyboard,
     errorKeyboard,
 } from '../keyboards';
-import { ADMIN_CONTACT_USERNAME } from '../config';
+import { ADMIN_CONTACT_USERNAME, getProxiedMediaUrl } from '../config';
 
 // ============================================================================
 // CALLBACK DATA PARSING
@@ -193,11 +193,15 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
             return;
         }
         
+        // Proxy URL for Facebook/Instagram CDN to avoid geo-blocking
+        const mediaUrl = getProxiedMediaUrl(format.url, platformName.toLowerCase());
+        const thumbUrl = result.thumbnail ? getProxiedMediaUrl(result.thumbnail, platformName.toLowerCase()) : undefined;
+        
         try {
             if (format.type === 'video') {
-                await ctx.replyWithVideo(new InputFile({ url: format.url }), { caption, parse_mode: 'Markdown' });
+                await ctx.replyWithVideo(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
             } else {
-                await ctx.replyWithPhoto(new InputFile({ url: format.url }), { caption, parse_mode: 'Markdown' });
+                await ctx.replyWithPhoto(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
             }
             
             // Record successful download
@@ -222,8 +226,8 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
                 .url('🔗 Original', url);
             
             // Try to send thumbnail with buttons
-            if (result.thumbnail) {
-                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+            if (thumbUrl) {
+                await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
                     caption: fallbackCaption,
                     parse_mode: 'Markdown',
                     reply_markup: fallbackKeyboard,

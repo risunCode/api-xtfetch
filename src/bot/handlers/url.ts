@@ -26,6 +26,7 @@ import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware/main
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
+import { getProxiedMediaUrl } from '../config';
 
 // ============================================================================
 // URL DETECTION
@@ -317,8 +318,13 @@ async function sendVideoDirectly(
         keyboard = buildVideoSuccessKeyboard(originalUrl);
     }
 
+    // Proxy URL for Facebook/Instagram CDN to avoid geo-blocking
+    const platform = result.platform || 'facebook';
+    const videoUrl = getProxiedMediaUrl(videoToSend.url, platform);
+    const thumbUrl = result.thumbnail ? getProxiedMediaUrl(result.thumbnail, platform) : undefined;
+
     try {
-        await ctx.replyWithVideo(new InputFile({ url: videoToSend.url }), {
+        await ctx.replyWithVideo(new InputFile({ url: videoUrl }), {
             caption: caption || undefined,
             parse_mode: 'Markdown',
             reply_markup: keyboard,
@@ -342,8 +348,8 @@ async function sendVideoDirectly(
                 .url('🔗 Original', originalUrl);
             
             // Try to send thumbnail with buttons
-            if (result.thumbnail) {
-                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+            if (thumbUrl) {
+                await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
                     caption: fallbackCaption,
                     parse_mode: 'Markdown',
                     reply_markup: fallbackKeyboard,
@@ -421,8 +427,12 @@ async function sendSinglePhoto(
     const caption = buildSimpleCaption(result, originalUrl);
     const keyboard = buildPhotoKeyboard(originalUrl);
 
+    // Proxy URL for Facebook/Instagram CDN
+    const platform = result.platform || 'facebook';
+    const photoUrl = getProxiedMediaUrl(bestImages[0].url, platform);
+
     try {
-        await ctx.replyWithPhoto(new InputFile({ url: bestImages[0].url }), {
+        await ctx.replyWithPhoto(new InputFile({ url: photoUrl }), {
             caption: caption || undefined,
             parse_mode: 'Markdown',
             reply_markup: keyboard,
@@ -501,9 +511,11 @@ async function sendPhotoAlbum(
     // Use simple caption (just username) for album
     const caption = buildSimpleCaption(result, originalUrl);
 
+    // Proxy URLs for Facebook/Instagram CDN
+    const platform = result.platform || 'facebook';
     const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
         type: 'photo' as const,
-        media: img.url,
+        media: getProxiedMediaUrl(img.url, platform),
         caption: index === 0 ? (caption || undefined) : undefined,
         parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
     }));
