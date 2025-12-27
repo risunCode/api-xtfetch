@@ -11,7 +11,6 @@ import { logger } from '@/lib/services/shared/logger';
 import { serviceConfigLoad, serviceConfigGetPlaygroundRateLimit } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
-import { authVerifyAdminSession } from '@/core/security';
 
 // GET is public - returns rate limit status only (no scraping)
 export async function GET(request: NextRequest) {
@@ -116,16 +115,39 @@ export async function GET(request: NextRequest) {
     }
 }
 
-// POST method for API integration - requires admin authentication
+// POST method for API integration - public but origin-restricted to DownAria frontend
 export async function POST(request: NextRequest) {
     const startTime = Date.now();
     
-    // ✅ Require admin authentication for POST (scraping)
-    const auth = await authVerifyAdminSession(request);
-    if (!auth.valid) {
+    // Validate origin - only allow from DownAria frontend
+    const origin = request.headers.get('Origin');
+    const referer = request.headers.get('Referer');
+    
+    const ALLOWED_ORIGINS = [
+        'https://downaria.vercel.app',
+        'http://localhost:3001', // Frontend dev
+    ];
+    
+    // In development, allow localhost
+    const isDev = process.env.NODE_ENV === 'development';
+    const isAllowedOrigin = origin && (
+        ALLOWED_ORIGINS.includes(origin) || 
+        (isDev && origin.startsWith('http://localhost:'))
+    );
+    const isAllowedReferer = referer && (
+        ALLOWED_ORIGINS.some(o => referer.startsWith(o)) ||
+        (isDev && referer.startsWith('http://localhost:'))
+    );
+    
+    // Must have valid origin OR referer from frontend
+    if (!isAllowedOrigin && !isAllowedReferer) {
         return NextResponse.json(
-            { success: false, error: 'Admin authentication required', code: 'AUTH_REQUIRED' },
-            { status: 401 }
+            { 
+                success: false, 
+                error: 'Playground API is only accessible from DownAria website', 
+                code: 'ORIGIN_NOT_ALLOWED' 
+            },
+            { status: 403 }
         );
     }
     

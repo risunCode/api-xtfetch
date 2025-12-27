@@ -79,10 +79,6 @@ export function getRedisConnection(): IORedis | null {
             console.error('[Queue] Redis connection error:', err.message);
         });
 
-        redisConnection.on('connect', () => {
-            console.log('[Queue] Redis connected');
-        });
-
         return redisConnection;
     } catch (error) {
         console.error('[Queue] Failed to create Redis connection:', error);

@@ -87,8 +87,6 @@ function getBotInstance(): Bot<BotContext> {
         botInstance.catch((err) => {
             console.error('[Bot] Error in middleware:', err);
         });
-        
-        console.log('[Bot] Instance created and configured');
     }
     
     return botInstance!;
@@ -106,14 +104,10 @@ async function initBot(): Promise<void> {
         try {
             await bot.init();
             botInitialized = true;
-            console.log('[Bot] Initialized:', bot.botInfo.username);
             
             // Initialize queue worker for concurrent processing
             if (isQueueAvailable()) {
-                const workerStarted = await initWorker();
-                if (workerStarted) {
-                    console.log('[Bot] Queue worker started');
-                }
+                await initWorker();
             }
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
@@ -148,13 +142,10 @@ export function botCreateWebhookHandler() {
     return async (request: NextRequest): Promise<NextResponse> => {
         try {
             // Ensure bot is initialized
-            console.log('[Bot] Initializing...');
             await initBot();
-            console.log('[Bot] Init done, processing update...');
             
             // Process the update
             const response = await handleUpdate(request);
-            console.log('[Bot] Update processed, status:', response.status);
             
             return new NextResponse(response.body, {
                 status: response.status,

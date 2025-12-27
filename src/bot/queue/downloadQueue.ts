@@ -59,9 +59,6 @@ if (redisConnection) {
     redisConnection.on('error', (err) => {
         console.error('[Queue] Redis error:', err.message);
     });
-    redisConnection.on('connect', () => {
-        console.log('[Queue] Redis connected for BullMQ');
-    });
 }
 
 // Queue options
