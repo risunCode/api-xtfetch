@@ -138,6 +138,14 @@ async function initBot(): Promise<void> {
             
             // Start monitoring (logs memory warnings, tracks metrics)
             startMonitoring(60000); // Check every minute
+            
+            // Initialize queue worker if Redis is available
+            if (isQueueAvailable()) {
+                const workerStarted = await initWorker();
+                if (workerStarted) {
+                    console.log('[Bot] Queue worker started');
+                }
+            }
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
         }

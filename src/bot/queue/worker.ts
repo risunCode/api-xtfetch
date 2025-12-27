@@ -10,11 +10,10 @@
 
 import { Worker, Job } from 'bullmq';
 
-import { logger } from '@/lib/services/shared/logger';
-import { QUEUE_CONFIG, getRedisConnection } from './config';
+import { QUEUE_CONFIG } from './config';
 import type { DownloadJobData } from './index';
 import { sendMedia } from '../utils/media';
-import { recordDownloadSuccess, recordDownloadFailure, updateQueueMetrics } from '../utils/monitoring';
+import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
 
 // ============================================================================
 // BOT INSTANCE ACCESS
@@ -54,10 +53,10 @@ async function getRateLimitFunction() {
  * Process a download job
  */
 async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
-    const { chatId, userId, messageId, processingMsgId, url, isPremium, timestamp } = job.data;
+    const { chatId, userId, messageId, processingMsgId, url, isPremium } = job.data;
     const startTime = Date.now();
 
-    logger.debug('telegram', `Processing job ${job.id} for user ${userId}`);
+    console.log(`[Bot.Worker] Processing job ${job.id} for user ${userId}`);
 
     const api = await getBotApi();
     if (!api) {
@@ -104,7 +103,7 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 const processingTime = Date.now() - startTime;
                 recordDownloadSuccess(processingTime);
 
-                logger.debug('telegram', `Job ${job.id} completed in ${processingTime}ms`);
+                console.log(`[Bot.Worker] Job ${job.id} completed in ${processingTime}ms`);
             } else {
                 // Failed to send media - edit processing message to error
                 recordDownloadFailure();
@@ -140,10 +139,10 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 }
             ).catch(() => {});
 
-            logger.debug('telegram', `Job ${job.id} failed: ${errorMessage}`);
+            console.log(`[Bot.Worker] Job ${job.id} failed: ${errorMessage}`);
         }
     } catch (error) {
-        logger.error('telegram', error, 'QUEUE_WORKER');
+        console.error('[Bot.Worker] Job error:', error);
         recordDownloadFailure();
 
         // Try to notify user of failure
@@ -176,16 +175,17 @@ let downloadWorker: Worker<DownloadJobData> | null = null;
  */
 export async function initWorker(): Promise<boolean> {
     if (downloadWorker) {
-        logger.debug('telegram', 'Worker already initialized');
         return true;
     }
 
     console.log('[Bot.Worker] Initializing worker...');
     
-    const connection = getRedisConnection();
+    // Worker needs its own Redis connection (BullMQ requirement)
+    const { getWorkerConnection } = await import('./downloadQueue');
+    const connection = getWorkerConnection();
+    
     if (!connection) {
         console.log('[Bot.Worker] Redis not configured - worker disabled');
-        logger.warn('telegram', 'Redis not configured - worker disabled');
         return false;
     }
 
@@ -206,17 +206,14 @@ export async function initWorker(): Promise<boolean> {
         // Worker event handlers
         downloadWorker.on('completed', (job) => {
             console.log(`[Bot.Worker] Job ${job.id} completed`);
-            logger.debug('telegram', `Worker completed job ${job.id}`);
         });
 
         downloadWorker.on('failed', (job, err) => {
             console.log(`[Bot.Worker] Job ${job?.id} failed: ${err.message}`);
-            logger.error('telegram', `Worker job ${job?.id} failed: ${err.message}`, 'WORKER_FAILED');
         });
 
         downloadWorker.on('error', (err) => {
             console.log(`[Bot.Worker] Error: ${err.message}`);
-            logger.error('telegram', err, 'WORKER_ERROR');
         });
         
         downloadWorker.on('active', (job) => {
@@ -224,10 +221,9 @@ export async function initWorker(): Promise<boolean> {
         });
 
         console.log(`[Bot.Worker] Worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
-        logger.debug('telegram', `Download worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
         return true;
     } catch (error) {
-        logger.error('telegram', error, 'WORKER_INIT');
+        console.error('[Bot.Worker] Init failed:', error);
         return false;
     }
 }
@@ -239,7 +235,7 @@ export async function closeWorker(): Promise<void> {
     if (downloadWorker) {
         await downloadWorker.close();
         downloadWorker = null;
-        logger.debug('telegram', 'Download worker closed');
+        console.log('[Bot.Worker] Worker closed');
     }
 }
 
