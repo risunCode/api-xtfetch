@@ -48,11 +48,9 @@ async function getHandler() {
   if (!handleUpdate && bot) {
     // Initialize bot first (fetch bot info from Telegram)
     if (!botInitialized) {
-      console.log('[Webhook] Initializing bot...');
       try {
         await bot.init();
         botInitialized = true;
-        console.log('[Webhook] Bot initialized successfully');
       } catch (error) {
         console.error('[Webhook] Bot init failed:', error);
         return null;
@@ -62,12 +60,12 @@ async function getHandler() {
     handleUpdate = webhookCallback(bot, 'std/http', {
       timeoutMilliseconds: 25_000,
       onTimeout: 'return',
-      // NOTE: Secret token validation disabled - using IP validation instead
-      // secretToken: TELEGRAM_WEBHOOK_SECRET || undefined,
     });
   }
   return handleUpdate;
 }
+      // NOTE: Secret token validation disabled - using IP validation instead
+      // secretToken: TELEGRAM_WEBHOOK_SECRET || undefined,
 
 // ============================================================================
 // Webhook Handler
@@ -85,8 +83,6 @@ export async function POST(request: NextRequest) {
     || request.headers.get('x-real-ip') 
     || 'unknown';
   
-  console.log('[Webhook] IP check:', { clientIp, isValid: isFromTelegram(clientIp) });
-  
   if (!isFromTelegram(clientIp)) {
     console.warn('[Webhook] Rejected: Not from Telegram IP', { ip: clientIp });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -99,7 +95,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    console.log('[Webhook] Passing to handler...');
     return await handler(request);
   } catch (error) {
     console.error('[Webhook] Error:', error);

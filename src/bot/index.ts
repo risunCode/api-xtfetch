@@ -40,7 +40,6 @@ let botInitialized = false;
  */
 function getBotInstance(): Bot<BotContext> {
     if (!botInstance && TELEGRAM_BOT_TOKEN) {
-        console.log('[Bot] Creating new bot instance...');
         botInstance = new Bot<BotContext>(TELEGRAM_BOT_TOKEN);
         
         // Setup session
@@ -53,12 +52,6 @@ function getBotInstance(): Bot<BotContext> {
         const STALE_THRESHOLD_SECONDS = 60;
         botInstance.use(async (ctx, next) => {
             const messageDate = ctx.message?.date || ctx.callbackQuery?.message?.date;
-            console.log('[Bot] Processing update:', { 
-                type: ctx.message ? 'message' : ctx.callbackQuery ? 'callback' : 'other',
-                from: ctx.from?.id,
-                messageDate,
-                now: Math.floor(Date.now() / 1000)
-            });
             
             if (messageDate) {
                 const now = Math.floor(Date.now() / 1000);
@@ -87,13 +80,11 @@ function getBotInstance(): Bot<BotContext> {
         });
         
         // Setup middleware (order matters!)
-        console.log('[Bot] Setting up middleware...');
         botInstance.use(maintenanceMiddleware); // Check maintenance first
         botInstance.use(authMiddleware);
         botInstance.use(rateLimitMiddleware);
         
         // Register command composers
-        console.log('[Bot] Registering commands...');
         botInstance.use(startComposer);
         botInstance.use(helpComposer);
         botInstance.use(statusComposer);
@@ -105,7 +96,6 @@ function getBotInstance(): Bot<BotContext> {
         botInstance.use(adminComposer);
         
         // Register handlers
-        console.log('[Bot] Registering handlers...');
         registerUrlHandler(botInstance);
         registerCallbackHandler(botInstance);
         
@@ -114,7 +104,7 @@ function getBotInstance(): Bot<BotContext> {
             console.error('[Bot] Error in middleware:', err);
         });
         
-        console.log('[Bot] Bot instance created successfully');
+        console.log('[Bot] Instance created and ready');
     }
     
     return botInstance!;
