@@ -38,7 +38,7 @@ import {
     backKeyboard,
     errorKeyboard,
 } from '../keyboards';
-import { ADMIN_CONTACT_USERNAME, getProxiedMediaUrl } from '../config';
+import { ADMIN_CONTACT_USERNAME } from '../config';
 
 // ============================================================================
 // CALLBACK DATA PARSING
@@ -193,15 +193,33 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
             return;
         }
         
-        // Proxy URL for Facebook/Instagram CDN to avoid geo-blocking
-        const mediaUrl = getProxiedMediaUrl(format.url, platformName.toLowerCase());
-        const thumbUrl = result.thumbnail ? getProxiedMediaUrl(result.thumbnail, platformName.toLowerCase()) : undefined;
+        const mediaUrl = format.url;
+        const thumbUrl = result.thumbnail;
+        const needsDownloadFirst = mediaUrl.includes('fbcdn.net') || mediaUrl.includes('cdninstagram.com');
         
         try {
-            if (format.type === 'video') {
-                await ctx.replyWithVideo(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
+            if (needsDownloadFirst) {
+                // Download to buffer first for Facebook/Instagram
+                const response = await fetch(mediaUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.facebook.com/',
+                    },
+                });
+                if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+                const buffer = Buffer.from(await response.arrayBuffer());
+                
+                if (format.type === 'video') {
+                    await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), { caption, parse_mode: 'Markdown' });
+                } else {
+                    await ctx.replyWithPhoto(new InputFile(buffer, 'photo.jpg'), { caption, parse_mode: 'Markdown' });
+                }
             } else {
-                await ctx.replyWithPhoto(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
+                if (format.type === 'video') {
+                    await ctx.replyWithVideo(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
+                } else {
+                    await ctx.replyWithPhoto(new InputFile({ url: mediaUrl }), { caption, parse_mode: 'Markdown' });
+                }
             }
             
             // Record successful download
@@ -227,11 +245,40 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
             
             // Try to send thumbnail with buttons
             if (thumbUrl) {
-                await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
-                    caption: fallbackCaption,
-                    parse_mode: 'Markdown',
-                    reply_markup: fallbackKeyboard,
-                });
+                const thumbNeedsDownload = thumbUrl.includes('fbcdn.net') || thumbUrl.includes('cdninstagram.com');
+                if (thumbNeedsDownload) {
+                    try {
+                        const thumbResponse = await fetch(thumbUrl, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                'Referer': 'https://www.facebook.com/',
+                            },
+                        });
+                        if (thumbResponse.ok) {
+                            const thumbBuffer = Buffer.from(await thumbResponse.arrayBuffer());
+                            await ctx.replyWithPhoto(new InputFile(thumbBuffer, 'thumb.jpg'), {
+                                caption: fallbackCaption,
+                                parse_mode: 'Markdown',
+                                reply_markup: fallbackKeyboard,
+                            });
+                        } else {
+                            throw new Error('Thumb download failed');
+                        }
+                    } catch {
+                        // Thumbnail failed, send text
+                        await ctx.reply(fallbackCaption, {
+                            parse_mode: 'Markdown',
+                            reply_markup: fallbackKeyboard,
+                            link_preview_options: { is_disabled: true },
+                        });
+                    }
+                } else {
+                    await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
+                        caption: fallbackCaption,
+                        parse_mode: 'Markdown',
+                        reply_markup: fallbackKeyboard,
+                    });
+                }
             } else {
                 // No thumbnail, send text message with buttons
                 await ctx.reply(fallbackCaption, {
