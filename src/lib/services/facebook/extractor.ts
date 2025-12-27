@@ -882,6 +882,9 @@ export function fbExtractImages(html: string, targetPostId?: string): MediaForma
         // Skip profile pictures (t39.30808-1)
         if (/t39\.30808-1\//.test(imgUrl)) return false;
         
+        // Debug: log the URL being added
+        console.log(`[Facebook.Image] Adding: ${imgUrl.substring(0, 100)}... (has query: ${imgUrl.includes('?')})`);
+        
         seenPaths.add(path);
         formats.push({
             quality: `Image ${++idx}`,
