@@ -256,14 +256,14 @@ donateComposer.callbackQuery('donate_enter_key', async (ctx: Context) => {
 
 Kirim API key kamu di pesan berikutnya.
 
-_Format:_ \`xtf_live_xxxxx...\`
+_Format:_ \`dwa_live_xxxxx...\`
 
 ⚠️ Kadaluarsa dalam 5 menit.`
         : `🔑 *Enter Your API Key*
 
 Send your API key in the next message.
 
-_Format:_ \`xtf_live_xxxxx...\`
+_Format:_ \`dwa_live_xxxxx...\`
 
 ⚠️ Expires in 5 minutes.`;
 

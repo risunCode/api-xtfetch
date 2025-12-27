@@ -180,7 +180,7 @@ function generateKeyId(): string {
     return crypto.randomBytes(8).toString('hex');
 }
 
-function generateApiKeyString(prefix: string = 'xtf_live', length: number = 32, format: KeyFormat = 'alphanumeric'): string {
+function generateApiKeyString(prefix: string = 'dwa_live', length: number = 32, format: KeyFormat = 'alphanumeric'): string {
     let random: string;
     switch (format) {
         case 'hex':
@@ -286,7 +286,7 @@ export async function apiKeyCreate(
     const id = generateKeyId();
     const keyLength = Math.max(16, Math.min(64, options?.keyLength || 32));
     let prefix = options?.prefix?.trim();
-    if (!prefix) prefix = options?.isTest ? 'xtf_test' : 'xtf_live';
+    if (!prefix) prefix = options?.isTest ? 'dwa_test' : 'dwa_live';
     const plainKey = generateApiKeyString(prefix, keyLength, options?.keyFormat || 'alphanumeric');
     const hashedKey = hashKey(plainKey);
     const keyPreview = plainKey.slice(0, 12) + '...' + plainKey.slice(-4);
@@ -393,7 +393,7 @@ export async function apiKeyValidate(plainKey: string): Promise<ApiKeyValidateRe
     }
     
     // SECURITY: Rate limit validation attempts BEFORE DB query to prevent brute force
-    // Use first 8 chars of key as identifier (includes prefix like "xtf_live" or "xtf_test")
+    // Use first 8 chars of key as identifier (includes prefix like "dwa_live" or "dwa_test")
     const keyPrefix = plainKey.slice(0, 8);
     const attemptCheck = checkValidationAttemptLimit(keyPrefix);
     if (!attemptCheck.allowed) {
@@ -470,8 +470,8 @@ export async function apiKeyRegenerate(id: string): Promise<{ key: ApiKey; plain
     }
     
     // Generate new key with same prefix pattern
-    const isTest = existing.key_preview?.startsWith('xtf_test');
-    const prefix = isTest ? 'xtf_test' : 'xtf_live';
+    const isTest = existing.key_preview?.startsWith('dwa_test');
+    const prefix = isTest ? 'dwa_test' : 'dwa_live';
     const plainKey = generateApiKeyString(prefix, 32, 'alphanumeric');
     const hashedKey = hashKey(plainKey);
     const keyPreview = plainKey.slice(0, 12) + '...' + plainKey.slice(-4);
