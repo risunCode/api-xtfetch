@@ -53,6 +53,7 @@ const mapContentIssue = (issue: ReturnType<typeof fbDetectContentIssue>): Scrape
 
 export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions): Promise<ScraperResult> {
     const startTime = Date.now();
+    console.log(`[Facebook.Scrape] Entry point - URL: ${inputUrl.substring(0, 80)}...`);
 
     if (!platformMatches(inputUrl, 'facebook')) {
         return createError(ScraperErrorCode.INVALID_URL, 'Invalid Facebook URL');
@@ -81,6 +82,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
             });
             const timeout = sysConfigScraperTimeout('facebook');
             
+            console.log(`[Facebook.Scrape] Starting fetch (cookie: ${useCookie}, timeout: ${timeout}ms)`);
             logger.debug('facebook', `Fetching ${inputUrl.substring(0, 50)}... (cookie: ${useCookie})`);
             const res = await httpGet(inputUrl, { headers, timeout });
 
@@ -373,6 +375,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
 
         } catch (e) {
             const msg = e instanceof Error ? e.message : 'Failed to fetch';
+            console.error(`[Facebook.Scrape] Exception caught: ${msg}`, e);
             if (msg === 'CHECKPOINT_REQUIRED') {
                 return createError(ScraperErrorCode.CHECKPOINT_REQUIRED);
             }
