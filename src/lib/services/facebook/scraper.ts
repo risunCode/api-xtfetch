@@ -92,6 +92,16 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                 throw new Error('CHECKPOINT_REQUIRED');
             }
 
+            // Check for 2FA verification redirect - cookie needs re-authentication
+            if (res.finalUrl.includes('/two_step_verification/') || res.finalUrl.includes('two_step_verification')) {
+                logger.debug('facebook', `Redirected to 2FA verification: ${res.finalUrl}`);
+                if (useCookie) {
+                    cookiePoolMarkExpired('2FA verification required').catch(() => {});
+                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin memerlukan verifikasi 2FA. Coba gunakan cookie pribadimu di Settings.');
+                }
+                return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
+            }
+
             // Check for live video (not downloadable)
             if (fbIsLiveVideo(res.data)) {
                 return createError(ScraperErrorCode.UNSUPPORTED_CONTENT, 'Live video tidak dapat didownload');
@@ -102,7 +112,7 @@ export async function scrapeFacebook(inputUrl: string, options?: ScraperOptions)
                 logger.debug('facebook', `Redirected to login page: ${res.finalUrl}`);
                 if (useCookie) {
                     cookiePoolMarkLoginRedirect('Login redirect - cookie may be expired').catch(() => {});
-                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired atau tidak valid. Silakan update cookie di admin panel.');
+                    return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie admin sedang bermasalah. Coba gunakan cookie pribadimu di Settings.');
                 }
                 return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten ini membutuhkan login.');
             }
