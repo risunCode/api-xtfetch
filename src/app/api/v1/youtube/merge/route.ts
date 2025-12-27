@@ -117,6 +117,77 @@ function cleanupFull(folder: string): void {
     }
 }
 
+// ============================================================================
+// Output File Validation
+// ============================================================================
+
+interface ValidationResult {
+    valid: boolean;
+    error?: string;
+    size?: number;
+}
+
+/**
+ * Validate merged output file before streaming to client
+ * Checks file size and MP4/audio header integrity
+ */
+async function validateMergedFile(filePath: string, isAudio: boolean = false): Promise<ValidationResult> {
+    try {
+        const fs = await import('fs/promises');
+        const stats = await fs.stat(filePath);
+        
+        // Check minimum size (at least 10KB for a valid video, 5KB for audio)
+        const minSize = isAudio ? 5000 : 10000;
+        if (stats.size < minSize) {
+            return { 
+                valid: false, 
+                error: `Output file too small (${stats.size} bytes, minimum ${minSize})`,
+                size: stats.size 
+            };
+        }
+        
+        // Read file header for validation
+        const buffer = Buffer.alloc(12);
+        const fd = await fs.open(filePath, 'r');
+        await fd.read(buffer, 0, 12, 0);
+        await fd.close();
+        
+        if (isAudio) {
+            // MP3 check: ID3 tag or sync word (0xFF 0xFB/0xFA/0xF3/0xF2)
+            const isID3 = buffer.toString('ascii', 0, 3) === 'ID3';
+            const isMp3Sync = buffer[0] === 0xFF && (buffer[1] & 0xE0) === 0xE0;
+            // M4A/AAC check: ftyp box
+            const ftyp = buffer.toString('ascii', 4, 8);
+            const isM4a = ftyp === 'ftyp';
+            
+            if (!isID3 && !isMp3Sync && !isM4a) {
+                return { 
+                    valid: false, 
+                    error: 'Invalid audio header (not MP3/M4A)',
+                    size: stats.size 
+                };
+            }
+        } else {
+            // MP4 check: ftyp box at offset 4
+            const ftyp = buffer.toString('ascii', 4, 8);
+            if (ftyp !== 'ftyp') {
+                return { 
+                    valid: false, 
+                    error: `Invalid MP4 header (got "${ftyp}" instead of "ftyp")`,
+                    size: stats.size 
+                };
+            }
+        }
+        
+        return { valid: true, size: stats.size };
+    } catch (error) {
+        return { 
+            valid: false, 
+            error: error instanceof Error ? error.message : 'Validation failed' 
+        };
+    }
+}
+
 /**
  * Schedule full cleanup after delay (default 10 minutes)
  */
@@ -256,8 +327,14 @@ async function downloadAndMergeWithYtdlp(
         proc.stderr?.on('data', (d) => { 
             stderr += d.toString();
             const line = d.toString().trim();
-            if (line && !line.includes('[download]')) {
-                console.log(`[merge] yt-dlp: ${line}`);
+            // Log all stderr for debugging (including download progress for errors)
+            if (line) {
+                // Always log errors and warnings
+                if (line.includes('ERROR') || line.includes('WARNING') || line.includes('error')) {
+                    console.error(`[merge] yt-dlp stderr: ${line}`);
+                } else if (!line.includes('[download]') || line.includes('100%')) {
+                    console.log(`[merge] yt-dlp: ${line}`);
+                }
             }
         });
         
@@ -438,7 +515,7 @@ export async function POST(req: NextRequest) {
         const ffmpegPath = await findFFmpegPath();
         
         // Download using yt-dlp
-        const result = await downloadAndMergeWithYtdlp(
+        let result = await downloadAndMergeWithYtdlp(
             youtubeUrl, 
             targetValue, 
             temp, 
@@ -447,7 +524,26 @@ export async function POST(req: NextRequest) {
             audioOutputFormat as 'mp3' | 'm4a'
         );
         
+        // Retry with simpler format if first attempt fails (video only)
+        if (!result.success && !isAudioOnly) {
+            console.log(`[merge] First attempt failed, retrying with simpler format (best[height<=720])...`);
+            
+            // Clean up any partial files from first attempt
+            cleanupArtifacts(temp);
+            
+            // Retry with simpler format selector
+            result = await downloadAndMergeWithYtdlp(
+                youtubeUrl, 
+                720, // Fallback to 720p
+                temp, 
+                ffmpegPath, 
+                false,
+                'mp3'
+            );
+        }
+        
         if (!result.success || !result.outputPath) {
+            console.error(`[merge] Download failed after retry: ${result.error}`);
             if (temp) cleanupFull(temp);
             mergeQueueRelease(id);
             return NextResponse.json({ 
@@ -455,12 +551,33 @@ export async function POST(req: NextRequest) {
             }, { status: 500 });
         }
         
+        // ========================================
+        // Validate output file before streaming
+        // ========================================
+        const validation = await validateMergedFile(result.outputPath, isAudioOnly);
+        
+        if (!validation.valid) {
+            console.error(`[merge] Output validation failed: ${validation.error}`);
+            console.error(`[merge] File path: ${result.outputPath}, Size: ${validation.size || 'unknown'}`);
+            if (temp) cleanupFull(temp);
+            mergeQueueRelease(id);
+            return NextResponse.json({ 
+                error: `Output validation failed: ${validation.error}`,
+                details: {
+                    fileSize: validation.size,
+                    filePath: result.outputPath
+                }
+            }, { status: 500 });
+        }
+        
+        console.log(`[merge] Output validated successfully: ${validation.size} bytes`);
+        
         // Cleanup artifacts but keep output
         cleanupArtifacts(temp, result.outputPath);
         
         // Get file stats
         const stats = statSync(result.outputPath);
-        console.log(`[merge] Output: ${stats.size} bytes`);
+        console.log(`[merge] Output ready for streaming: ${stats.size} bytes, validated: true`);
         
         // Prepare filename
         const ext = isAudioOnly ? `.${audioOutputFormat}` : '.mp4';
@@ -474,29 +591,33 @@ export async function POST(req: NextRequest) {
         const stream = createReadStream(result.outputPath);
         const folder = temp;
         const requestId = id;
+        const fileSize = stats.size;
         
         const webStream = new ReadableStream({
             start(ctrl) {
                 stream.on('data', (chunk) => ctrl.enqueue(chunk));
                 stream.on('end', () => { 
                     ctrl.close(); 
+                    console.log(`[merge] Stream completed: ${fileSize} bytes sent`);
                     mergeQueueRelease(requestId);
                     scheduleCleanup(folder);
                 });
                 stream.on('error', (e) => { 
+                    console.error(`[merge] Stream error: ${e.message}`);
                     ctrl.error(e); 
                     mergeQueueRelease(requestId);
                     cleanupFull(folder); 
                 });
             },
             cancel() { 
+                console.log(`[merge] Stream cancelled by client`);
                 stream.destroy(); 
                 mergeQueueRelease(requestId);
                 cleanupFull(folder); 
             }
         });
         
-        console.log(`[merge] Streaming: ${safeFilename}`);
+        console.log(`[merge] Streaming: ${safeFilename} (${fileSize} bytes)`);
         
         const contentType = isAudioOnly 
             ? (audioOutputFormat === 'mp3' ? 'audio/mpeg' : 'audio/mp4')
@@ -505,11 +626,13 @@ export async function POST(req: NextRequest) {
         return new NextResponse(webStream, {
             headers: {
                 'Content-Type': contentType,
-                'Content-Length': String(stats.size),
+                'Content-Length': String(fileSize),
                 'Content-Disposition': `attachment; filename="${safeFilename}"`,
                 'Access-Control-Allow-Origin': '*',
                 'Cache-Control': 'no-cache',
-                'X-RateLimit-Remaining': String(queueResult.rateLimitRemaining || 0)
+                'X-RateLimit-Remaining': String(queueResult.rateLimitRemaining || 0),
+                'X-File-Size': String(fileSize),
+                'X-File-Validated': 'true'
             }
         });
         

@@ -43,3 +43,10 @@ export type {
   MediaInfo,
   ApiKeyInfo,
 } from './messages';
+
+// Format utilities
+export {
+  sanitizeTitle,
+  escapeMarkdownV1,
+  escapeMarkdownV2,
+} from './format';

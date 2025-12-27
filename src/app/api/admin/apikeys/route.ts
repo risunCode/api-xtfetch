@@ -14,6 +14,7 @@ import {
     apiKeyCreate,
     apiKeyUpdate,
     apiKeyDelete,
+    apiKeyRegenerate,
 } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -104,6 +105,22 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'Key not found' }, { status: 404 });
                 }
                 return NextResponse.json({ success: true, message: 'Key deleted' });
+            }
+
+            case 'regenerate': {
+                if (!id) {
+                    return NextResponse.json({ success: false, error: 'ID required' }, { status: 400 });
+                }
+                const result = await apiKeyRegenerate(id);
+                if (!result) {
+                    return NextResponse.json({ success: false, error: 'Key not found' }, { status: 404 });
+                }
+                return NextResponse.json({
+                    success: true,
+                    data: result.key,
+                    plainKey: result.plainKey,
+                    message: 'Key regenerated. Save the new key now!'
+                });
             }
 
             default:

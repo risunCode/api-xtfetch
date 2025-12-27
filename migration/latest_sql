@@ -19,6 +19,7 @@ CREATE TABLE public.admin_cookie_pool (
   note text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  tier character varying NOT NULL DEFAULT 'public'::character varying CHECK (tier::text = ANY (ARRAY['public'::character varying, 'private'::character varying]::text[])),
   CONSTRAINT admin_cookie_pool_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.ai_api_keys (
@@ -105,6 +106,8 @@ CREATE TABLE public.bot_users (
   daily_reset_at timestamp with time zone,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
+  total_downloads integer DEFAULT 0,
+  last_download_at timestamp with time zone,
   CONSTRAINT bot_users_pkey PRIMARY KEY (id),
   CONSTRAINT bot_users_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id)
 );

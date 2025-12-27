@@ -22,6 +22,7 @@ interface BotUserWithKey {
     username: string | null;
     first_name: string | null;
     api_key_id: string | null;
+    premium_expires_at: string | null;
     daily_downloads: number;
     created_at: string;
 }
@@ -43,30 +44,49 @@ interface ApiKeyInfo {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Get user's premium status with API key details
+ * Get user's VIP status with API key details
+ * Priority: 1. premium_expires_at (from /givevip) 2. api_key_id (from donation)
  */
 async function botUserGetPremiumStatus(userId: number): Promise<{
     user: BotUserWithKey | null;
     apiKey: ApiKeyInfo | null;
+    vipFromGivevip: boolean;
+    vipExpiresAt: Date | null;
 }> {
     const db = supabaseAdmin;
-    if (!db) return { user: null, apiKey: null };
+    if (!db) return { user: null, apiKey: null, vipFromGivevip: false, vipExpiresAt: null };
 
     try {
-        // Get user
+        // Get user with premium_expires_at
         const { data: user, error: userError } = await db
             .from('bot_users')
-            .select('id, username, first_name, api_key_id, daily_downloads, created_at')
+            .select('id, username, first_name, api_key_id, premium_expires_at, daily_downloads, created_at')
             .eq('id', userId)
             .single();
 
         if (userError || !user) {
-            return { user: null, apiKey: null };
+            return { user: null, apiKey: null, vipFromGivevip: false, vipExpiresAt: null };
         }
 
-        // If no API key linked, return user only
+        // Check premium_expires_at FIRST (from /givevip command)
+        if (user.premium_expires_at) {
+            const expiryDate = new Date(user.premium_expires_at);
+            const now = new Date();
+            
+            if (expiryDate > now) {
+                // VIP from /givevip - valid future date
+                return {
+                    user: user as BotUserWithKey,
+                    apiKey: null,
+                    vipFromGivevip: true,
+                    vipExpiresAt: expiryDate,
+                };
+            }
+        }
+
+        // If no valid premium_expires_at, check API key
         if (!user.api_key_id) {
-            return { user: user as BotUserWithKey, apiKey: null };
+            return { user: user as BotUserWithKey, apiKey: null, vipFromGivevip: false, vipExpiresAt: null };
         }
 
         // Get API key details
@@ -77,16 +97,18 @@ async function botUserGetPremiumStatus(userId: number): Promise<{
             .single();
 
         if (keyError || !apiKey) {
-            return { user: user as BotUserWithKey, apiKey: null };
+            return { user: user as BotUserWithKey, apiKey: null, vipFromGivevip: false, vipExpiresAt: null };
         }
 
         return {
             user: user as BotUserWithKey,
-            apiKey: apiKey as ApiKeyInfo
+            apiKey: apiKey as ApiKeyInfo,
+            vipFromGivevip: false,
+            vipExpiresAt: null,
         };
     } catch (error) {
         console.error('[botUserGetPremiumStatus] Error:', error);
-        return { user: null, apiKey: null };
+        return { user: null, apiKey: null, vipFromGivevip: false, vipExpiresAt: null };
     }
 }
 
@@ -130,7 +152,7 @@ mystatusComposer.command('mystatus', async (ctx) => {
     const loadingMsg = await ctx.reply('⏳ Loading your status...');
 
     try {
-        const { user, apiKey } = await botUserGetPremiumStatus(userId);
+        const { user, apiKey, vipFromGivevip, vipExpiresAt } = await botUserGetPremiumStatus(userId);
         const totalDownloads = await botUserGetTotalDownloads(userId);
 
         if (!user) {
@@ -143,11 +165,13 @@ mystatusComposer.command('mystatus', async (ctx) => {
             return;
         }
 
-        // Build status message based on premium status
-        if (!apiKey) {
+        // Check if user is VIP (either from /givevip or API key)
+        const isVip = vipFromGivevip || !!apiKey;
+
+        if (!isVip) {
             // Free user
             const keyboard = new InlineKeyboard()
-                .text('👑 Get Premium', 'premium_show')
+                .text('👑 Get VIP', 'premium_show')
                 .text('🔄 Refresh', 'mystatus_refresh');
 
             await ctx.api.editMessageText(
@@ -167,18 +191,63 @@ mystatusComposer.command('mystatus', async (ctx) => {
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💡 Upgrade to Premium for unlimited downloads!`,
+💡 Upgrade to VIP for unlimited downloads!`,
                 { parse_mode: 'Markdown', reply_markup: keyboard }
             );
             return;
         }
 
-        // Premium user - format expiry
+        // VIP user - determine source and format expiry
+        if (vipFromGivevip && vipExpiresAt) {
+            // VIP from /givevip command
+            const now = new Date();
+            const daysLeft = Math.ceil((vipExpiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            
+            let expiryText: string;
+            let statusEmoji = '✅';
+            
+            if (daysLeft <= 0) {
+                expiryText = '❌ Expired';
+                statusEmoji = '❌';
+            } else if (daysLeft <= 7) {
+                expiryText = `⚠️ ${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+                statusEmoji = '⚠️';
+            } else {
+                expiryText = `${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+            }
+
+            const keyboard = new InlineKeyboard()
+                .text('🔄 Refresh', 'mystatus_refresh');
+
+            await ctx.api.editMessageText(
+                ctx.chat!.id,
+                loadingMsg.message_id,
+                `👑 *VIP Status (Donator)*
+
+*Status:* ${statusEmoji} Active
+*Expires:* ${expiryText}
+*Source:* Admin granted
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*Downloads:*
+• Today: ${user.daily_downloads} (Unlimited)
+• Total: ${totalDownloads}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+💎 Thank you for supporting DownAria!`,
+                { parse_mode: 'Markdown', reply_markup: keyboard }
+            );
+            return;
+        }
+
+        // VIP from API key
         let expiryText = '♾️ Never';
         let statusEmoji = '✅';
         
-        if (apiKey.expires_at) {
-            const expiryDate = new Date(apiKey.expires_at);
+        if (apiKey!.expires_at) {
+            const expiryDate = new Date(apiKey!.expires_at);
             const now = new Date();
             const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
             
@@ -193,7 +262,7 @@ mystatusComposer.command('mystatus', async (ctx) => {
             }
         }
 
-        const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
+        const keyStatus = apiKey!.enabled ? `${statusEmoji} Active` : '❌ Disabled';
 
         const keyboard = new InlineKeyboard()
             .text('🔓 Unlink Key', 'premium_unlink')
@@ -202,9 +271,9 @@ mystatusComposer.command('mystatus', async (ctx) => {
         await ctx.api.editMessageText(
             ctx.chat!.id,
             loadingMsg.message_id,
-            `👑 *Premium Status*
+            `👑 *VIP Status (Donator)*
 
-*API Key:* \`${apiKey.key_preview}\`
+*API Key:* \`${apiKey!.key_preview}\`
 *Status:* ${keyStatus}
 *Expires:* ${expiryText}
 
@@ -213,9 +282,9 @@ mystatusComposer.command('mystatus', async (ctx) => {
 *Downloads:*
 • Today: ${user.daily_downloads} (Unlimited)
 • Total: ${totalDownloads}
-• API Requests: ${apiKey.total_requests}
+• API Requests: ${apiKey!.total_requests}
 
-*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`,
+*Success Rate:* ${apiKey!.total_requests > 0 ? Math.round((apiKey!.success_count / apiKey!.total_requests) * 100) : 100}%`,
             { parse_mode: 'Markdown', reply_markup: keyboard }
         );
     } catch (error) {
@@ -242,7 +311,7 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
     const loadingMsg = await ctx.reply('⏳ Loading your status...');
 
     try {
-        const { user, apiKey } = await botUserGetPremiumStatus(userId);
+        const { user, apiKey, vipFromGivevip, vipExpiresAt } = await botUserGetPremiumStatus(userId);
         const totalDownloads = await botUserGetTotalDownloads(userId);
 
         if (!user) {
@@ -254,9 +323,11 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
             return;
         }
 
-        if (!apiKey) {
+        const isVip = vipFromGivevip || !!apiKey;
+
+        if (!isVip) {
             const keyboard = new InlineKeyboard()
-                .text('👑 Get Premium', 'premium_show')
+                .text('👑 Get VIP', 'premium_show')
                 .text('🔄 Refresh', 'mystatus_refresh');
 
             await ctx.api.editMessageText(
@@ -276,7 +347,50 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💡 Upgrade to Premium for unlimited downloads!`,
+💡 Upgrade to VIP for unlimited downloads!`,
+                { parse_mode: 'Markdown', reply_markup: keyboard }
+            );
+            return;
+        }
+
+        if (vipFromGivevip && vipExpiresAt) {
+            const now = new Date();
+            const daysLeft = Math.ceil((vipExpiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            
+            let expiryText: string;
+            let statusEmoji = '✅';
+            
+            if (daysLeft <= 0) {
+                expiryText = '❌ Expired';
+                statusEmoji = '❌';
+            } else if (daysLeft <= 7) {
+                expiryText = `⚠️ ${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+                statusEmoji = '⚠️';
+            } else {
+                expiryText = `${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+            }
+
+            const keyboard = new InlineKeyboard()
+                .text('🔄 Refresh', 'mystatus_refresh');
+
+            await ctx.api.editMessageText(
+                ctx.chat!.id,
+                loadingMsg.message_id,
+                `👑 *VIP Status (Donator)*
+
+*Status:* ${statusEmoji} Active
+*Expires:* ${expiryText}
+*Source:* Admin granted
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*Downloads:*
+• Today: ${user.daily_downloads} (Unlimited)
+• Total: ${totalDownloads}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+💎 Thank you for supporting DownAria!`,
                 { parse_mode: 'Markdown', reply_markup: keyboard }
             );
             return;
@@ -285,8 +399,8 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
         let expiryText = '♾️ Never';
         let statusEmoji = '✅';
         
-        if (apiKey.expires_at) {
-            const expiryDate = new Date(apiKey.expires_at);
+        if (apiKey!.expires_at) {
+            const expiryDate = new Date(apiKey!.expires_at);
             const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
             
             if (daysLeft <= 0) {
@@ -300,7 +414,7 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
             }
         }
 
-        const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
+        const keyStatus = apiKey!.enabled ? `${statusEmoji} Active` : '❌ Disabled';
 
         const keyboard = new InlineKeyboard()
             .text('🔓 Unlink Key', 'premium_unlink')
@@ -309,9 +423,9 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
         await ctx.api.editMessageText(
             ctx.chat!.id,
             loadingMsg.message_id,
-            `👑 *Premium Status*
+            `👑 *VIP Status (Donator)*
 
-*API Key:* \`${apiKey.key_preview}\`
+*API Key:* \`${apiKey!.key_preview}\`
 *Status:* ${keyStatus}
 *Expires:* ${expiryText}
 
@@ -320,9 +434,9 @@ mystatusComposer.callbackQuery('mystatus', async (ctx: Context) => {
 *Downloads:*
 • Today: ${user.daily_downloads} (Unlimited)
 • Total: ${totalDownloads}
-• API Requests: ${apiKey.total_requests}
+• API Requests: ${apiKey!.total_requests}
 
-*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`,
+*Success Rate:* ${apiKey!.total_requests > 0 ? Math.round((apiKey!.success_count / apiKey!.total_requests) * 100) : 100}%`,
             { parse_mode: 'Markdown', reply_markup: keyboard }
         );
     } catch (error) {
@@ -347,7 +461,7 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
     }
 
     try {
-        const { user, apiKey } = await botUserGetPremiumStatus(userId);
+        const { user, apiKey, vipFromGivevip, vipExpiresAt } = await botUserGetPremiumStatus(userId);
         const totalDownloads = await botUserGetTotalDownloads(userId);
 
         if (!user) {
@@ -355,9 +469,11 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
             return;
         }
 
-        if (!apiKey) {
+        const isVip = vipFromGivevip || !!apiKey;
+
+        if (!isVip) {
             const keyboard = new InlineKeyboard()
-                .text('👑 Get Premium', 'premium_show')
+                .text('👑 Get VIP', 'premium_show')
                 .text('🔄 Refresh', 'mystatus_refresh');
 
             await ctx.editMessageText(
@@ -375,7 +491,48 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💡 Upgrade to Premium for unlimited downloads!`,
+💡 Upgrade to VIP for unlimited downloads!`,
+                { parse_mode: 'Markdown', reply_markup: keyboard }
+            );
+            return;
+        }
+
+        if (vipFromGivevip && vipExpiresAt) {
+            const now = new Date();
+            const daysLeft = Math.ceil((vipExpiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            
+            let expiryText: string;
+            let statusEmoji = '✅';
+            
+            if (daysLeft <= 0) {
+                expiryText = '❌ Expired';
+                statusEmoji = '❌';
+            } else if (daysLeft <= 7) {
+                expiryText = `⚠️ ${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+                statusEmoji = '⚠️';
+            } else {
+                expiryText = `${vipExpiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${daysLeft} days left)`;
+            }
+
+            const keyboard = new InlineKeyboard()
+                .text('🔄 Refresh', 'mystatus_refresh');
+
+            await ctx.editMessageText(
+                `👑 *VIP Status (Donator)*
+
+*Status:* ${statusEmoji} Active
+*Expires:* ${expiryText}
+*Source:* Admin granted
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+*Downloads:*
+• Today: ${user.daily_downloads} (Unlimited)
+• Total: ${totalDownloads}
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+💎 Thank you for supporting DownAria!`,
                 { parse_mode: 'Markdown', reply_markup: keyboard }
             );
             return;
@@ -384,8 +541,8 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
         let expiryText = '♾️ Never';
         let statusEmoji = '✅';
         
-        if (apiKey.expires_at) {
-            const expiryDate = new Date(apiKey.expires_at);
+        if (apiKey!.expires_at) {
+            const expiryDate = new Date(apiKey!.expires_at);
             const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
             
             if (daysLeft <= 0) {
@@ -399,16 +556,16 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
             }
         }
 
-        const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
+        const keyStatus = apiKey!.enabled ? `${statusEmoji} Active` : '❌ Disabled';
 
         const keyboard = new InlineKeyboard()
             .text('🔓 Unlink Key', 'premium_unlink')
             .text('🔄 Refresh', 'mystatus_refresh');
 
         await ctx.editMessageText(
-            `👑 *Premium Status*
+            `👑 *VIP Status (Donator)*
 
-*API Key:* \`${apiKey.key_preview}\`
+*API Key:* \`${apiKey!.key_preview}\`
 *Status:* ${keyStatus}
 *Expires:* ${expiryText}
 
@@ -417,9 +574,9 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
 *Downloads:*
 • Today: ${user.daily_downloads} (Unlimited)
 • Total: ${totalDownloads}
-• API Requests: ${apiKey.total_requests}
+• API Requests: ${apiKey!.total_requests}
 
-*Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`,
+*Success Rate:* ${apiKey!.total_requests > 0 ? Math.round((apiKey!.success_count / apiKey!.total_requests) * 100) : 100}%`,
             { parse_mode: 'Markdown', reply_markup: keyboard }
         );
     } catch (error) {
@@ -428,7 +585,7 @@ mystatusComposer.callbackQuery('mystatus_refresh', async (ctx: Context) => {
     }
 });
 
-// Handle premium_show callback (redirect to premium command)
+// Handle premium_show callback (redirect to donate command)
 mystatusComposer.callbackQuery('premium_show', async (ctx: Context) => {
     await ctx.answerCallbackQuery();
     
@@ -437,11 +594,11 @@ mystatusComposer.callbackQuery('premium_show', async (ctx: Context) => {
         .text('🔑 I Have API Key', 'premium_enter_key');
 
     await ctx.reply(
-        `👑 *Get Premium Access!*
+        `👑 *Get VIP Access!*
 
 Enjoy unlimited downloads with no restrictions.
 
-*Premium Benefits:*
+*VIP Benefits:*
 ✅ Unlimited downloads/day
 ✅ No cooldown between requests
 ✅ HD video quality
@@ -450,10 +607,10 @@ Enjoy unlimited downloads with no restrictions.
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-*How to Get Premium:*
+*How to Get VIP:*
 1. Contact admin to purchase an API key
 2. Once you have the key, click "I Have API Key"
-3. Enter your API key to activate premium`,
+3. Enter your API key to activate VIP`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
     );
 });

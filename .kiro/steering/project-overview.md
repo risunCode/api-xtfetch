@@ -1,8 +1,8 @@
-# XTFetch Backend (api-xtfetch)
+# DownAria Backend (api-xtfetch)
 
 ## Architecture
 
-This is the **backend API** for XTFetch social media downloader.
+This is the **backend API** for DownAria social media downloader.
 
 ```
 Backend (Port 3002): api-xtfetch/
@@ -13,7 +13,7 @@ Backend (Port 3002): api-xtfetch/
 └── Telegram Bot (@downariaxt_bot)
 ```
 
-Frontend counterpart: `XTFetch-SocmedDownloader/` (Port 3001)
+Frontend counterpart: `DownAria/` (Port 3001)
 
 ---
 
@@ -46,20 +46,20 @@ Frontend counterpart: `XTFetch-SocmedDownloader/` (Port 3001)
 ### User Commands
 - `/start` - Start the bot
 - `/help` - Usage guide  
-- `/mystatus` - Check download stats & premium status
+- `/mystatus` - Check download stats & VIP status
 - `/history` - View recent downloads
-- `/premium` - Premium subscription info
+- `/donate` - Donation/VIP info (NO /premium!)
 
 ### Admin Commands
 - `/stats` - Bot statistics
 - `/broadcast <message>` - Send to all users
 - `/ban <user_id>` / `/unban <user_id>` - User management
-- `/givepremium <user_id>` - Grant premium
+- `/givevip <user_id>` / `/revokevip <user_id>` - VIP management (NO givepremium!)
 - `/maintenance on/off` - Broadcast maintenance notifications
 
 ### Rate Limits
-- **Free**: 10 downloads / 6 hours, 5s cooldown
-- **Premium**: Unlimited, no cooldown (auto-queue)
+- **Free**: 8 downloads/day, 4s cooldown
+- **VIP (Donator)**: Unlimited, no cooldown
 
 ### Bot Structure
 ```
@@ -67,14 +67,15 @@ src/bot/
 ├── index.ts           # Bot instance & webhook handler
 ├── config.ts          # Bot configuration
 ├── types.ts           # Type definitions
+├── i18n/              # Translations (en, id)
 ├── commands/          # Command handlers
-│   ├── admin/         # Admin commands (stats, broadcast, ban, givepremium, maintenance)
-│   └── *.ts           # User commands (start, help, mystatus, history, premium)
+│   ├── admin/         # Admin commands (stats, broadcast, ban, givevip, maintenance)
+│   └── *.ts           # User commands (start, help, mystatus, history, donate)
 ├── handlers/          # URL & callback handlers
 ├── middleware/        # Auth, rate limit, maintenance
 │   ├── auth.ts        # User authentication
 │   ├── rateLimit.ts   # Download limits & cooldown
-│   └── maintenance.ts # Maintenance mode check
+│   └── maintenance.ts # Maintenance mode check (synced with admin console)
 ├── services/          # User & download services
 └── utils/             # Helper functions
 ```
@@ -90,36 +91,54 @@ TELEGRAM_ADMIN_USERNAME=      # Admin contact username
 
 ---
 
-## Function Naming Convention (IMPORTANT!)
+## IMPORTANT: Naming Conventions
 
-All functions use **domain-prefixed naming**:
+### Branding (CRITICAL!)
+- ❌ **NEVER** use "Premium" - use "VIP" or "Donator" instead
+- ❌ **NEVER** use `/premium` command - use `/donate`
+- ❌ **NEVER** use `/givepremium` - use `/givevip`
+- ✅ VIP = user with linked API key (donator)
+
+### Function Naming (domain-prefixed)
 
 | Domain | Prefix | Examples |
 |--------|--------|----------|
-| **Auth** | `auth*` | `authVerifySession`, `authVerifyAdminSession`, `authVerifyAdminToken` |
-| **Platform** | `platform*` | `platformDetect`, `platformMatches`, `platformGetBaseUrl`, `platformGetReferer` |
-| **Service Config** | `serviceConfig*` | `serviceConfigGet`, `serviceConfigLoad`, `serviceConfigUpdatePlatform` |
-| **System Config** | `sysConfig*` | `sysConfigScraperTimeout`, `sysConfigScraperMaxRetries` |
-| **HTTP** | `http*` | `httpGet`, `httpPost`, `httpGetUserAgent`, `httpRandomSleep`, `httpResolveUrl` |
-| **Cookies** | `cookie*` | `cookieParse`, `cookieValidate`, `cookieGetValue` |
-| **Cookie Pool** | `cookiePool*` | `cookiePoolGetRotating`, `cookiePoolAdd`, `cookiePoolUpdate` |
-| **Admin Cookie** | `adminCookie*` | `adminCookieGet`, `adminCookieSet`, `adminCookieToggle` |
-| **Utils** | `util*` | `utilAddFormat`, `utilDecodeUrl`, `utilExtractMeta` |
-| **Security** | `security*` | `securityEncrypt`, `securityDecrypt`, `securityValidateSocialUrl` |
-| **API Keys** | `apiKey*` | `apiKeyCreate`, `apiKeyValidate`, `apiKeyGetAll` |
-| **Bot User** | `botUser*` | `botUserGetOrCreate`, `botUserIsBanned`, `botUserIsPremium` |
-| **Bot Rate Limit** | `botRateLimit*` | `botRateLimitCheck`, `botRateLimitRecordDownload` |
-| **Bot Admin** | `botAdmin*` | `botAdminBanUser`, `botAdminGivePremium`, `botBroadcastMessage` |
+| **Auth** | `auth*` | `authVerifySession`, `authVerifyAdminSession` |
+| **Platform** | `platform*` | `platformDetect`, `platformMatches` |
+| **Service Config** | `serviceConfig*` | `serviceConfigGet`, `serviceConfigLoad` |
+| **System Config** | `sysConfig*` | `sysConfigScraperTimeout` |
+| **HTTP** | `http*` | `httpGet`, `httpPost`, `httpResolveUrl` |
+| **Cookies** | `cookie*` | `cookieParse`, `cookieValidate` |
+| **Cookie Pool** | `cookiePool*` | `cookiePoolGetRotating`, `cookiePoolMarkError` |
+| **Bot** | `bot*` | `botUserGetOrCreate`, `botRateLimitCheck` |
 
-### DO NOT USE (Deprecated - Removed Dec 2024)
-```typescript
-// ❌ OLD NAMES - DO NOT USE
-verifySession, verifyAdminSession  // → authVerifySession, authVerifyAdminSession
-detectPlatform, matchesPlatform    // → platformDetect, platformMatches
-parseCookie, getCookieValue        // → cookieParse, cookieGetValue
-getScraperTimeout                  // → sysConfigScraperTimeout
-getUserAgent                       // → httpGetUserAgent
+---
+
+## Cookie Pool Error Handling (Dec 2024)
+
 ```
+Normal error → increment error_count
+5 errors → cooldown 1 minute
+10 errors → expired
+Checkpoint → immediately expired
+Login redirect → track separately, 2x = expired (avoid false positive)
+```
+
+Key functions:
+- `cookiePoolMarkSuccess()` - Reset errors on success
+- `cookiePoolMarkError(error)` - Increment error, auto-cooldown/expire
+- `cookiePoolMarkLoginRedirect(error)` - Special handling for login redirects
+- `cookiePoolMarkExpired(error)` - Force expire (checkpoint, etc.)
+
+---
+
+## Maintenance Mode
+
+Maintenance is controlled via admin console and stored in `system_config.service_global`:
+- `maintenanceMode: boolean`
+- `maintenanceType: 'off' | 'api' | 'full' | 'all'`
+
+Bot checks maintenance on every request via `serviceConfigLoad(true)` to force DB refresh.
 
 ---
 
@@ -129,130 +148,45 @@ getUserAgent                       // → httpGetUserAgent
 src/
 ├── app/api/
 │   ├── v1/                    # Public endpoints
-│   │   ├── route.ts           # Premium API (GET with API key)
-│   │   ├── publicservices/    # Free download endpoint
-│   │   ├── playground/        # Admin playground
-│   │   ├── status/
-│   │   ├── proxy/
-│   │   └── youtube/
 │   ├── bot/                   # Telegram bot endpoints
-│   │   ├── webhook/           # Webhook handler
-│   │   └── setup/             # Webhook setup
 │   └── admin/                 # Admin endpoints (auth required)
-│       ├── cookies/
-│       ├── services/
-│       ├── stats/
-│       └── ...
 ├── bot/                       # Telegram bot module
-│   ├── index.ts               # Bot instance & exports
-│   ├── config.ts              # Configuration
-│   ├── types.ts               # Type definitions
-│   ├── commands/              # Command handlers
-│   ├── handlers/              # URL & callback handlers
-│   ├── middleware/            # Auth, rate limit, maintenance
-│   ├── services/              # User & download services
-│   └── utils/                 # Helper functions
 ├── core/
 │   ├── scrapers/              # Platform scrapers
-│   │   ├── facebook.ts
-│   │   ├── instagram.ts
-│   │   └── ...
-│   ├── security/              # Auth & rate limiting exports
-│   ├── config/                # Platform config exports
-│   └── database/              # Supabase client
+│   ├── security/              # Auth & rate limiting
+│   └── config/                # Platform config
 ├── lib/
-│   ├── http.ts                # HTTP client (merged from 4 files)
-│   ├── cookies.ts             # Cookie management (merged from 5 files)
-│   ├── config.ts              # All configs (merged from 3 files)
-│   ├── auth.ts                # Auth functions (merged from 2 files)
-│   ├── utils.ts               # Utilities (merged from 5 files)
-│   ├── redis.ts               # Redis client
-│   └── supabase.ts            # Supabase client
+│   ├── http/                  # HTTP client
+│   ├── cookies/               # Cookie management
+│   ├── config/                # Service & system config
+│   ├── url/                   # URL pipeline & resolution
+│   └── services/              # Platform scrapers (facebook, instagram, etc.)
 └── services/                  # Business logic
 ```
 
 ---
 
-## Key Files
-
-### Merged Library Files (Dec 2024 Refactor)
-| File | Contains | Lines |
-|------|----------|-------|
-| `lib/http.ts` | HTTP client, anti-ban, user agents | ~880 |
-| `lib/cookies.ts` | Parser, pool, admin cookies | ~1000 |
-| `lib/config.ts` | Platform, service, system config | ~800 |
-| `lib/auth.ts` | Session auth, API keys | ~300 |
-| `lib/utils.ts` | Security, URL helpers, retry, errors | ~1000 |
-
-### Core Exports
-- `core/security/index.ts` - Re-exports auth functions + rate limiting
-- `core/config/index.ts` - Re-exports platform config functions
-- `core/index.ts` - Main barrel export
-
----
-
-## Types
-
-### Platform ID
-```typescript
-type PlatformId = 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube';
-```
-
-### Scraper Result
-```typescript
-interface ScraperResult {
-  success: boolean;
-  data?: MediaData;
-  error?: ScraperErrorCode;
-}
-```
-
----
-
-## Environment Variables
-
-```env
-# Supabase
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-
-# Redis
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
-
-# Security
-ENCRYPTION_KEY=
-
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ADMIN_IDS=
-TELEGRAM_WEBHOOK_SECRET=
-TELEGRAM_BOT_USERNAME=
-TELEGRAM_ADMIN_USERNAME=
-
-# Optional
-GEMINI_API_KEY=
-```
-
----
-
-## Cross-Project Sync
-
-When modifying shared concepts, ensure frontend (`XTFetch-SocmedDownloader`) stays in sync:
-
-1. **API Response Types** - Frontend must match backend response
-2. **Platform IDs** - Both use `PlatformId` type
-3. **Engagement Stats** - Both use `EngagementStats` interface
-4. **Error Codes** - Frontend should handle all backend error codes
-
----
-
 ## Database Tables
 
-### Bot Tables (sql-8-bot-tables.sql)
-- `bot_users` - Telegram bot user records
-  - `id` (BIGINT) - Telegram user ID
-  - `api_key_id` (VARCHAR) - Linked premium API key
-  - `daily_downloads` (INT) - Downloads in current period
-  - `is_banned` (BOOLEAN) - Ban status
-- `bot_downloads` - Download history for bot users
+### Cookie Pool (`admin_cookie_pool`)
+- `tier` - 'public' or 'private' (for bot vs API)
+- `status` - 'healthy', 'cooldown', 'expired', 'disabled'
+- `error_count` - Tracks consecutive errors
+
+### Bot Tables
+- `bot_users` - Telegram user records
+- `bot_downloads` - Download history
+
+---
+
+## Known Issues / TODO
+
+### Facebook Scraper (needs refactor)
+- [ ] Detect content type from **resolved URL**, not input URL
+- [ ] Share links (`/share/p/`) may resolve to stories
+- [ ] Story extraction needs cookie + different logic
+- [ ] False positives on "no media" for some content types
+
+### URL Resolution
+- [x] Pass cookie to `prepareUrl` for proper resolution
+- [x] Retry with cookie if guest mode redirects to login

@@ -783,6 +783,7 @@ CREATE TABLE IF NOT EXISTS bot_users (
     api_key_id VARCHAR(20) REFERENCES api_keys(id) ON DELETE SET NULL,
     premium_expires_at TIMESTAMPTZ,
     daily_downloads INT DEFAULT 0,
+    total_downloads INT DEFAULT 0,
     last_download_reset TIMESTAMPTZ,
     daily_reset_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -836,70 +837,248 @@ GRANT ALL ON bot_users TO service_role;
 GRANT ALL ON bot_downloads TO service_role;
 
 -- ============================================================================
--- END OF SEED SCRIPT
--- ============================================================================
-
-
--- ============================================================================
--- SECTION J: BOT TABLES (Telegram Bot)
+-- SECTION K: COMMUNICATIONS TABLES (Jan 2025)
+-- Announcements, Banner Ads, Compact Ads, Push Notifications
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- TABLE 12: bot_users - Telegram bot users
+-- TABLE 14: announcements - Alert banners
 -- ----------------------------------------------------------------------------
-CREATE TABLE bot_users (
-    id BIGINT PRIMARY KEY,  -- Telegram user ID
-    username TEXT,
-    first_name TEXT,
-    language_code TEXT DEFAULT 'en',
-    is_banned BOOLEAN DEFAULT false,
-    is_admin BOOLEAN DEFAULT false,
-    api_key_id VARCHAR(20) REFERENCES api_keys(id) ON DELETE SET NULL,
-    premium_expires_at TIMESTAMPTZ,
-    daily_downloads INTEGER DEFAULT 0,
-    total_downloads INTEGER DEFAULT 0,
-    last_download_at TIMESTAMPTZ,
-    daily_reset_at TIMESTAMPTZ DEFAULT NOW(),
+CREATE TABLE IF NOT EXISTS announcements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    type VARCHAR(20) DEFAULT 'info' CHECK (type IN ('info', 'warning', 'success', 'error', 'promo')),
+    icon VARCHAR(50),
+    link_url TEXT,
+    link_text VARCHAR(100),
+    show_on_home BOOLEAN DEFAULT true,
+    show_on_history BOOLEAN DEFAULT false,
+    show_on_settings BOOLEAN DEFAULT false,
+    show_on_docs BOOLEAN DEFAULT false,
+    start_date TIMESTAMPTZ DEFAULT NOW(),
+    end_date TIMESTAMPTZ,
+    enabled BOOLEAN DEFAULT true,
+    priority INT DEFAULT 0,
+    views INT DEFAULT 0,
+    dismisses INT DEFAULT 0,
+    clicks INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by UUID REFERENCES auth.users(id)
+);
+
+COMMENT ON TABLE announcements IS 'Alert banners shown on specific pages';
+
+CREATE INDEX IF NOT EXISTS idx_announcements_active 
+ON announcements (enabled, start_date, end_date) 
+WHERE enabled = true;
+
+-- ----------------------------------------------------------------------------
+-- TABLE 15: banner_ads - Large image banners
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS banner_ads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(200) NOT NULL,
+    image_url TEXT NOT NULL,
+    link_url TEXT NOT NULL,
+    alt_text VARCHAR(200),
+    placement VARCHAR(50) DEFAULT 'home' CHECK (placement IN ('home', 'result', 'history', 'all')),
+    position VARCHAR(20) DEFAULT 'bottom' CHECK (position IN ('top', 'middle', 'bottom')),
+    badge_text VARCHAR(50),
+    badge_color VARCHAR(20) DEFAULT 'yellow',
+    sponsor_text VARCHAR(100),
+    start_date TIMESTAMPTZ DEFAULT NOW(),
+    end_date TIMESTAMPTZ,
+    enabled BOOLEAN DEFAULT true,
+    priority INT DEFAULT 0,
+    impressions INT DEFAULT 0,
+    clicks INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by UUID REFERENCES auth.users(id)
+);
+
+COMMENT ON TABLE banner_ads IS 'Large image banner advertisements';
+
+CREATE INDEX IF NOT EXISTS idx_banner_ads_active 
+ON banner_ads (enabled, placement, start_date, end_date) 
+WHERE enabled = true;
+
+-- ----------------------------------------------------------------------------
+-- TABLE 16: compact_ads - Small ads with GIF/image
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS compact_ads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(200) NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    description TEXT,
+    image_url TEXT NOT NULL,
+    link_url TEXT NOT NULL,
+    preview_title VARCHAR(200),
+    preview_description TEXT,
+    preview_image TEXT,
+    placement VARCHAR(50) DEFAULT 'all' CHECK (placement IN ('home-input', 'home-bottom', 'about', 'all')),
+    size VARCHAR(20) DEFAULT 'medium' CHECK (size IN ('small', 'medium', 'large')),
+    start_date TIMESTAMPTZ DEFAULT NOW(),
+    end_date TIMESTAMPTZ,
+    enabled BOOLEAN DEFAULT true,
+    priority INT DEFAULT 0,
+    impressions INT DEFAULT 0,
+    clicks INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by UUID REFERENCES auth.users(id)
+);
+
+COMMENT ON TABLE compact_ads IS 'Small compact advertisements';
+
+CREATE INDEX IF NOT EXISTS idx_compact_ads_active 
+ON compact_ads (enabled, placement, start_date, end_date) 
+WHERE enabled = true;
+
+-- ----------------------------------------------------------------------------
+-- TABLE 17: push_subscriptions - Browser push subscriptions
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_id UUID REFERENCES auth.users(id),
+    user_agent TEXT,
+    device_type VARCHAR(20),
+    browser VARCHAR(50),
+    enabled BOOLEAN DEFAULT true,
+    last_used TIMESTAMPTZ DEFAULT NOW(),
+    total_sent INT DEFAULT 0,
+    total_clicked INT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE bot_users IS 'Telegram bot user records';
+COMMENT ON TABLE push_subscriptions IS 'Browser push notification subscriptions';
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_active 
+ON push_subscriptions (enabled) WHERE enabled = true;
 
 -- ----------------------------------------------------------------------------
--- TABLE 13: bot_downloads - Bot download history
+-- TABLE 18: push_notifications - Push notification log
 -- ----------------------------------------------------------------------------
-CREATE TABLE bot_downloads (
+CREATE TABLE IF NOT EXISTS push_notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id BIGINT REFERENCES bot_users(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL,
-    url TEXT NOT NULL,
-    title TEXT,
-    status TEXT DEFAULT 'pending',
-    is_premium BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    title VARCHAR(200) NOT NULL,
+    body TEXT NOT NULL,
+    icon TEXT,
+    image TEXT,
+    badge TEXT,
+    click_url TEXT,
+    target VARCHAR(20) DEFAULT 'all' CHECK (target IN ('all', 'users', 'guests', 'specific')),
+    target_user_ids UUID[],
+    status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'sending', 'sent', 'failed')),
+    scheduled_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ,
+    total_sent INT DEFAULT 0,
+    total_delivered INT DEFAULT 0,
+    total_clicked INT DEFAULT 0,
+    total_failed INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by UUID REFERENCES auth.users(id)
 );
 
-COMMENT ON TABLE bot_downloads IS 'Telegram bot download history';
+COMMENT ON TABLE push_notifications IS 'Push notification history and logs';
 
--- Bot tables indexes
-CREATE INDEX idx_bot_users_username ON bot_users(username);
-CREATE INDEX idx_bot_users_api_key ON bot_users(api_key_id);
-CREATE INDEX idx_bot_downloads_user ON bot_downloads(user_id);
-CREATE INDEX idx_bot_downloads_created ON bot_downloads(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_push_notifications_status 
+ON push_notifications (status, scheduled_at);
 
--- Bot tables RLS
-ALTER TABLE bot_users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bot_downloads ENABLE ROW LEVEL SECURITY;
+-- Communications RLS
+ALTER TABLE announcements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE banner_ads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compact_ads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE push_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE push_notifications ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "bot_users_service" ON bot_users FOR ALL TO service_role USING (true);
-CREATE POLICY "bot_downloads_service" ON bot_downloads FOR ALL TO service_role USING (true);
+-- Public read for active content
+CREATE POLICY "announcements_public_read" ON announcements
+    FOR SELECT USING (enabled = true AND start_date <= NOW() AND (end_date IS NULL OR end_date > NOW()));
+CREATE POLICY "announcements_service" ON announcements FOR ALL TO service_role USING (true);
 
--- Bot tables triggers
-CREATE TRIGGER trigger_bot_users_updated 
-    BEFORE UPDATE ON bot_users 
+CREATE POLICY "banner_ads_public_read" ON banner_ads
+    FOR SELECT USING (enabled = true AND start_date <= NOW() AND (end_date IS NULL OR end_date > NOW()));
+CREATE POLICY "banner_ads_service" ON banner_ads FOR ALL TO service_role USING (true);
+
+CREATE POLICY "compact_ads_public_read" ON compact_ads
+    FOR SELECT USING (enabled = true AND start_date <= NOW() AND (end_date IS NULL OR end_date > NOW()));
+CREATE POLICY "compact_ads_service" ON compact_ads FOR ALL TO service_role USING (true);
+
+CREATE POLICY "push_subscriptions_own" ON push_subscriptions
+    FOR ALL USING (user_id = auth.uid() OR user_id IS NULL);
+CREATE POLICY "push_subscriptions_service" ON push_subscriptions FOR ALL TO service_role USING (true);
+
+CREATE POLICY "push_notifications_service" ON push_notifications FOR ALL TO service_role USING (true);
+
+-- Communications triggers
+CREATE TRIGGER trigger_announcements_updated 
+    BEFORE UPDATE ON announcements 
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
--- Grant permissions
-GRANT ALL ON bot_users TO service_role;
-GRANT ALL ON bot_downloads TO service_role;
+CREATE TRIGGER trigger_banner_ads_updated 
+    BEFORE UPDATE ON banner_ads 
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+CREATE TRIGGER trigger_compact_ads_updated 
+    BEFORE UPDATE ON compact_ads 
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+CREATE TRIGGER trigger_push_subscriptions_updated 
+    BEFORE UPDATE ON push_subscriptions 
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+CREATE TRIGGER trigger_push_notifications_updated 
+    BEFORE UPDATE ON push_notifications 
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+-- Communications grants
+GRANT SELECT ON announcements TO anon;
+GRANT SELECT ON banner_ads TO anon;
+GRANT SELECT ON compact_ads TO anon;
+GRANT ALL ON announcements TO service_role;
+GRANT ALL ON banner_ads TO service_role;
+GRANT ALL ON compact_ads TO service_role;
+GRANT ALL ON push_subscriptions TO service_role;
+GRANT ALL ON push_notifications TO service_role;
+
+-- Communications helper functions
+CREATE OR REPLACE FUNCTION increment_ad_impression(ad_type TEXT, ad_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    IF ad_type = 'banner' THEN
+        UPDATE banner_ads SET impressions = impressions + 1 WHERE id = ad_id;
+    ELSIF ad_type = 'compact' THEN
+        UPDATE compact_ads SET impressions = impressions + 1 WHERE id = ad_id;
+    ELSIF ad_type = 'announcement' THEN
+        UPDATE announcements SET views = views + 1 WHERE id = ad_id;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION increment_ad_click(ad_type TEXT, ad_id UUID)
+RETURNS VOID AS $$
+BEGIN
+    IF ad_type = 'banner' THEN
+        UPDATE banner_ads SET clicks = clicks + 1 WHERE id = ad_id;
+    ELSIF ad_type = 'compact' THEN
+        UPDATE compact_ads SET clicks = clicks + 1 WHERE id = ad_id;
+    ELSIF ad_type = 'announcement' THEN
+        UPDATE announcements SET clicks = clicks + 1 WHERE id = ad_id;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION increment_ad_impression(TEXT, UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION increment_ad_click(TEXT, UUID) TO service_role;
+
+-- ============================================================================
+-- END OF SEED SCRIPT
+-- ============================================================================

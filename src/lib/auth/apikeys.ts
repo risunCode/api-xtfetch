@@ -450,6 +450,72 @@ export async function apiKeyValidate(plainKey: string): Promise<ApiKeyValidateRe
 }
 
 /**
+ * Regenerate API key - generates new key for existing record
+ * Returns the new plain key (only shown once!)
+ */
+export async function apiKeyRegenerate(id: string): Promise<{ key: ApiKey; plainKey: string } | null> {
+    const db = getWriteClient();
+    if (!db) return null;
+    
+    // First, get the existing key to preserve settings
+    const { data: existing, error: fetchError } = await db
+        .from('api_keys')
+        .select('*')
+        .eq('id', id)
+        .single();
+    
+    if (fetchError || !existing) {
+        console.error('[apiKeyRegenerate] Key not found:', id);
+        return null;
+    }
+    
+    // Generate new key with same prefix pattern
+    const isTest = existing.key_preview?.startsWith('xtf_test');
+    const prefix = isTest ? 'xtf_test' : 'xtf_live';
+    const plainKey = generateApiKeyString(prefix, 32, 'alphanumeric');
+    const hashedKey = hashKey(plainKey);
+    const keyPreview = plainKey.slice(0, 12) + '...' + plainKey.slice(-4);
+    
+    // Update the database with new key hash and preview
+    const { error: updateError } = await db
+        .from('api_keys')
+        .update({
+            key_hash: hashedKey,
+            key_preview: keyPreview,
+            // Reset stats on regenerate (optional, but makes sense)
+            total_requests: 0,
+            success_count: 0,
+            error_count: 0
+        })
+        .eq('id', id);
+    
+    if (updateError) {
+        console.error('[apiKeyRegenerate] Update error:', updateError.message);
+        return null;
+    }
+    
+    // Invalidate cache
+    lastCacheTime = 0;
+    
+    return {
+        key: {
+            id: existing.id,
+            name: existing.name,
+            key: keyPreview,
+            hashedKey,
+            keyType: (existing.key_type as ApiKeyType) || 'public',
+            enabled: existing.enabled,
+            rateLimit: existing.rate_limit,
+            created: existing.created_at,
+            lastUsed: existing.last_used,
+            expiresAt: existing.expires_at,
+            stats: { totalRequests: 0, successCount: 0, errorCount: 0 }
+        },
+        plainKey
+    };
+}
+
+/**
  * Record API key usage
  */
 export async function apiKeyRecordUsage(keyId: string, success: boolean): Promise<void> {

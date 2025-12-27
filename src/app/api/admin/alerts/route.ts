@@ -155,13 +155,85 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ success: true, message: 'Alert deleted successfully' });
             }
 
+            case 'test': {
+                const { webhookUrl } = body;
+                if (!webhookUrl) {
+                    return NextResponse.json({ success: false, error: 'Webhook URL required' }, { status: 400 });
+                }
+                
+                try {
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            type: 'test',
+                            message: 'DownAria Alert Test',
+                            timestamp: new Date().toISOString()
+                        })
+                    });
+                    
+                    return NextResponse.json({ 
+                        success: response.ok,
+                        error: response.ok ? undefined : `HTTP ${response.status}`
+                    });
+                } catch (testError) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: testError instanceof Error ? testError.message : 'Connection failed'
+                    });
+                }
+            }
+
             default:
-                return NextResponse.json({ success: false, error: 'Invalid action. Use: create, update, delete' }, { status: 400 });
+                return NextResponse.json({ success: false, error: 'Invalid action. Use: create, update, delete, test' }, { status: 400 });
         }
     } catch (error) {
         return NextResponse.json({
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
+        }, { status: 500 });
+    }
+}
+
+export async function PUT(request: NextRequest) {
+    const auth = await authVerifyAdminSession(request);
+    if (!auth.valid) {
+        return NextResponse.json({ success: false, error: auth.error || 'Unauthorized' }, { status: 401 });
+    }
+
+    const db = getDb();
+    if (!db) {
+        return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
+    }
+
+    try {
+        const body = await request.json();
+        const { id, ...updates } = body;
+        
+        if (!id) {
+            return NextResponse.json({ success: false, error: 'ID required' }, { status: 400 });
+        }
+
+        // Remove any fields that shouldn't be updated directly
+        delete updates.created_at;
+        delete updates.last_triggered;
+
+        const { data, error } = await db
+            .from('alert_config')
+            .update({ ...updates, updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) {
+            return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+        }
+
+        return NextResponse.json({ success: true, data, message: 'Alert updated successfully' });
+    } catch (error) {
+        return NextResponse.json({ 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error' 
         }, { status: 500 });
     }
 }

@@ -22,9 +22,10 @@ import { recordDownloadStat } from '@/lib/database';
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
 import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { botIsInMaintenance } from '../middleware/maintenance';
+import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware/maintenance';
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
+import { sanitizeTitle } from '../utils/format';
 
 // ============================================================================
 // URL DETECTION
@@ -202,16 +203,19 @@ function getPremiumExpiryDays(ctx: BotContext): number | undefined {
 }
 
 /**
- * Build caption with bold platform name, full title, filesize, and optional expiry warning
+ * Build caption with bold platform name, sanitized title, filesize, and optional expiry warning
  */
 function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumExpiryDays?: number): string {
     const platformName = botUrlGetPlatformName(result.platform!);
     
     let caption = `*${platformName}*\n\n`;
     
-    // Full title - NO TRUNCATION, escape special chars
+    // Sanitize title - removes hashtags, cleans up special chars, truncates
     if (result.title) {
-        caption += `${escapeMarkdown(result.title)}\n`;
+        const cleanTitle = sanitizeTitle(result.title, 200);
+        if (cleanTitle) {
+            caption += `${escapeMarkdown(cleanTitle)}\n`;
+        }
     }
     
     // Author
@@ -229,9 +233,9 @@ function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', premiumE
         caption += `\n📦 ${formatFilesize(bestVideo.filesize, lang)}`;
     }
     
-    // Premium expiry warning (< 7 days)
+    // VIP expiry warning (< 7 days)
     if (premiumExpiryDays !== undefined && premiumExpiryDays > 0 && premiumExpiryDays < 7) {
-        caption += `\n\n⚠️ Premium expires in ${premiumExpiryDays} day${premiumExpiryDays === 1 ? '' : 's'}`;
+        caption += `\n\n⚠️ VIP expires in ${premiumExpiryDays} day${premiumExpiryDays === 1 ? '' : 's'}`;
     }
     
     return caption.trim();
@@ -613,8 +617,9 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             return;
         }
         
-        // Determine URL limit based on user type
-        const maxUrls = ctx.isPremium ? MAX_URLS_DONATOR : MAX_URLS_FREE;
+        // Determine URL limit based on user type (VIP = Donator)
+        const isVip = ctx.isPremium || false;
+        const maxUrls = isVip ? MAX_URLS_DONATOR : MAX_URLS_FREE;
         const urls = extractSocialUrls(text, maxUrls);
         
         if (urls.length === 0) {
@@ -633,64 +638,154 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             } catch { return false; }
         }).length;
         
-        // Warn if URLs were ignored
+        // Warn if URLs were ignored (only for non-VIP users)
         if (totalUrls > urls.length) {
             const ignored = totalUrls - urls.length;
-            const warning = ctx.isPremium
+            const warning = isVip
                 ? (lang === 'id' 
                     ? `⚠️ ${ignored} URL diabaikan (max ${MAX_URLS_DONATOR}/pesan)`
                     : `⚠️ ${ignored} URLs ignored (max ${MAX_URLS_DONATOR}/message)`)
                 : (lang === 'id'
-                    ? `⚠️ ${ignored} URL diabaikan. Free user: 1 URL/pesan. Gunakan /donate untuk multi-URL!`
-                    : `⚠️ ${ignored} URLs ignored. Free users: 1 URL/message. Use /donate for multi-URL!`);
+                    ? `⚠️ ${ignored} URL diabaikan.\n\n💡 *Free user:* 1 URL/pesan\n💎 *VIP:* 5 URL/pesan\n\nGunakan /donate untuk info VIP!`
+                    : `⚠️ ${ignored} URLs ignored.\n\n💡 *Free users:* 1 URL/message\n💎 *VIP:* 5 URLs/message\n\nUse /donate for VIP info!`);
             
             await ctx.reply(warning, {
+                parse_mode: 'Markdown',
                 reply_parameters: { message_id: ctx.message.message_id },
             });
         }
         
-        // Process URLs sequentially
-        for (const url of urls) {
-            // Check global maintenance mode (synced with frontend via Redis)
-            const isGlobalMaintenance = await botIsInMaintenance();
-            if (isGlobalMaintenance && !ctx.isAdmin) {
-                await ctx.reply('🚧 Service is under maintenance. Please try again later.', {
-                    reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
+        // Check global maintenance mode (synced with frontend via Redis)
+        const isGlobalMaintenance = await botIsInMaintenance();
+        if (isGlobalMaintenance && !ctx.isAdmin) {
+            const maintenanceMsg = await botGetMaintenanceMessage(ctx.from?.language_code);
+            await ctx.reply(maintenanceMsg, {
+                parse_mode: 'Markdown',
+                reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
+            });
+            return;
+        }
+        
+        // Multi-URL progress tracking
+        const isMultiUrl = urls.length > 1;
+        let progressMsgId: number | null = null;
+        
+        // Show progress message for multiple URLs (VIP feature)
+        if (isMultiUrl) {
+            const progressMsg = lang === 'id'
+                ? `📥 *Multi-Download* (VIP)\n\n⏳ Memproses ${urls.length} link...`
+                : `📥 *Multi-Download* (VIP)\n\n⏳ Processing ${urls.length} links...`;
+            
+            try {
+                const msg = await ctx.reply(progressMsg, {
+                    parse_mode: 'Markdown',
+                    reply_parameters: { message_id: ctx.message.message_id },
                 });
-                return;
-            }
-
+                progressMsgId = msg.message_id;
+            } catch { /* ignore */ }
+        }
+        
+        // Process URLs sequentially
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (let i = 0; i < urls.length; i++) {
+            const url = urls[i];
             const platform = platformDetect(url);
-            if (!platform) continue;
+            if (!platform) {
+                failCount++;
+                continue;
+            }
 
             ctx.session.pendingRetryUrl = url;
             ctx.session.lastPlatform = platform;
+            
+            // Update progress for multi-URL
+            if (isMultiUrl && progressMsgId) {
+                try {
+                    const progressText = lang === 'id'
+                        ? `📥 *Multi-Download* (VIP)\n\n⏳ Memproses ${i + 1}/${urls.length}...\n\n` +
+                          `✅ Berhasil: ${successCount}\n❌ Gagal: ${failCount}`
+                        : `📥 *Multi-Download* (VIP)\n\n⏳ Processing ${i + 1}/${urls.length}...\n\n` +
+                          `✅ Success: ${successCount}\n❌ Failed: ${failCount}`;
+                    
+                    await ctx.api.editMessageText(ctx.chat!.id, progressMsgId, progressText, {
+                        parse_mode: 'Markdown',
+                    });
+                } catch { /* ignore edit errors */ }
+            }
 
-            const processingMsgId = await sendProcessingMessage(ctx, platform);
-            if (!processingMsgId) continue;
+            // For single URL, show processing message
+            let processingMsgId: number | null = null;
+            if (!isMultiUrl) {
+                processingMsgId = await sendProcessingMessage(ctx, platform);
+                if (!processingMsgId) continue;
+            }
 
-            const result = await botUrlCallScraper(url, ctx.isPremium || false);
+            const result = await botUrlCallScraper(url, isVip);
 
             if (result.success) {
-                await deleteMessage(ctx, processingMsgId);
+                if (processingMsgId) {
+                    await deleteMessage(ctx, processingMsgId);
+                }
                 
                 const visitorId = generateVisitorId();
                 const sent = await sendMediaByType(ctx, result, url, visitorId);
                 
                 if (sent) {
-                    // Only delete user message on first successful download
-                    if (url === urls[0]) {
+                    successCount++;
+                    // Only delete user message on first successful download (single URL mode)
+                    if (!isMultiUrl && url === urls[0]) {
                         await deleteMessage(ctx, ctx.message.message_id);
                     }
                     await botRateLimitRecordDownload(ctx);
                 } else {
+                    failCount++;
                     await ctx.reply(t('error_generic', lang), {
                         reply_markup: errorKeyboard(url),
                     });
                 }
             } else {
-                await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
+                failCount++;
+                if (processingMsgId) {
+                    await editToError(ctx, processingMsgId, result.error || t('error_generic', lang), url, result.errorCode, result.platform);
+                } else {
+                    // Multi-URL mode: send error inline
+                    const errorMsg = lang === 'id'
+                        ? `❌ Gagal: ${url.substring(0, 50)}...`
+                        : `❌ Failed: ${url.substring(0, 50)}...`;
+                    await ctx.reply(errorMsg, { reply_markup: errorKeyboard(url) });
+                }
             }
+            
+            // Small delay between URLs to avoid rate limiting
+            if (isMultiUrl && i < urls.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+        
+        // Final summary for multi-URL
+        if (isMultiUrl && progressMsgId) {
+            try {
+                const summaryText = lang === 'id'
+                    ? `📥 *Multi-Download Selesai*\n\n` +
+                      `✅ Berhasil: ${successCount}/${urls.length}\n` +
+                      `❌ Gagal: ${failCount}/${urls.length}`
+                    : `📥 *Multi-Download Complete*\n\n` +
+                      `✅ Success: ${successCount}/${urls.length}\n` +
+                      `❌ Failed: ${failCount}/${urls.length}`;
+                
+                await ctx.api.editMessageText(ctx.chat!.id, progressMsgId, summaryText, {
+                    parse_mode: 'Markdown',
+                });
+                
+                // Delete summary after 5 seconds
+                setTimeout(async () => {
+                    try {
+                        await ctx.api.deleteMessage(ctx.chat!.id, progressMsgId!);
+                    } catch { /* ignore */ }
+                }, 5000);
+            } catch { /* ignore */ }
         }
     });
 }

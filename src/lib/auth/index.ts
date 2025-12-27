@@ -25,6 +25,7 @@ export {
     apiKeyGetAll,
     apiKeyUpdate,
     apiKeyDelete,
+    apiKeyRegenerate,
     apiKeyValidate,
     apiKeyRecordUsage,
     apiKeyExtract,
