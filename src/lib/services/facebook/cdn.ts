@@ -49,7 +49,15 @@ export function isUsCdn(url: string): boolean {
 
 // Replace non-Asia CDN URLs with Jakarta CDN (closest to Singapore server)
 // Facebook CDNs are interchangeable - same content, different edge location
+// IMPORTANT: Don't replace video.xx.fbcdn.net - it has audio, scontent may serve muted version!
 export function optimizeCdnUrl(url: string): string {
+    // NEVER replace video.xx.fbcdn.net - this is the full video with audio
+    // Replacing it with scontent CDN may serve dash_muted version without audio
+    if (url.includes('video.') && url.includes('fbcdn.net')) {
+        console.log(`[FB.CDN] Keeping video.* URL (has audio)`);
+        return url;
+    }
+    
     const info = getCdnInfo(url);
     
     // Already Asia CDN, no need to replace
