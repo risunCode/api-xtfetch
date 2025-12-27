@@ -170,14 +170,18 @@ const decodeUnicode = (s: string): string =>
  * Video URL patterns with priority (higher = better, usually has audio)
  * 
  * AUDIO PRIORITY ORDER:
- * 1. playable_url_quality_hd (100) - HD muxed (video+audio) ✅ HAS AUDIO
- * 2. playable_url (90) - SD muxed (video+audio) ✅ HAS AUDIO
- * 3. hd_src / sd_src (50-40) - legacy, usually muxed ✅ HAS AUDIO
- * 4. browser_native_hd_url (10) - HD video-only ❌ NO AUDIO
- * 5. browser_native_sd_url (5) - SD video-only ❌ NO AUDIO
+ * 1. progressive_url (85) - Regional CDN, muxed ✅ HAS AUDIO (FAST!)
+ * 2. playable_url_quality_hd (100) - HD muxed (video+audio) ✅ HAS AUDIO
+ * 3. playable_url (90) - SD muxed (video+audio) ✅ HAS AUDIO
+ * 4. hd_src / sd_src (50-40) - legacy, usually muxed ✅ HAS AUDIO
+ * 5. browser_native_hd_url (10) - HD video-only ❌ NO AUDIO
+ * 6. browser_native_sd_url (5) - SD video-only ❌ NO AUDIO
  * 
  * IMPORTANT: browser_native_* URLs are VIDEO-ONLY streams without audio!
- * Always prefer playable_url variants which contain muxed video+audio.
+ * Always prefer playable_url/progressive_url variants which contain muxed video+audio.
+ * 
+ * CDN NOTE: progressive_url often comes from regional CDN (e.g. scontent.fbdj2-1.fna = Singapore)
+ * while playable_url may come from US CDN (video-bos5-1 = Boston). Prefer regional for speed!
  */
 const VIDEO_URL_PATTERNS = [
     // MUXED (video+audio) - HIGHEST PRIORITY
@@ -196,11 +200,24 @@ const VIDEO_URL_PATTERNS = [
 ];
 
 /**
+ * Check if URL is from regional CDN (faster for Asia servers)
+ * Regional CDNs: fbdj2 (Singapore), hkg (Hong Kong), nrt (Tokyo), etc.
+ * US CDNs: bos5 (Boston), iad (Virginia), lax (LA), sjc (San Jose)
+ */
+const isRegionalCdn = (url: string): boolean => 
+    /fbdj|fna\.fbcdn|hkg|nrt|sin|sgp/i.test(url);
+
+const isUsCdn = (url: string): boolean =>
+    /bos\d|iad\d|lax\d|sjc\d|video-.*\.xx\.fbcdn/i.test(url);
+
+/**
  * Extract video URLs from HTML with audio priority
  * 
  * Prioritizes playable_url (muxed video+audio) over browser_native_* 
  * which often contains video-only streams without audio.
  * Also detects and deprioritizes muted URLs (geo-restricted content).
+ * 
+ * NEW: Also extracts progressive_url which often comes from regional CDN!
  * 
  * @param html - HTML content to search
  * @returns Object with HD and SD video URLs if found
@@ -209,40 +226,105 @@ export function fbExtractVideos(html: string): FbVideoResult {
     const result: FbVideoResult = {};
     
     // Collect all found URLs with their priority and audio info
-    const hdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
-    const sdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean }[] = [];
+    const hdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean; isRegional: boolean }[] = [];
+    const sdCandidates: { url: string; priority: number; hasMuxedAudio: boolean; isMuted: boolean; isRegional: boolean }[] = [];
     
+    // First, extract from standard patterns
     for (const { pattern, quality, priority, hasMuxedAudio } of VIDEO_URL_PATTERNS) {
         const match = html.match(pattern);
         if (match?.[1]) {
             const url = utilDecodeUrl(match[1]);
             const muted = isMutedUrl(url);
+            const regional = isRegionalCdn(url);
             // Reduce priority significantly if URL is muted
-            const adjustedPriority = muted ? priority - 50 : priority;
+            // BOOST priority if regional CDN (faster!)
+            let adjustedPriority = muted ? priority - 50 : priority;
+            if (regional && !muted) adjustedPriority += 15; // Boost regional CDN
             
             if (quality === 'hd') {
-                hdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted });
+                hdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted, isRegional: regional });
             } else {
-                sdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted });
+                sdCandidates.push({ url, priority: adjustedPriority, hasMuxedAudio, isMuted: muted, isRegional: regional });
             }
         }
     }
     
-    // Sort by priority (highest first) - non-muted URLs will be at top
-    // Secondary sort: prefer muxed audio over video-only at same priority
+    // NEW: Extract progressive_url (often regional CDN with audio!)
+    // Pattern: "progressive_url":"https://..." with optional quality metadata
+    const progressivePattern = /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g;
+    let progMatch;
+    const seenUrls = new Set(hdCandidates.map(c => c.url).concat(sdCandidates.map(c => c.url)));
+    
+    while ((progMatch = progressivePattern.exec(html)) !== null) {
+        const url = utilDecodeUrl(progMatch[1]);
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+        
+        const muted = isMutedUrl(url);
+        const regional = isRegionalCdn(url);
+        const isHD = /720|1080|_hd|gen2_720/i.test(url);
+        
+        // Progressive URLs have audio and often from regional CDN
+        // Base priority 85, boost if regional
+        let priority = 85;
+        if (regional && !muted) priority += 15; // Regional boost
+        if (muted) priority -= 50;
+        
+        const candidate = { url, priority, hasMuxedAudio: true, isMuted: muted, isRegional: regional };
+        
+        if (isHD) {
+            hdCandidates.push(candidate);
+        } else {
+            sdCandidates.push(candidate);
+        }
+    }
+    
+    // Also check DASH videos (base_url pattern) - often regional
+    const dashPattern = /"height":(\d+)[^}]*?"base_url":"(https:[^"]+\.mp4[^"]*)"/g;
+    let dashMatch;
+    while ((dashMatch = dashPattern.exec(html)) !== null) {
+        const height = parseInt(dashMatch[1]);
+        const url = utilDecodeUrl(dashMatch[2]);
+        if (seenUrls.has(url) || height < 360) continue;
+        seenUrls.add(url);
+        
+        const muted = isMutedUrl(url);
+        const regional = isRegionalCdn(url);
+        const isHD = height >= 720;
+        
+        let priority = 70;
+        if (regional && !muted) priority += 15;
+        if (muted) priority -= 50;
+        
+        const candidate = { url, priority, hasMuxedAudio: true, isMuted: muted, isRegional: regional };
+        
+        if (isHD) {
+            hdCandidates.push(candidate);
+        } else {
+            sdCandidates.push(candidate);
+        }
+    }
+    // Sort by priority (highest first) - regional CDN preferred
+    // Priority already boosted for regional, but add secondary sort for same priority
     hdCandidates.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
+        // Prefer regional CDN at same priority
+        if (a.isRegional !== b.isRegional) return a.isRegional ? -1 : 1;
         if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
         return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
     });
     sdCandidates.sort((a, b) => {
         if (b.priority !== a.priority) return b.priority - a.priority;
+        if (a.isRegional !== b.isRegional) return a.isRegional ? -1 : 1;
         if (a.isMuted !== b.isMuted) return a.isMuted ? 1 : -1;
         return (b.hasMuxedAudio ? 1 : 0) - (a.hasMuxedAudio ? 1 : 0);
     });
     
+    // Log selected URL for debugging
     if (hdCandidates.length > 0) {
-        result.hd = hdCandidates[0].url;
+        const best = hdCandidates[0];
+        console.log(`[Facebook.Extract] HD selected: ${best.isRegional ? 'REGIONAL' : 'US'} CDN, priority=${best.priority}, muxed=${best.hasMuxedAudio}`);
+        result.hd = best.url;
     }
     if (sdCandidates.length > 0 && sdCandidates[0].url !== result.hd) {
         result.sd = sdCandidates[0].url;
