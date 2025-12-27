@@ -136,17 +136,6 @@ async function initBot(): Promise<void> {
             await bot.init();
             botInitialized = true;
             
-            // Initialize queue worker for concurrent processing
-            const queueAvailable = isQueueAvailable();
-            console.log(`[Bot] Queue available: ${queueAvailable}`);
-            
-            if (queueAvailable) {
-                const workerStarted = await initWorker();
-                console.log(`[Bot] Worker started: ${workerStarted}`);
-            } else {
-                console.log('[Bot] Queue not available, worker disabled');
-            }
-            
             // Start monitoring (logs memory warnings, tracks metrics)
             startMonitoring(60000); // Check every minute
         } catch (error) {

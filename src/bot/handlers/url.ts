@@ -50,9 +50,9 @@ const MAX_URLS_FREE = 1;
 const MAX_URLS_DONATOR = 5;
 
 // Feature flag for queue-based processing
-// Set to true to enable async queue processing (Phase 2)
-// When enabled, downloads are added to BullMQ queue instead of processed synchronously
-const USE_QUEUE_PROCESSING = process.env.BOT_USE_QUEUE === 'true';
+// DISABLED: Worker not processing jobs correctly, using sync processing
+// TODO: Fix BullMQ worker initialization before re-enabling
+const USE_QUEUE_PROCESSING = false; // process.env.BOT_USE_QUEUE === 'true';
 
 function botUrlExtract(text: string): string | null {
     const matches = text.match(URL_REGEX);
