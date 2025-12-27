@@ -48,8 +48,8 @@ function getBotInstance(): Bot<BotContext> {
         }));
         
         // Filter stale messages (sent while bot was offline)
-        // Ignore messages older than 60 seconds
-        const STALE_THRESHOLD_SECONDS = 60;
+        // Telegram retries webhooks, so we need generous threshold
+        const STALE_THRESHOLD_SECONDS = 900; // 15 minutes - handles Telegram retries
         botInstance.use(async (ctx, next) => {
             const messageDate = ctx.message?.date || ctx.callbackQuery?.message?.date;
             
@@ -65,7 +65,7 @@ function getBotInstance(): Bot<BotContext> {
                 
                 // For callbacks: allow older callbacks but give feedback if very old
                 if (ctx.callbackQuery) {
-                    const CALLBACK_STALE_THRESHOLD = 300; // 5 minutes
+                    const CALLBACK_STALE_THRESHOLD = 900; // 15 minutes
                     if (age > CALLBACK_STALE_THRESHOLD) {
                         console.log(`[Bot] Stale callback (${age}s old) from user ${ctx.from?.id}`);
                         await ctx.answerCallbackQuery({

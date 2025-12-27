@@ -164,19 +164,31 @@ function buildStartKeyboard(lang: BotLanguage): InlineKeyboard {
 const startComposer = new Composer<Context>();
 
 startComposer.command('start', async (ctx) => {
-    const user = await botUserRegister(ctx);
-    const lang = detectLanguage(ctx.from?.language_code);
+    console.log('[/start] Command received from user:', ctx.from?.id);
     
-    // Check if returning user (has downloads)
-    const isReturning = user && (user.total_downloads > 0 || user.daily_downloads > 0);
-    
-    const messageKey = isReturning ? 'start_welcome_back' : 'start_welcome';
-    const message = t(messageKey, lang);
-    
-    await ctx.reply(message, {
-        parse_mode: 'Markdown',
-        reply_markup: buildStartKeyboard(lang),
-    });
+    try {
+        const user = await botUserRegister(ctx);
+        console.log('[/start] User registered:', user?.id);
+        
+        const lang = detectLanguage(ctx.from?.language_code);
+        
+        // Check if returning user (has downloads)
+        const isReturning = user && (user.total_downloads > 0 || user.daily_downloads > 0);
+        
+        const messageKey = isReturning ? 'start_welcome_back' : 'start_welcome';
+        const message = t(messageKey, lang);
+        
+        console.log('[/start] Sending reply...');
+        await ctx.reply(message, {
+            parse_mode: 'Markdown',
+            reply_markup: buildStartKeyboard(lang),
+        });
+        console.log('[/start] Reply sent successfully');
+    } catch (error) {
+        console.error('[/start] Error:', error);
+        // Fallback response
+        await ctx.reply('👋 Welcome! Send me a video link to download.');
+    }
 });
 
 export { startComposer, botUserRegister, botUserGetTodayStats };
