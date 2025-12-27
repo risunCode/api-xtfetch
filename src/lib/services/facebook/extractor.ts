@@ -27,6 +27,8 @@ export const decode = (s: string): string => {
 // Consolidated patterns - SINGLE source of truth
 const P = {
     video: {
+        // Progressive URLs array format (reels/videos)
+        progressiveWithQuality: /"progressive_url":"(https:[^"]+\.mp4[^"]*)","failure_reason":null,"metadata":\{"quality":"(HD|SD)"\}/g,
         progressive: /"progressive_url":"(https:[^"]+\.mp4[^"]*)"/g,
         playableHd: /"playable_url_quality_hd":"(https:[^"]+\.mp4[^"]*)"/g,
         playable: /"playable_url":"(https:[^"]+\.mp4[^"]*)"/g,
@@ -61,8 +63,8 @@ const P = {
 
 // Block finding - find relevant HTML section (larger blocks for better extraction)
 const BLOCK_KEYS: Record<FbContentType, string[]> = {
-    video: ['"progressive_url":', '"playable_url":', '"browser_native'],
-    reel: ['"progressive_url":', '"playable_url":', '"unified_stories"'],
+    video: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"browser_native'],
+    reel: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"unified_stories"'],
     story: ['"story_bucket_owner"', '"story_card_seen_state"', '"attachments"'],
     post: ['"all_subattachments"', '"photo_image"', '"full_image"', '"large_share"', '"viewer_image"'],
     group: ['"group_feed"', '"all_subattachments"', '"full_image"', '"viewer_image"'],
@@ -185,6 +187,42 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
     const candidates: VideoCandidate[] = [];
     const seen = new Set<string>();
 
+    // First, try to extract from progressive_urls array with quality metadata (best for reels)
+    P.video.progressiveWithQuality.lastIndex = 0;
+    let m;
+    while ((m = P.video.progressiveWithQuality.exec(html)) !== null) {
+        const url = decode(m[1]);
+        const quality = m[2] as 'HD' | 'SD';
+        const urlKey = url.split('?')[0];
+        if (seen.has(urlKey) || !url.includes('.mp4')) continue;
+        seen.add(urlKey);
+
+        const cdnBoost = getCdnInfo(url).score;
+        const assetId = extractAssetId(url);
+        const priority = quality === 'HD' ? 100 : 50;
+
+        candidates.push({
+            url,
+            quality,
+            hasMuxedAudio: true,
+            priority: priority + cdnBoost,
+            assetId,
+        });
+    }
+
+    // If we found videos with quality metadata, return them
+    if (candidates.length > 0) {
+        const sorted = candidates.sort((a, b) => b.priority - a.priority);
+        if (filterToFirstAsset && sorted.length > 0) {
+            const firstAssetId = sorted.find(v => v.assetId)?.assetId;
+            if (firstAssetId) {
+                return sorted.filter(v => v.assetId === firstAssetId);
+            }
+        }
+        return sorted;
+    }
+
+    // Fallback to other patterns
     const configs: { pattern: RegExp; priority: number }[] = [
         { pattern: P.video.playableHd, priority: 100 },
         { pattern: P.video.playable, priority: 95 },

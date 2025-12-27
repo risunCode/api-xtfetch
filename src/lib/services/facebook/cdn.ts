@@ -21,13 +21,16 @@ const CDN_MAP: Record<string, CdnInfo> = {
     'ams': { region: 'eu', location: 'Amsterdam', score: 50 },
     'fra': { region: 'eu', location: 'Frankfurt', score: 50 },
     'lhr': { region: 'eu', location: 'London', score: 50 },
-    // US (lowest priority - high latency from Singapore)
-    'bos': { region: 'us', location: 'Boston', score: 10 },
-    'iad': { region: 'us', location: 'Virginia', score: 10 },
-    'lax': { region: 'us', location: 'Los Angeles', score: 15 },
-    'sjc': { region: 'us', location: 'San Jose', score: 15 },
-    'xx.fbcdn': { region: 'us', location: 'US', score: 5 },
 };
+
+// Jakarta CDN hostnames for replacement
+const JAKARTA_CDNS = [
+    'scontent.fbdj2-1.fna.fbcdn.net',
+    'scontent.fbdj1-1.fna.fbcdn.net',
+];
+
+// Global CDN - auto-routes to nearest edge (more reliable)
+const GLOBAL_CDN = 'scontent.xx.fbcdn.net';
 
 export function getCdnInfo(url: string): CdnInfo {
     for (const [pattern, info] of Object.entries(CDN_MAP)) {
@@ -42,6 +45,28 @@ export function isRegionalCdn(url: string): boolean {
 
 export function isUsCdn(url: string): boolean {
     return getCdnInfo(url).region === 'us';
+}
+
+// Replace US/EU CDN URLs with global CDN (auto-routes to nearest edge)
+// Facebook CDNs are interchangeable - same content, different edge location
+export function optimizeCdnUrl(url: string): string {
+    const info = getCdnInfo(url);
+    
+    // Already Asia CDN or global, no need to replace
+    if (info.region === 'asia' || url.includes('scontent.xx.fbcdn.net')) return url;
+    
+    // Replace US/EU CDN hostname with global CDN
+    // Pattern: scontent-bos5-1.xx.fbcdn.net, scontent.fra1-1.fna.fbcdn.net, etc.
+    const replaced = url.replace(
+        /scontent[-.][\w-]+\.(?:xx|fna)\.fbcdn\.net/,
+        GLOBAL_CDN
+    );
+    
+    if (replaced !== url) {
+        console.log(`[FB.CDN] Redirected: ${info.location} -> Global (xx)`);
+    }
+    
+    return replaced;
 }
 
 // Sort formats by CDN + quality priority

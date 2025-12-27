@@ -18,6 +18,7 @@ import { prepareUrl } from '@/lib/url';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { logger } from '@/lib/services/shared/logger';
 import { recordDownloadStat } from '@/lib/database';
+import { optimizeCdnUrl } from '@/lib/services/facebook/cdn';
 
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
@@ -268,20 +269,22 @@ function buildSimpleCaption(result: DownloadResult, originalUrl: string): string
 /**
  * Send video directly (non-YouTube)
  * 
- * Downloads video to buffer first, then uploads to Telegram.
- * This bypasses Telegram's inability to fetch Facebook/Instagram CDN URLs.
+ * IMPORTANT: Validates filesize BEFORE downloading to prevent OOM kills!
  * 
  * Smart quality logic:
- * - If HD filesize ≤ 40MB → Send HD directly, show only [🔗 Original]
- * - If HD filesize > 40MB → Send SD as fallback, show [🎬 HD (link)] [🔗 Original]
+ * - If HD filesize ≤ 40MB → Download & send HD, show only [🔗 Original]
+ * - If HD > 40MB but SD ≤ 40MB → Download & send SD, show [🎬 HD (link)] [🔗 Original]
+ * - If both > 40MB → DON'T download, send direct link only
  */
 async function sendVideoDirectly(
     ctx: BotContext,
     result: DownloadResult,
     originalUrl: string,
-    visitorId: string
+    visitorId: string,
+    processingMsgId?: number | null
 ): Promise<boolean> {
     const lang = detectLanguage(ctx.from?.language_code);
+    const platformName = botUrlGetPlatformName(result.platform!);
     const videos = result.formats?.filter(f => f.type === 'video') || [];
     if (videos.length === 0) return false;
 
@@ -299,8 +302,77 @@ async function sendVideoDirectly(
                q.includes('low') || q.includes('medium');
     }) || (videos.length > 1 ? videos[videos.length - 1] : undefined);
 
-    // Determine if HD exceeds Telegram's filesize limit
+    // CRITICAL: Check filesize BEFORE downloading to prevent OOM
     const hdExceedsLimit = hdVideo?.filesize && hdVideo.filesize > MAX_TELEGRAM_FILESIZE;
+    const sdExceedsLimit = sdVideo?.filesize && sdVideo.filesize > MAX_TELEGRAM_FILESIZE;
+    const onlyVideoExceedsLimit = !hdVideo && !sdVideo && videos[0]?.filesize && videos[0].filesize > MAX_TELEGRAM_FILESIZE;
+    
+    // If ALL available videos exceed 40MB, send direct link WITHOUT downloading
+    const allExceedLimit = (hdExceedsLimit && (!sdVideo || sdExceedsLimit)) || onlyVideoExceedsLimit;
+    
+    if (allExceedLimit) {
+        console.log(`[Bot.Video] All formats exceed 40MB limit, sending direct link only`);
+        
+        // Delete processing message - we'll send a new message with direct link
+        if (processingMsgId) {
+            await deleteMessage(ctx, processingMsgId);
+        }
+        
+        const bestVideo = hdVideo || sdVideo || videos[0];
+        const optimizedUrl = bestVideo.url.includes('fbcdn.net') ? optimizeCdnUrl(bestVideo.url) : bestVideo.url;
+        const filesizeMB = bestVideo.filesize ? (bestVideo.filesize / 1024 / 1024).toFixed(0) : '?';
+        
+        const caption = lang === 'id'
+            ? `📥 *${platformName}*\n\n` +
+              `${result.author ? escapeMarkdown(result.author) + '\n' : ''}` +
+              `⚠️ Video terlalu besar (${filesizeMB}MB) untuk Telegram.\nKlik tombol untuk download langsung.`
+            : `📥 *${botUrlGetPlatformName(result.platform!)}*\n\n` +
+              `${result.author ? escapeMarkdown(result.author) + '\n' : ''}` +
+              `⚠️ Video too large (${filesizeMB}MB) for Telegram.\nTap button to download directly.`;
+        
+        const keyboard = new InlineKeyboard()
+            .url('▶️ ' + (lang === 'id' ? 'Download Video' : 'Download Video'), optimizedUrl)
+            .url('🔗 Original', originalUrl);
+        
+        // Try to send with thumbnail if available
+        const thumbUrl = result.thumbnail;
+        if (thumbUrl) {
+            try {
+                if (thumbUrl.includes('fbcdn.net') || thumbUrl.includes('cdninstagram.com')) {
+                    const thumbResponse = await fetch(thumbUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Referer': 'https://www.facebook.com/',
+                        },
+                    });
+                    if (thumbResponse.ok) {
+                        const thumbBuffer = Buffer.from(await thumbResponse.arrayBuffer());
+                        await ctx.replyWithPhoto(new InputFile(thumbBuffer, 'thumb.jpg'), {
+                            caption,
+                            parse_mode: 'Markdown',
+                            reply_markup: keyboard,
+                        });
+                        return true;
+                    }
+                } else {
+                    await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
+                        caption,
+                        parse_mode: 'Markdown',
+                        reply_markup: keyboard,
+                    });
+                    return true;
+                }
+            } catch { /* fall through to text message */ }
+        }
+        
+        // No thumbnail, send text message
+        await ctx.reply(caption, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
+            link_preview_options: { is_disabled: true },
+        });
+        return true;
+    }
     
     // Select video to send: SD fallback if HD exceeds limit, otherwise HD (or first available)
     const videoToSend = hdExceedsLimit && sdVideo ? sdVideo : (hdVideo || videos[0]);
@@ -311,8 +383,9 @@ async function sendVideoDirectly(
     // Build appropriate keyboard based on whether we're using fallback
     let keyboard;
     if (hdExceedsLimit && hdVideo) {
-        // HD exceeds limit - sent SD as fallback, show HD as external link
-        keyboard = buildVideoFallbackKeyboard(hdVideo.url, originalUrl);
+        // HD exceeds limit - sending SD as fallback, show HD as external link
+        const optimizedHdUrl = hdVideo.url.includes('fbcdn.net') ? optimizeCdnUrl(hdVideo.url) : hdVideo.url;
+        keyboard = buildVideoFallbackKeyboard(optimizedHdUrl, originalUrl);
         if (caption) caption += '\n';
         caption += '⚠️ HD > 40MB';
     } else {
@@ -320,7 +393,6 @@ async function sendVideoDirectly(
         keyboard = buildVideoSuccessKeyboard(originalUrl);
     }
 
-    const platform = result.platform || 'facebook';
     const videoUrl = videoToSend.url;
 
     // For Facebook/Instagram CDN: download first then upload as buffer
@@ -372,23 +444,42 @@ async function sendVideoDirectly(
 
     try {
         if (needsDownloadFirst) {
-            // Download video to buffer with retry logic
-            console.log(`[Bot.Video] Downloading from CDN: ${videoUrl.substring(0, 80)}...`);
-            const buffer = await fetchWithRetry(videoUrl);
+            // Optimize CDN URL for Facebook (redirect US/EU to Jakarta)
+            const optimizedUrl = videoUrl.includes('fbcdn.net') ? optimizeCdnUrl(videoUrl) : videoUrl;
+            
+            // Log filesize info before download
+            const expectedSize = videoToSend.filesize ? (videoToSend.filesize / 1024 / 1024).toFixed(1) : '?';
+            console.log(`[Bot.Video] Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN: ${optimizedUrl.substring(0, 80)}...`);
+            
+            // Show "uploading video" status under bot name
+            await ctx.replyWithChatAction('upload_video');
+            
+            const buffer = await fetchWithRetry(optimizedUrl);
             console.log(`[Bot.Video] Uploading to Telegram...`);
+            
+            // Refresh chat action for upload phase
+            await ctx.replyWithChatAction('upload_video');
             
             await ctx.replyWithVideo(new InputFile(buffer, 'video.mp4'), {
                 caption: caption || undefined,
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });
+            
+            // Delete processing message after success
+            if (processingMsgId) await deleteMessage(ctx, processingMsgId);
         } else {
             // Other platforms: use URL directly
+            await ctx.replyWithChatAction('upload_video');
+            
             await ctx.replyWithVideo(new InputFile({ url: videoUrl }), {
                 caption: caption || undefined,
                 parse_mode: 'Markdown',
                 reply_markup: keyboard,
             });
+            
+            // Delete processing message after success
+            if (processingMsgId) await deleteMessage(ctx, processingMsgId);
         }
         return true;
     } catch (error) {
@@ -667,11 +758,22 @@ async function sendPhotoAlbum(
 // MAIN SEND FUNCTION
 // ============================================================================
 
+/**
+ * Update processing message with status
+ */
+async function updateStatus(ctx: BotContext, msgId: number | null, status: string): Promise<void> {
+    if (!msgId) return;
+    try {
+        await ctx.api.editMessageText(ctx.chat!.id, msgId, status);
+    } catch { /* ignore edit errors */ }
+}
+
 async function sendMediaByType(
     ctx: BotContext,
     result: DownloadResult,
     originalUrl: string,
-    visitorId: string
+    visitorId: string,
+    processingMsgId?: number | null
 ): Promise<boolean> {
     const contentType = detectContentType(result);
     
@@ -685,17 +787,31 @@ async function sendMediaByType(
                 userMsgId: ctx.message?.message_id || 0,
                 timestamp: Date.now(),
             };
+            // Delete processing message before showing YouTube preview
+            if (processingMsgId) {
+                await deleteMessage(ctx, processingMsgId);
+            }
             return await sendYouTubePreview(ctx, result, originalUrl, visitorId);
             
         case 'video':
-            return await sendVideoDirectly(ctx, result, originalUrl, visitorId);
+            return await sendVideoDirectly(ctx, result, originalUrl, visitorId, processingMsgId);
             
-        case 'photo_album':
-            return await sendPhotoAlbum(ctx, result, originalUrl);
+        case 'photo_album': {
+            // Show "uploading photo" status under bot name
+            await ctx.replyWithChatAction('upload_photo');
+            const sent = await sendPhotoAlbum(ctx, result, originalUrl);
+            if (sent && processingMsgId) await deleteMessage(ctx, processingMsgId);
+            return sent;
+        }
             
         case 'photo_single':
-        default:
-            return await sendSinglePhoto(ctx, result, originalUrl);
+        default: {
+            // Show "uploading photo" status under bot name
+            await ctx.replyWithChatAction('upload_photo');
+            const sent = await sendSinglePhoto(ctx, result, originalUrl);
+            if (sent && processingMsgId) await deleteMessage(ctx, processingMsgId);
+            return sent;
+        }
     }
 }
 
@@ -887,12 +1003,9 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             const result = await botUrlCallScraper(url, isVip);
 
             if (result.success) {
-                if (processingMsgId) {
-                    await deleteMessage(ctx, processingMsgId);
-                }
-                
+                // Pass processingMsgId to sendMediaByType - it will handle status updates and deletion
                 const visitorId = generateVisitorId();
-                const sent = await sendMediaByType(ctx, result, url, visitorId);
+                const sent = await sendMediaByType(ctx, result, url, visitorId, processingMsgId);
                 
                 if (sent) {
                     successCount++;
@@ -903,6 +1016,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                     await botRateLimitRecordDownload(ctx);
                 } else {
                     failCount++;
+                    if (processingMsgId) await deleteMessage(ctx, processingMsgId);
                     await ctx.reply(t('error_generic', lang), {
                         reply_markup: errorKeyboard(url),
                     });

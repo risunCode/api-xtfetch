@@ -11,6 +11,7 @@ import { Worker, Job } from 'bullmq';
 import { InputFile, InlineKeyboard } from 'grammy';
 
 import { logger } from '@/lib/services/shared/logger';
+import { optimizeCdnUrl } from '@/lib/services/facebook/cdn';
 import { QUEUE_CONFIG, getRedisConnection } from './config';
 import type { DownloadJobData } from './index';
 import type { DownloadResult } from '../types';
@@ -50,6 +51,16 @@ async function getRateLimitFunction() {
 // ============================================================================
 
 const MAX_FILE_SIZE = 40 * 1024 * 1024; // 40MB Telegram limit
+
+/**
+ * Optimize URL for faster download (redirect US/EU CDN to Jakarta for Facebook)
+ */
+function optimizeMediaUrl(url: string): string {
+    if (url.includes('fbcdn.net')) {
+        return optimizeCdnUrl(url);
+    }
+    return url;
+}
 
 /**
  * Build minimal caption for media
@@ -162,9 +173,10 @@ async function workerSendMedia(
 
             try {
                 if (sendAsLink) {
-                    // Send direct link with play button
+                    // Send direct link with play button (optimize URL for direct access)
+                    const optimizedUrl = optimizeMediaUrl(formatToSend.url);
                     const linkKeyboard = new InlineKeyboard()
-                        .url('▶️ Play Video', formatToSend.url)
+                        .url('▶️ Play Video', optimizedUrl)
                         .url('🔗 Original', originalUrl);
                     
                     await api.sendMessage(chatId, `📥 ${itemCaption}\n\nVideo too large, tap to play:`, {
@@ -172,12 +184,14 @@ async function workerSendMedia(
                         link_preview_options: { is_disabled: true },
                     });
                 } else if (formatToSend.type === 'video') {
-                    await api.sendVideo(chatId, new InputFile({ url: formatToSend.url }), {
+                    const optimizedUrl = optimizeMediaUrl(formatToSend.url);
+                    await api.sendVideo(chatId, new InputFile({ url: optimizedUrl }), {
                         caption: itemCaption,
                         reply_markup: i === 0 ? keyboard : undefined,
                     });
                 } else {
-                    await api.sendPhoto(chatId, new InputFile({ url: formatToSend.url }), {
+                    const optimizedUrl = optimizeMediaUrl(formatToSend.url);
+                    await api.sendPhoto(chatId, new InputFile({ url: optimizedUrl }), {
                         caption: itemCaption,
                         reply_markup: i === 0 ? keyboard : undefined,
                     });
@@ -194,8 +208,9 @@ async function workerSendMedia(
                 // If send failed, try sending as direct link
                 if (!sendAsLink && formatToSend.type === 'video') {
                     try {
+                        const optimizedUrl = optimizeMediaUrl(formatToSend.url);
                         const linkKeyboard = new InlineKeyboard()
-                            .url('▶️ Play Video', formatToSend.url)
+                            .url('▶️ Play Video', optimizedUrl)
                             .url('🔗 Original', originalUrl);
                         
                         await api.sendMessage(chatId, `📥 ${itemCaption}\n\nTap to play:`, {
@@ -237,10 +252,11 @@ async function workerSendMedia(
     // Check if video is too large (>40MB)
     if (formatToSend?.type === 'video' && formatToSend.filesize && formatToSend.filesize > MAX_FILE_SIZE) {
         if (sdVideo && sdVideo !== hdVideo && (!sdVideo.filesize || sdVideo.filesize <= MAX_FILE_SIZE)) {
-            hdUrl = formatToSend.url;
+            hdUrl = optimizeMediaUrl(formatToSend.url);
             formatToSend = sdVideo;
         } else {
-            const keyboard = buildMediaKeyboard(originalUrl, formatToSend.url);
+            const optimizedUrl = optimizeMediaUrl(formatToSend.url);
+            const keyboard = buildMediaKeyboard(originalUrl, optimizedUrl);
             try {
                 await api.sendMessage(
                     chatId,
@@ -265,13 +281,14 @@ async function workerSendMedia(
     const keyboard = buildMediaKeyboard(originalUrl, hdUrl);
 
     try {
+        const optimizedUrl = optimizeMediaUrl(formatToSend.url);
         if (formatToSend.type === 'video') {
-            await api.sendVideo(chatId, new InputFile({ url: formatToSend.url }), {
+            await api.sendVideo(chatId, new InputFile({ url: optimizedUrl }), {
                 caption,
                 reply_markup: keyboard,
             });
         } else {
-            await api.sendPhoto(chatId, new InputFile({ url: formatToSend.url }), {
+            await api.sendPhoto(chatId, new InputFile({ url: optimizedUrl }), {
                 caption,
                 reply_markup: keyboard,
             });
@@ -281,9 +298,10 @@ async function workerSendMedia(
         logger.error('telegram', error, 'WORKER_SEND_MEDIA');
         
         try {
+            const optimizedUrl = optimizeMediaUrl(formatToSend.url);
             await api.sendMessage(
                 chatId,
-                `📥 Download link:\n\n${caption}\n\n${formatToSend.url}`,
+                `📥 Download link:\n\n${caption}\n\n${optimizedUrl}`,
                 {
                     reply_markup: keyboard,
                     link_preview_options: { is_disabled: true },
