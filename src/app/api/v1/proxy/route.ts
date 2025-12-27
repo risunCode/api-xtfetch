@@ -267,8 +267,8 @@ export async function GET(request: NextRequest) {
             headers['Range'] = rangeHeader;
         }
 
-        // YouTube CDN often redirects, so allow redirects for YouTube
-        const response = await fetch(url, { headers, redirect: isYouTubeCDN ? 'follow' : 'error' });
+        // CDNs often redirect, allow redirects for all media CDNs
+        const response = await fetch(url, { headers, redirect: 'follow' });
 
         if (!response.ok) {
             return NextResponse.json({
