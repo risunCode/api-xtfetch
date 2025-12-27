@@ -267,7 +267,8 @@ export async function GET(request: NextRequest) {
             headers['Range'] = rangeHeader;
         }
 
-        const response = await fetch(url, { headers, redirect: 'error' });
+        // YouTube CDN often redirects, so allow redirects for YouTube
+        const response = await fetch(url, { headers, redirect: isYouTubeCDN ? 'follow' : 'error' });
 
         if (!response.ok) {
             return NextResponse.json({
@@ -313,7 +314,7 @@ export async function GET(request: NextRequest) {
 
         if (contentRange) responseHeaders.set('Content-Range', contentRange);
 
-        if (inline || contentType.startsWith('video/')) {
+        if (inline || contentType.startsWith('video/') || contentType.startsWith('audio/')) {
             responseHeaders.set('Content-Disposition', 'inline');
             responseHeaders.set('Cache-Control', 'public, max-age=3600');
         } else {
@@ -324,6 +325,10 @@ export async function GET(request: NextRequest) {
         }
 
         if (contentLength) responseHeaders.set('Content-Length', contentLength);
+
+        // CORS headers for browser playback
+        responseHeaders.set('Access-Control-Allow-Origin', '*');
+        responseHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 
         responseHeaders.set('X-Content-Type-Options', 'nosniff');
         responseHeaders.set('X-Download-Options', 'noopen');
