@@ -4,6 +4,17 @@
 export { scrapeYouTube, isYouTubeUrl, extractYouTubeId } from './scraper';
 
 /**
+ * YouTube Extractor
+ */
+export {
+    extractFormats,
+    extractMetadata,
+    type YtDlpFormat,
+    type YtDlpOutput,
+    type ExtractedMetadata,
+} from './extractor';
+
+/**
  * YouTube Storage
  */
 export {

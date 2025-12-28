@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isIP } from 'net';
 import dns from 'dns/promises';
 import { type PlatformId } from '@/core/config';
-import { httpGetRotatingHeaders as getRotatingHeaders } from '@/lib/http';
+import { httpGetHeaders } from '@/lib/http';
 
 // Allowed CDN domains for proxy (SSRF prevention)
 // Subdomains are automatically allowed (e.g., *.googlevideo.com)
@@ -232,7 +232,7 @@ export async function GET(request: NextRequest) {
                 'Cookie': 'HSID=AYUEBFWhl1zgagYbZ; SSID=AJpqiHjjTpf3Wq1OL; SID=g.a0004QhQ6Q49BdfuAbQVcn1l3ZpVtb14IyKU9O5PjqpMOT6VQJadqE-YQgVNJKoNGtSiIg9eCQACgYKAV8SARMSFQHGX2Miol4n7KEoMF4eQLOt45bLZRoVAUF8yKpBQXMrKWEzLHusr481aXMs0076; LOGIN_INFO=AFmmF2swRQIgU1faSsNJ7UcHMXtyeViEVhLSAo04U1lsXNOyCR_Ywj8CIQCD3j8akvfMnBz6DyY2Rivd8Mp0nvHSbWSyZzk0cEk4rA:QUQ3MjNmd2JkSkQzRGxtdV9ZWk5aSUdfd0JFNHNFXzhUcHc5cHFtclg5Q2NJQ1pwSmU1SkExRjNzRGZXU0dhdXU1WGFmbW1fNzdJcmZDS1ptWkVwbl9IZFllS0lxVGdMQlFIbkxsZi1GRXVtUElNOW1JY3NwMVc4ZkRLQVFnS3kyNzM4VENPWlp2Sk5vajc1N19wUlNsSVA3bHpXMkhSMEFR; PREF=tz=Asia.Jakarta',
             };
         } else {
-            headers = getRotatingHeaders({ platform, includeReferer: false });
+            headers = httpGetHeaders(platform);
         }
         headers['Accept-Encoding'] = 'identity';
 

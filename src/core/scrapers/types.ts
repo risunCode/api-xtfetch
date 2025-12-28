@@ -71,6 +71,7 @@ export interface ScraperData {
     engagement?: EngagementStats;
     usedCookie?: boolean;
     type?: 'video' | 'image' | 'slideshow' | 'story' | 'mixed';
+    groupName?: string;  // For Facebook/group posts
 }
 
 export interface ScraperResult {

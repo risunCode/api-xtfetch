@@ -6,6 +6,9 @@
 // Re-export types
 export * from './types';
 
+// Re-export utils
+export * from './utils';
+
 // Re-export scrapers
 export { scrapeFacebook } from '@/lib/services/facebook';
 export { scrapeInstagram } from '@/lib/services/instagram';

@@ -15,7 +15,7 @@ import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { DownloadResponse, MediaFormat, MediaData } from '@/lib/types';
 import { type PlatformId, platformGetReferer, platformGetDomainConfig } from '@/core/config';
-import { httpGetUserAgent, DESKTOP_USER_AGENT, httpRandomSleep } from '@/lib/http';
+import { httpGetUserAgent, UA_DESKTOP, httpRandomSleep } from '@/lib/http';
 import { ScraperErrorCode, ScraperResult, isRetryable, ERROR_MESSAGES } from '@/core/scrapers/types';
 import { sysConfigScraperMaxRetries, sysConfigScraperRetryDelay } from '@/core/config';
 import { logger } from '@/lib/services/shared/logger';
@@ -124,7 +124,7 @@ const keyCacheOrder: string[] = []; // Track insertion order for LRU eviction
 function getDerivedKey(salt: Buffer): Buffer {
     const encryptionKey = getEncryptionKey();
     const cacheKey = salt.toString('hex');
-    
+
     // Check cache first
     const cachedKey = keyCache.get(cacheKey);
     if (cachedKey) {
@@ -136,10 +136,10 @@ function getDerivedKey(salt: Buffer): Buffer {
         }
         return cachedKey;
     }
-    
+
     // Derive key using scrypt (expensive operation)
     const derivedKey = crypto.scryptSync(encryptionKey, salt, 32);
-    
+
     // Evict oldest entry if cache is full (LRU eviction)
     if (keyCache.size >= KEY_CACHE_MAX_SIZE) {
         const oldestKey = keyCacheOrder.shift();
@@ -147,11 +147,11 @@ function getDerivedKey(salt: Buffer): Buffer {
             keyCache.delete(oldestKey);
         }
     }
-    
+
     // Add to cache
     keyCache.set(cacheKey, derivedKey);
     keyCacheOrder.push(cacheKey);
-    
+
     return derivedKey;
 }
 
@@ -578,7 +578,7 @@ export const utilDedupeFormats = (f: MediaFormat[]) => f.filter((x, i, a) => i =
  * @param f - Array of media formats
  * @returns Deduplicated array
  */
-export const utilDedupeByQuality = (f: MediaFormat[]) => f.filter((x, i, a) => 
+export const utilDedupeByQuality = (f: MediaFormat[]) => f.filter((x, i, a) =>
     i === a.findIndex(y => y.quality === x.quality && y.type === x.type && y.itemId === x.itemId));
 
 /**
@@ -706,9 +706,9 @@ export async function utilFetchFilesize(url: string, platform: PlatformId, timeo
     try {
         const { httpHead } = await import('@/lib/http/client');
         const res = await httpHead(url, { platform, timeout });
-        
+
         if (res.status < 200 || res.status >= 400) return undefined;
-        
+
         const contentLength = res.headers['content-length'];
         if (contentLength) {
             const size = parseInt(contentLength, 10);
@@ -728,27 +728,27 @@ export async function utilFetchFilesize(url: string, platform: PlatformId, timeo
  * @returns Formats array with filesize populated where available
  */
 export async function utilFetchFilesizes(
-    formats: MediaFormat[], 
+    formats: MediaFormat[],
     platform: PlatformId,
     durationSec?: number
 ): Promise<MediaFormat[]> {
     // Fetch sizes in parallel with concurrency limit
     const BATCH_SIZE = 5;
     const results = [...formats];
-    
+
     for (let i = 0; i < results.length; i += BATCH_SIZE) {
         const batch = results.slice(i, i + BATCH_SIZE);
         const sizes = await Promise.all(
-            batch.map(f => utilFetchFilesize(f.url, platform, 5000))
+            batch.map(f => utilFetchFilesize(f.url, platform, 2000))
         );
-        
+
         sizes.forEach((size, idx) => {
             if (size) {
                 results[i + idx] = { ...results[i + idx], filesize: size };
             }
         });
     }
-    
+
     return results;
 }
 
@@ -791,10 +791,10 @@ export function formatSpeed(bytesPerSec: number): { mb: string; mbit: string } {
 export function formatParseFileSize(sizeStr: string): number | undefined {
     const match = sizeStr.match(/([\d.]+)\s*(KB|MB|GB)/i);
     if (!match) return undefined;
-    
+
     const num = parseFloat(match[1]);
     const unit = match[2].toUpperCase();
-    
+
     switch (unit) {
         case 'GB': return num * 1024 * 1024 * 1024;
         case 'MB': return num * 1024 * 1024;

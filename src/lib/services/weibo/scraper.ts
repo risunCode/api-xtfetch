@@ -8,7 +8,7 @@
 import * as cheerio from 'cheerio';
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
-import { httpGet, httpPost, DESKTOP_HEADERS } from '@/lib/http';
+import { httpGet, httpPost, httpGetHeaders } from '@/lib/http';
 import { cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
@@ -45,7 +45,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
 
     if (!cookie) return createError(ScraperErrorCode.COOKIE_REQUIRED);
 
-    const weiboHeaders = { ...DESKTOP_HEADERS, 'Cookie': cookie };
+    const weiboHeaders = httpGetHeaders('weibo', { cookie });
     const timeout = sysConfigScraperTimeout('weibo');
 
 
@@ -72,7 +72,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
                         Object.entries(playInfo.urls).forEach(([quality, videoUrl]) => {
                             if (videoUrl && typeof videoUrl === 'string') {
                                 const vUrl = videoUrl.startsWith('//') ? 'https:' + videoUrl : videoUrl;
-                            utilAddFormat(formats, quality.replace('mp4_', '').toUpperCase(), 'video', vUrl);
+                                utilAddFormat(formats, quality.replace('mp4_', '').toUpperCase(), 'video', vUrl);
                             }
                         });
                     }
@@ -80,7 +80,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             } catch { /* Component API failed */ }
 
             if (!formats.length) {
-                const pageRes = await httpGet(`https://weibo.com/tv/show/${oid}`, { headers: weiboHeaders, timeout });
+                const pageRes = await httpGet(`https://weibo.com/tv/show/${oid}`, 'weibo', { headers: weiboHeaders, timeout });
                 if (pageRes.status === 200) {
                     const html = pageRes.data;
                     const videoMatches = html.match(/f\.video\.weibocdn\.com[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/g);
@@ -95,7 +95,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             }
 
             if (!formats.length) {
-                cookiePoolMarkExpired('TV URL returned no formats').catch(() => {});
+                cookiePoolMarkExpired('TV URL returned no formats').catch(() => { });
                 return createError(ScraperErrorCode.COOKIE_EXPIRED);
             }
         }
@@ -104,7 +104,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         // Engagement for TV URLs
         if (isTvUrl && postId) {
             try {
-                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
+                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, 'weibo', { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
                 if (apiRes.status === 200) {
                     const text = typeof apiRes.data === 'string' ? apiRes.data : JSON.stringify(apiRes.data);
                     if (text.startsWith('{')) {
@@ -126,7 +126,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
             logger.complete('weibo', Date.now() - startTime);
             // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
             // Mark cookie success
-            cookiePoolMarkSuccess().catch(() => {});
+            cookiePoolMarkSuccess().catch(() => { });
             const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: 'video', usedCookie: true } };
             return result;
         }
@@ -135,7 +135,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         // Regular posts
         if (!formats.length && !isTvUrl) {
             const fetchUrl = url.includes('m.weibo.cn') ? url : url.replace('weibo.com', 'm.weibo.cn');
-            const res = await httpGet(fetchUrl, { platform: 'weibo', timeout });
+            const res = await httpGet(fetchUrl, 'weibo', { timeout });
             if (res.status === 200) {
                 const html = res.data;
                 const $ = cheerio.load(html);
@@ -194,7 +194,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         // Mobile API fallback
         if (!formats.length && postId && !isTvUrl) {
             try {
-                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
+                const apiRes = await httpGet(`${platformGetApiEndpoint('weibo', 'mobile')}?id=${postId}`, 'weibo', { headers: { Accept: 'application/json', Referer: 'https://m.weibo.cn/' } });
                 if (apiRes.status === 200) {
                     const text = typeof apiRes.data === 'string' ? apiRes.data : JSON.stringify(apiRes.data);
                     if (text.startsWith('{')) {
@@ -225,7 +225,7 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
         }
 
         if (!formats.length) {
-            cookiePoolMarkExpired('No formats found').catch(() => {});
+            cookiePoolMarkExpired('No formats found').catch(() => { });
             return createError(ScraperErrorCode.COOKIE_EXPIRED);
         }
 
@@ -238,12 +238,12 @@ export async function scrapeWeibo(url: string, options?: ScraperOptions): Promis
 
         // ✅ FIX: Mark usedCookie (Weibo always requires cookie)
         // Mark cookie success
-        cookiePoolMarkSuccess().catch(() => {});
+        cookiePoolMarkSuccess().catch(() => { });
         const result: ScraperResult = { success: true, data: { title: title.substring(0, 100), description: title, thumbnail, author, formats: unique, url, engagement: (engagement.likes || engagement.comments || engagement.shares) ? engagement : undefined, type: hasVideo && hasImage ? 'mixed' : (hasVideo ? 'video' : 'image'), usedCookie: true } };
         return result;
     } catch (e) {
         logger.error('weibo', e);
-        cookiePoolMarkError(e instanceof Error ? e.message : 'Failed to fetch').catch(() => {});
+        cookiePoolMarkError(e instanceof Error ? e.message : 'Failed to fetch').catch(() => { });
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Failed to fetch');
     }
 }

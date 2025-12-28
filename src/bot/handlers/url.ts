@@ -52,6 +52,9 @@ const MAX_URLS_DONATOR = 5;
 // Feature flag for queue-based processing
 const USE_QUEUE_PROCESSING = process.env.BOT_USE_QUEUE === 'true';
 
+// Timeout for sending media to prevent "Processing Stuck" bug
+const SEND_TIMEOUT_MS = 60000;
+
 function botUrlExtract(text: string): string | null {
     const matches = text.match(URL_REGEX);
     if (!matches) return null;
@@ -510,6 +513,11 @@ async function sendVideoDirectly(
                 .url('▶️ ' + (lang === 'id' ? 'Tonton' : 'Watch'), videoToSend.url)
                 .url('🔗 Original', originalUrl);
             
+            // Clean up processing message on error
+            if (processingMsgId) {
+                await deleteMessage(ctx, processingMsgId);
+            }
+            
             // Try to send thumbnail with buttons
             const thumbUrl = result.thumbnail;
             if (thumbUrl) {
@@ -551,6 +559,10 @@ async function sendVideoDirectly(
             return true;
         } catch (fallbackError) {
             logger.error('telegram', fallbackError, 'SEND_VIDEO_FALLBACK');
+            // Ensure processing message is cleaned up even if fallback fails
+            if (processingMsgId) {
+                await deleteMessage(ctx, processingMsgId);
+            }
             return false;
         }
     }
@@ -1043,7 +1055,28 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             if (result.success) {
                 // Pass processingMsgId to sendMediaByType - it will handle status updates and deletion
                 const visitorId = generateVisitorId();
-                const sent = await sendMediaByType(ctx, result, url, visitorId, processingMsgId);
+                
+                // Wrap sendMediaByType with timeout to prevent "Processing Stuck" bug
+                let sent = false;
+                try {
+                    sent = await Promise.race([
+                        sendMediaByType(ctx, result, url, visitorId, processingMsgId),
+                        new Promise<boolean>((_, reject) => 
+                            setTimeout(() => reject(new Error('SEND_TIMEOUT')), SEND_TIMEOUT_MS)
+                        )
+                    ]);
+                } catch (sendError) {
+                    const errorMsg = sendError instanceof Error && sendError.message === 'SEND_TIMEOUT'
+                        ? (lang === 'id' ? '⏱️ Timeout - server sibuk. Coba lagi nanti.' : '⏱️ Timeout - server busy. Try again later.')
+                        : (lang === 'id' ? '❌ Gagal mengirim media.' : '❌ Failed to send media.');
+                    
+                    if (processingMsgId) {
+                        await editToError(ctx, processingMsgId, errorMsg, url);
+                    } else {
+                        await ctx.reply(errorMsg, { reply_markup: errorKeyboard(url) });
+                    }
+                    sent = false;
+                }
                 
                 if (sent) {
                     successCount++;

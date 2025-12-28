@@ -2,11 +2,131 @@
  * Central URL Pipeline
  */
 
+import { createHash } from 'crypto';
 import { logger } from '@/lib/services/shared/logger';
 import { type PlatformId, platformDetect } from '@/core/config';
 import { httpResolveUrl, ResolveResult } from '@/lib/http';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLATFORM DETECTION CACHE (Memoization)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PLATFORM_CACHE_MAX_SIZE = 1000;
+const platformCache = new Map<string, PlatformId | null>();
+
+/**
+ * Memoized platform detection with LRU-style eviction
+ */
+function detectPlatformCached(url: string): PlatformId | null {
+  const cached = platformCache.get(url);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const result = platformDetect(url);
+
+  // Evict oldest entries if cache is full
+  if (platformCache.size >= PLATFORM_CACHE_MAX_SIZE) {
+    const firstKey = platformCache.keys().next().value;
+    if (firstKey) platformCache.delete(firstKey);
+  }
+
+  platformCache.set(url, result);
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// URL SANITIZATION (Security layer)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Security: Patterns that indicate malicious/internal URLs */
+const BLOCKED_PATTERNS = [
+  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.)/,  // Private IPs
+  /^localhost/i, /^0\.0\.0\.0/, /\.local$/i,                     // Localhost
+  /^file:/i, /^ftp:/i, /^javascript:/i, /^data:/i,               // Dangerous protocols
+  /^169\.254\./,                                                  // Link-local
+];
+
+/**
+ * Extract URL from garbage text
+ * ✅ "sampah https://fb.watch/abc" → "https://fb.watch/abc"
+ * ❌ "garbage.https://link.com" → null (must have space before http)
+ */
+export function urlExtract(input: string): string | null {
+  if (!input) return null;
+
+  const cleaned = input.replace(/[\r\n]+/g, ' ').trim();
+
+  // Check if input starts with http (clean URL)
+  if (/^https?:\/\//i.test(cleaned)) {
+    const match = cleaned.match(/^(https?:\/\/[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+)/i);
+    return match ? match[1].replace(/[,，。！!?？、；;：:]+$/, '').replace(/\/+$/, '') : null;
+  }
+
+  // Must have space before http (security: prevent garbage.https://evil.com)
+  const withSpace = cleaned.match(/(?:^|\s)(https?:\/\/[^\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+)/i);
+  if (withSpace) {
+    return withSpace[1].replace(/[,，。！!?？、；;：:]+$/, '').replace(/\/+$/, '');
+  }
+
+  return null;
+}
+
+/**
+ * Validate URL for security (SSRF prevention)
+ */
+export function urlValidate(url: string): { valid: boolean; error?: string } {
+  try {
+    const parsed = new URL(url);
+
+    // Protocol check
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { valid: false, error: `Blocked protocol: ${parsed.protocol}` };
+    }
+
+    // Check against blocked patterns
+    const hostname = parsed.hostname.toLowerCase();
+    for (const pattern of BLOCKED_PATTERNS) {
+      if (pattern.test(hostname) || pattern.test(url)) {
+        return { valid: false, error: 'Blocked: internal/malicious URL' };
+      }
+    }
+
+    return { valid: true };
+  } catch {
+    return { valid: false, error: 'Invalid URL format' };
+  }
+}
+
+/**
+ * Combined: Extract + Validate + Clean
+ * Main entry point for URL sanitization
+ */
+export function urlSanitize(input: string): {
+  url: string | null;
+  error?: string;
+  isValid: boolean;
+} {
+  // Step 1: Extract URL
+  const extracted = urlExtract(input);
+  if (!extracted) {
+    return { url: null, error: 'No valid URL found', isValid: false };
+  }
+
+  // Step 2: Validate
+  const validation = urlValidate(extracted);
+  if (!validation.valid) {
+    return { url: null, error: validation.error, isValid: false };
+  }
+
+  // Step 3: Clean tracking params
+  const cleaned = cleanTrackingParams(extracted);
+
+  return { url: cleaned, isValid: true };
+}
+
 export type ContentType = 'video' | 'reel' | 'story' | 'post' | 'image' | 'unknown';
+
 
 export interface UrlAssessment {
   isValid: boolean;
@@ -35,13 +155,13 @@ export interface UrlPipelineOptions {
   cookie?: string;
 }
 
-const SHORT_URL_PATTERNS: Record<string, RegExp> = {
+const SHORT_URL_PATTERNS: Readonly<Record<string, RegExp>> = Object.freeze({
   facebook: /fb\.watch|fb\.me|l\.facebook\.com|\/share\//i,
   instagram: /instagr\.am|ig\.me/i,
   twitter: /t\.co\//i,
   tiktok: /vm\.tiktok\.com|vt\.tiktok\.com/i,
   weibo: /t\.cn\//i,
-};
+});
 
 const CONTENT_ID_EXTRACTORS: Record<PlatformId, (url: string) => string | null> = {
   twitter: (url) => url.match(/status(?:es)?\/(\d+)/)?.[1] || null,
@@ -128,34 +248,40 @@ export function needsResolve(url: string, platform?: PlatformId): boolean {
 export function normalizeUrl(url: string): string {
   let n = url.trim();
   if (!/^https?:\/\//i.test(n)) n = 'https://' + n;
-  
+
   // NO subdomain conversion here!
   // Server handles redirect based on User-Agent from BrowserProfiles (UNIFIED)
   // m.facebook.com → request with desktop UA → Facebook redirects to web.facebook.com
-  
+
   return cleanTrackingParams(n);
 }
 
 export function cleanTrackingParams(url: string): string {
   try {
     const u = new URL(url);
-    ['fbclid','igshid','igsh','utm_source','utm_medium','utm_campaign','utm_term','utm_content','s','t','ref','ref_src','ref_url','__cft__','__tn__','wtsid','_rdr','rdid','share_url','app','mibextid','paipv','eav','sfnsn','extid','img_index'].forEach(p => u.searchParams.delete(p));
+    ['fbclid', 'igshid', 'igsh', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 's', 't', 'ref', 'ref_src', 'ref_url', '__cft__', '__tn__', 'wtsid', '_rdr', 'rdid', 'share_url', 'app', 'mibextid', 'paipv', 'eav', 'sfnsn', 'extid', 'img_index'].forEach(p => u.searchParams.delete(p));
     [...u.searchParams.keys()].filter(k => k.startsWith('__cft__')).forEach(k => u.searchParams.delete(k));
     return u.toString();
   } catch { return url.replace(/[&?](fbclid|igshid|igsh|utm_\w+|__cft__\[[^\]]*\]|__tn__|wtsid|_rdr|rdid|share_url|app|mibextid|paipv|eav|sfnsn|extid|img_index)=[^&]*/gi, '').replace(/&&+/g, '&').replace(/\?&/g, '?').replace(/[&?]$/g, ''); }
 }
 
+/**
+ * Generate SHA-256 hash of URL (truncated to 16 chars)
+ */
+export function hashUrl(url: string): string {
+  return createHash('sha256').update(url).digest('hex').slice(0, 16);
+}
+
+/**
+ * @deprecated Use hashUrl() instead. Kept for backward compatibility.
+ */
 export function hashString(str: string): string {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
+  return hashUrl(str);
 }
 
 export function generateCacheKeyFromUrl(platform: PlatformId, url: string): string {
   const cleanUrl = cleanTrackingParams(url);
-  const hash = hashString(cleanUrl);
+  const hash = hashUrl(cleanUrl);
   return `${platform}:${hash}`;
 }
 
@@ -186,7 +312,7 @@ export async function prepareUrl(rawUrl: string, options?: UrlPipelineOptions): 
   if (!inputUrl || !isValidUrl(inputUrl)) return createErrorResult(inputUrl, 'INVALID_URL', 'Invalid URL format');
 
   const normalizedUrl = normalizeUrl(inputUrl);
-  let platform = platformDetect(normalizedUrl);
+  let platform = detectPlatformCached(normalizedUrl);
   let resolvedUrl = normalizedUrl;
   let wasResolved = false;
   let redirectChain: string[] = [normalizedUrl];
@@ -197,7 +323,7 @@ export async function prepareUrl(rawUrl: string, options?: UrlPipelineOptions): 
     if (!r.error) { resolvedUrl = r.resolved; wasResolved = r.changed; redirectChain = r.redirectChain; }
   }
 
-  if (wasResolved) { const np = platformDetect(resolvedUrl); if (np) platform = np; }
+  if (wasResolved) { const np = detectPlatformCached(resolvedUrl); if (np) platform = np; }
   if (!platform) return createErrorResult(inputUrl, 'UNSUPPORTED_PLATFORM', 'Platform not supported', { normalizedUrl, resolvedUrl, wasResolved, redirectChain });
 
   const contentId = extractContentId(platform, resolvedUrl);
@@ -211,7 +337,7 @@ export function prepareUrlSync(rawUrl: string): UrlPipelineResult {
   const inputUrl = rawUrl.trim();
   if (!inputUrl || !isValidUrl(inputUrl)) return { ...createErrorResult(inputUrl, 'INVALID_URL', 'Invalid URL format'), wasResolved: false, redirectChain: [] };
   const normalizedUrl = normalizeUrl(inputUrl);
-  const platform = platformDetect(normalizedUrl);
+  const platform = detectPlatformCached(normalizedUrl);
   if (!platform) return { ...createErrorResult(inputUrl, 'UNSUPPORTED_PLATFORM', 'Platform not supported', { normalizedUrl }), wasResolved: false, redirectChain: [normalizedUrl] };
   const contentId = extractContentId(platform, normalizedUrl);
   const cacheKey = generateCacheKeyFromUrl(platform, normalizedUrl);

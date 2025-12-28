@@ -64,10 +64,6 @@ export function optimizeCdnUrl(url: string): string {
         VIDEO_CDN
     );
     
-    if (replaced !== url) {
-        console.log(`[FB.CDN] Redirected to video.xx (with audio)`);
-    }
-    
     return replaced;
 }
 
@@ -78,10 +74,4 @@ export function optimizeUrls<T extends { url: string; _priority?: number }>(form
         const scoreB = (b._priority || 0) + getCdnInfo(b.url).score;
         return scoreB - scoreA;
     });
-}
-
-// Log CDN selection for debugging
-export function logCdnSelection(url: string): void {
-    const info = getCdnInfo(url);
-    console.log(`[FB.CDN] Selected: ${info.location} (${info.region}) - Score: ${info.score}`);
 }

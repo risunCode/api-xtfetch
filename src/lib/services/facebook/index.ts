@@ -23,6 +23,7 @@ export interface FbMetadata {
     description?: string;
     timestamp?: string;
     engagement?: EngagementStats;
+    groupName?: string;  // For group posts
 }
 
 export type FbContentType = 'video' | 'reel' | 'story' | 'post' | 'group' | 'photo';

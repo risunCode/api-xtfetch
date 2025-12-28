@@ -6,3 +6,5 @@ export * from './content-validator';
 export * from './engagement-parser';
 export * from './error-detector';
 export * from './format-builder';
+export * from './utils';
+export * from './patterns';

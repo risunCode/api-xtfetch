@@ -18,6 +18,9 @@ export const QUEUE_CONFIG = {
     /** Worker concurrency (simultaneous jobs) */
     CONCURRENCY: 10,
 
+    /** Maximum queue depth before rejecting new jobs */
+    MAX_QUEUE_DEPTH: 100,
+
     /** Rate limiting for the queue */
     RATE_LIMIT: {
         /** Max jobs per duration */

@@ -24,6 +24,10 @@ export interface BotMetrics {
   queuedJobs: number;
   activeWorkers: number;
   lastUpdated: Date;
+  // Error tracking metrics
+  errorsByType: Record<string, number>;
+  queueDepthHistory: number[];
+  peakQueueDepth: number;
 }
 
 export interface HealthStatus {
@@ -59,6 +63,10 @@ const metrics: BotMetrics = {
   queuedJobs: 0,
   activeWorkers: 0,
   lastUpdated: new Date(),
+  // New metrics
+  errorsByType: {},
+  queueDepthHistory: [],
+  peakQueueDepth: 0,
 };
 
 // Processing time samples for rolling average
@@ -144,6 +152,36 @@ export function recordDownloadSuccess(processingTimeMs: number): void {
 export function recordDownloadFailure(): void {
   metrics.downloadsFailed++;
   metrics.lastUpdated = new Date();
+}
+
+/**
+ * Record error by type for tracking error patterns
+ */
+export function recordErrorByType(errorType: string): void {
+  if (!metrics.errorsByType) {
+    metrics.errorsByType = {};
+  }
+  metrics.errorsByType[errorType] = (metrics.errorsByType[errorType] || 0) + 1;
+}
+
+/**
+ * Record queue depth for tracking queue patterns
+ */
+export function recordQueueDepth(depth: number): void {
+  if (!metrics.queueDepthHistory) {
+    metrics.queueDepthHistory = [];
+  }
+  metrics.queueDepthHistory.push(depth);
+  
+  // Keep last 100 samples
+  if (metrics.queueDepthHistory.length > 100) {
+    metrics.queueDepthHistory.shift();
+  }
+  
+  // Track peak
+  if (!metrics.peakQueueDepth || depth > metrics.peakQueueDepth) {
+    metrics.peakQueueDepth = depth;
+  }
 }
 
 /**
@@ -276,6 +314,8 @@ export default {
   logMemoryStatus,
   recordDownloadSuccess,
   recordDownloadFailure,
+  recordErrorByType,
+  recordQueueDepth,
   updateQueueMetrics,
   getMetrics,
   getSuccessRate,

@@ -3,6 +3,12 @@
  */
 
 export {
+  // URL Sanitization (NEW - Security)
+  urlSanitize,
+  urlExtract,
+  urlValidate,
+
+  // Pipeline functions
   prepareUrl,
   prepareUrlSync,
   needsResolve,
@@ -13,6 +19,8 @@ export {
   mayRequireCookie,
   generateCacheKey,
   isValidUrl,
+
+  // Types
   type ContentType,
   type UrlAssessment,
   type UrlPipelineResult,

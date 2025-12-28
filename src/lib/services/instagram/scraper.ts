@@ -5,15 +5,21 @@
  * NOTE: Cache is handled at the route level (lib/cache.ts), not in scrapers.
  */
 
-import { MediaFormat } from '@/lib/types';
-import { utilAddFormat, utilDecodeUrl } from '@/lib/utils';
-import { httpGet, INSTAGRAM_HEADERS } from '@/lib/http';
+import { httpGet, httpGetHeaders } from '@/lib/http';
 import { cookieParse, cookiePoolMarkSuccess, cookiePoolMarkError, cookiePoolMarkExpired } from '@/lib/cookies';
 import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
-import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
+import { createError, ScraperErrorCode, parseJson, type ScraperResult, type ScraperOptions } from '@/core/scrapers';
 import { logger } from '../shared/logger';
-
-type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
+import { PATTERNS } from '../shared/patterns';
+import {
+    GraphQLMedia,
+    StoryItem,
+    extractFromGraphQL,
+    extractFromEmbed,
+    extractFromStories,
+    getContentType,
+    generateTitle,
+} from './extractor';
 
 type ContentType = 'post' | 'reel' | 'tv' | 'story';
 const GRAPHQL_DOC_ID = '8845758582119845';
@@ -26,104 +32,85 @@ function detectContentType(url: string): ContentType {
 }
 
 function extractShortcode(url: string): string | null {
-    const match = url.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+    const match = url.match(PATTERNS.instagram.shortcode);
     return match ? match[1] : null;
 }
 
 function extractStoryInfo(url: string): { username: string; storyId: string } | null {
-    const match = url.match(/\/stories\/([^/]+)\/(\d+)/);
+    const match = url.match(PATTERNS.instagram.storyInfo);
     return match ? { username: match[1], storyId: match[2] } : null;
-}
-
-interface GraphQLMedia {
-    __typename: string; id: string; shortcode: string; display_url: string; is_video: boolean;
-    video_url?: string; owner?: { username: string; full_name?: string; id: string };
-    edge_media_to_caption?: { edges: Array<{ node: { text: string } }> };
-    edge_sidecar_to_children?: { edges: Array<{ node: GraphQLMediaNode }> };
-    display_resources?: Array<{ src: string; config_width: number }>;
-    taken_at_timestamp?: number; edge_media_preview_like?: { count: number };
-    edge_media_to_comment?: { count: number }; video_view_count?: number;
-}
-
-interface GraphQLMediaNode {
-    id: string; is_video: boolean; video_url?: string; display_url: string;
-    display_resources?: Array<{ src: string; config_width: number }>;
 }
 
 async function fetchGraphQL(shortcode: string, cookie?: string): Promise<{ media: GraphQLMedia | null; error?: string }> {
     const variables = JSON.stringify({ shortcode, fetch_tagged_user_count: null, hoisted_comment_id: null, hoisted_reply_id: null });
     const url = `https://www.instagram.com/graphql/query/?doc_id=${GRAPHQL_DOC_ID}&variables=${encodeURIComponent(variables)}`;
     const timeout = sysConfigScraperTimeout('instagram');
-    
+
     try {
-        const res = await httpGet(url, { 
-            headers: cookie ? { ...INSTAGRAM_HEADERS, Cookie: cookie } : INSTAGRAM_HEADERS,
-            timeout 
+        const res = await httpGet(url, 'instagram', {
+            headers: httpGetHeaders('instagram', { cookie }),
+            timeout
         });
         if (res.status !== 200) return { media: null, error: `HTTP ${res.status}` };
-        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-        return { media: data.data?.xdt_shortcode_media || null };
+        const data = parseJson<{ data?: { xdt_shortcode_media?: GraphQLMedia } }>(res.data);
+        return { media: data?.data?.xdt_shortcode_media || null };
     } catch (e) {
         return { media: null, error: e instanceof Error ? e.message : 'Fetch failed' };
     }
 }
 
-function parseGraphQLMedia(media: GraphQLMedia, shortcode: string): ScraperResult {
-    const formats: MediaFormat[] = [];
-    const author = media.owner?.username || '';
-    const authorName = media.owner?.full_name || '';
-    const caption = media.edge_media_to_caption?.edges?.[0]?.node?.text || '';
-    const title = caption ? (caption.length > 80 ? caption.substring(0, 80) + '...' : caption) : 'Instagram Post';
-    let thumbnail = media.display_url || '';
-    
-    const postedAt = media.taken_at_timestamp ? new Date(media.taken_at_timestamp * 1000).toISOString() : undefined;
-    const engagement: EngagementStats = { likes: media.edge_media_preview_like?.count || 0, comments: media.edge_media_to_comment?.count || 0, views: media.video_view_count || 0 };
-    
-    if (media.edge_sidecar_to_children?.edges) {
-        media.edge_sidecar_to_children.edges.forEach((edge, i) => {
-            const node = edge.node;
-            const itemId = node.id || `slide-${i}`;
-            if (node.is_video && node.video_url) {
-                utilAddFormat(formats, `Video ${i + 1}`, 'video', node.video_url, { itemId, thumbnail: node.display_url, filename: `${author}_slide_${i + 1}` });
-            } else {
-                const bestUrl = node.display_resources?.length ? node.display_resources[node.display_resources.length - 1].src : node.display_url;
-                utilAddFormat(formats, `Image ${i + 1}`, 'image', bestUrl, { itemId, thumbnail: node.display_url, filename: `${author}_slide_${i + 1}` });
-            }
-        });
-        if (!thumbnail && media.edge_sidecar_to_children.edges[0]?.node?.display_url) thumbnail = media.edge_sidecar_to_children.edges[0].node.display_url;
-    } else if (media.is_video && media.video_url) {
-        utilAddFormat(formats, 'Video', 'video', media.video_url, { itemId: media.id, thumbnail: media.display_url });
-    } else if (media.display_url) {
-        const bestUrl = media.display_resources?.length ? media.display_resources[media.display_resources.length - 1].src : media.display_url;
-        utilAddFormat(formats, 'Original', 'image', bestUrl, { itemId: media.id, thumbnail: media.display_url });
+function buildGraphQLResult(media: GraphQLMedia, shortcode: string, usedCookie: boolean): ScraperResult {
+    const { formats, thumbnail, metadata } = extractFromGraphQL(media, shortcode);
+
+    if (formats.length === 0) {
+        return createError(ScraperErrorCode.NO_MEDIA, 'No media found in response');
     }
-    
-    if (formats.length === 0) return createError(ScraperErrorCode.NO_MEDIA, 'No media found in response');
-    
-    const hasVideo = formats.some(f => f.type === 'video');
-    const isCarousel = formats.length > 1;
-    const type = isCarousel ? 'mixed' : (hasVideo ? 'video' : 'image');
-    
-    return { success: true, data: { title, thumbnail, author: author ? `@${author}` : '', authorName, description: caption, postedAt, engagement: (engagement.likes || engagement.comments || engagement.views) ? engagement : undefined, formats, url: `https://www.instagram.com/p/${shortcode}/`, type, usedCookie: false } };
+
+    const title = generateTitle(metadata.caption);
+    const type = getContentType(formats);
+
+    return {
+        success: true,
+        data: {
+            title,
+            thumbnail,
+            author: metadata.author ? `@${metadata.author}` : '',
+            authorName: metadata.authorName,
+            description: metadata.caption,
+            postedAt: metadata.postedAt,
+            engagement: metadata.engagement,
+            formats,
+            url: `https://www.instagram.com/p/${shortcode}/`,
+            type,
+            usedCookie,
+        },
+    };
 }
 
 async function fetchEmbed(shortcode: string): Promise<ScraperResult> {
     const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
     try {
-        const res = await httpGet(embedUrl, { headers: INSTAGRAM_HEADERS });
+        const res = await httpGet(embedUrl, 'instagram', { headers: httpGetHeaders('instagram') });
         if (res.status !== 200) return createError(ScraperErrorCode.API_ERROR, `Embed HTTP ${res.status}`);
         const html = res.data;
         if (html.length < 1000) return createError(ScraperErrorCode.NO_MEDIA, 'Empty embed response');
-        
-        const formats: MediaFormat[] = [];
-        let thumbnail = '';
-        const videoMatch = html.match(/"video_url":"([^"]+)"/);
-        if (videoMatch) utilAddFormat(formats, 'Video', 'video', utilDecodeUrl(videoMatch[1]), { itemId: 'video-main' });
-        const imgMatch = html.match(/"display_url":"([^"]+)"/);
-        if (imgMatch) { thumbnail = utilDecodeUrl(imgMatch[1]); if (!formats.length) utilAddFormat(formats, 'Original', 'image', thumbnail, { itemId: 'image-main', thumbnail }); }
-        if (formats.length === 0) return createError(ScraperErrorCode.NO_MEDIA, 'No media in embed');
-        const authorMatch = html.match(/"owner":\{"username":"([^"]+)"/);
-        return { success: true, data: { title: 'Instagram Post', thumbnail, author: authorMatch ? `@${authorMatch[1]}` : '', formats, url: `https://www.instagram.com/p/${shortcode}/` } };
+
+        const { formats, thumbnail, author } = extractFromEmbed(html);
+
+        if (formats.length === 0) {
+            return createError(ScraperErrorCode.NO_MEDIA, 'No media in embed');
+        }
+
+        return {
+            success: true,
+            data: {
+                title: 'Instagram Post',
+                thumbnail,
+                author: author ? `@${author}` : '',
+                formats,
+                url: `https://www.instagram.com/p/${shortcode}/`,
+            },
+        };
     } catch (e) {
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Embed failed');
     }
@@ -133,75 +120,62 @@ async function getUserId(username: string, cookie: string): Promise<string | nul
     const url = `https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`;
     const timeout = sysConfigScraperTimeout('instagram');
     try {
-        const res = await httpGet(url, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie }, timeout });
+        const res = await httpGet(url, 'instagram', { headers: httpGetHeaders('instagram', { cookie }), timeout });
         if (res.status !== 200) return null;
-        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        const data = parseJson<{ data?: { user?: { id: string } } }>(res.data);
         return data?.data?.user?.id || null;
     } catch { return null; }
 }
-
-interface StoryItem { pk: string; media_type: number; video_versions?: Array<{ url: string; width: number }>; image_versions2?: { candidates: Array<{ url: string; width: number }> } }
 
 async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult> {
     const info = extractStoryInfo(url);
     if (!info) return createError(ScraperErrorCode.INVALID_URL, 'Invalid story URL');
     const { username, storyId } = info;
     if (!cookie) return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Stories require login. Please provide a cookie.');
-    
+
     try {
         const userId = await getUserId(username, cookie);
-        // Better error detection for cookie issues vs user not found
         if (!userId) {
-            cookiePoolMarkExpired('User ID fetch failed - cookie may be expired').catch(() => {});
+            cookiePoolMarkExpired('User ID fetch failed - cookie may be expired').catch(() => { });
             return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie may be expired or user not found. Please update your cookie.');
         }
-        
+
         const apiUrl = `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${userId}`;
         const timeout = sysConfigScraperTimeout('instagram');
-        const res = await httpGet(apiUrl, { headers: { ...INSTAGRAM_HEADERS, Cookie: cookie }, timeout });
+        const res = await httpGet(apiUrl, 'instagram', { headers: httpGetHeaders('instagram', { cookie }), timeout });
+
         if (res.status === 401 || res.status === 403) {
-            cookiePoolMarkExpired('HTTP 401/403 - cookie expired').catch(() => {});
+            cookiePoolMarkExpired('HTTP 401/403 - cookie expired').catch(() => { });
             return createError(ScraperErrorCode.COOKIE_EXPIRED, 'Cookie expired. Please update your cookie.');
         }
         if (res.status !== 200) return createError(ScraperErrorCode.API_ERROR, `Story API error: ${res.status}`);
-        
-        const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+
+        const data = parseJson<{ reels_media?: Array<{ items?: StoryItem[] }> }>(res.data);
         const items: StoryItem[] = data?.reels_media?.[0]?.items || [];
         if (items.length === 0) return createError(ScraperErrorCode.NOT_FOUND, 'No stories available (may have expired)');
-        
-        const targetItem = items.find(item => item.pk === storyId) || items[0];
-        const formats: MediaFormat[] = [];
-        let thumbnail = '';
-        
-        if (targetItem.media_type === 2 && targetItem.video_versions?.length) {
-            const sorted = [...targetItem.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
-            if (sorted[0]?.url) utilAddFormat(formats, 'HD Video', 'video', sorted[0].url, { itemId: `story-${targetItem.pk}` });
-            if (targetItem.image_versions2?.candidates?.length) thumbnail = targetItem.image_versions2.candidates[0].url;
-        } else if (targetItem.image_versions2?.candidates?.length) {
-            const sorted = [...targetItem.image_versions2.candidates].sort((a, b) => (b.width || 0) - (a.width || 0));
-            if (sorted[0]?.url) { thumbnail = sorted[0].url; utilAddFormat(formats, 'Original', 'image', sorted[0].url, { itemId: `story-${targetItem.pk}`, thumbnail }); }
+
+        const { formats, thumbnail } = extractFromStories(items, storyId);
+
+        if (formats.length === 0) {
+            return createError(ScraperErrorCode.NO_MEDIA, 'Could not extract story media');
         }
-        
-        if (items.length > 1) {
-            items.forEach((item, idx) => {
-                if (item.pk === targetItem.pk) return;
-                if (item.media_type === 2 && item.video_versions?.length) {
-                    const sorted = [...item.video_versions].sort((a, b) => (b.width || 0) - (a.width || 0));
-                    if (sorted[0]?.url) utilAddFormat(formats, `Story ${idx + 1} (Video)`, 'video', sorted[0].url, { itemId: `story-${item.pk}`, thumbnail: item.image_versions2?.candidates?.[0]?.url });
-                } else if (item.image_versions2?.candidates?.length) {
-                    const sorted = [...item.image_versions2.candidates].sort((a, b) => (b.width || 0) - (a.width || 0));
-                    if (sorted[0]?.url) utilAddFormat(formats, `Story ${idx + 1} (Image)`, 'image', sorted[0].url, { itemId: `story-${item.pk}`, thumbnail: sorted[0].url });
-                }
-            });
-        }
-        
-        if (formats.length === 0) return createError(ScraperErrorCode.NO_MEDIA, 'Could not extract story media');
-        // ✅ FIX: Mark usedCookie for stories (always uses cookie)
-        // Mark cookie success for stories
-        cookiePoolMarkSuccess().catch(() => {});
-        return { success: true, data: { title: `${username}'s Story`, thumbnail, author: `@${username}`, description: `${items.length} story${items.length > 1 ? 's' : ''} available`, formats, url, usedCookie: true } };
+
+        cookiePoolMarkSuccess().catch(() => { });
+
+        return {
+            success: true,
+            data: {
+                title: `${username}'s Story`,
+                thumbnail,
+                author: `@${username}`,
+                description: `${items.length} story${items.length > 1 ? 's' : ''} available`,
+                formats,
+                url,
+                usedCookie: true,
+            },
+        };
     } catch (e) {
-        cookiePoolMarkError(e instanceof Error ? e.message : 'Story fetch failed').catch(() => {});
+        cookiePoolMarkError(e instanceof Error ? e.message : 'Story fetch failed').catch(() => { });
         return createError(ScraperErrorCode.NETWORK_ERROR, e instanceof Error ? e.message : 'Story fetch failed');
     }
 }
@@ -209,47 +183,39 @@ async function scrapeStory(url: string, cookie?: string): Promise<ScraperResult>
 export async function scrapeInstagram(url: string, options?: ScraperOptions): Promise<ScraperResult> {
     const { cookie: rawCookie } = options || {};
     const cookie = rawCookie ? cookieParse(rawCookie, 'instagram') || undefined : undefined;
-    
+
     if (!platformMatches(url, 'instagram')) return createError(ScraperErrorCode.INVALID_URL, 'Invalid Instagram URL');
-    
+
     const contentType = detectContentType(url);
     logger.type('instagram', contentType);
-    
+
     if (contentType === 'story') return scrapeStory(url, cookie);
-    
+
     const shortcode = extractShortcode(url);
     if (!shortcode) return createError(ScraperErrorCode.INVALID_URL, 'Could not extract post ID from URL');
-    
+
     logger.debug('instagram', 'GraphQL probe (no cookie)...');
     const { media, error: gqlError } = await fetchGraphQL(shortcode);
     if (media) {
-        const result = parseGraphQLMedia(media, shortcode);
-        return result;
+        return buildGraphQLResult(media, shortcode, false);
     }
-    
+
     if (cookie) {
         logger.debug('instagram', 'GraphQL retry (with cookie)...');
         const { media: authMedia } = await fetchGraphQL(shortcode, cookie);
         if (authMedia) {
-            const result = parseGraphQLMedia(authMedia, shortcode);
-            if (result.success) {
-                // ✅ FIX: Mark usedCookie when cookie was used for auth
-                result.data!.usedCookie = true;
-                // Mark cookie success
-                cookiePoolMarkSuccess().catch(() => {});
-            }
-            return result;
+            cookiePoolMarkSuccess().catch(() => { });
+            return buildGraphQLResult(authMedia, shortcode, true);
         }
-        // Cookie didn't help - mark error
-        cookiePoolMarkError('GraphQL failed with cookie').catch(() => {});
+        cookiePoolMarkError('GraphQL failed with cookie').catch(() => { });
         return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Post is private or has been deleted');
     }
-    
+
     if (gqlError && (gqlError.includes('HTTP 4') || gqlError.includes('HTTP 5'))) {
         logger.debug('instagram', 'API error, trying embed fallback...');
         const embedResult = await fetchEmbed(shortcode);
         if (embedResult.success) return embedResult;
     }
-    
+
     return createError(ScraperErrorCode.COOKIE_REQUIRED, 'This post requires login. Please provide a cookie.');
 }

@@ -8,10 +8,11 @@
  * @module bot
  */
 
-import { Bot, session, webhookCallback, MemorySessionStorage } from 'grammy';
+import { Bot, session, webhookCallback, MemorySessionStorage, type StorageAdapter } from 'grammy';
 import { NextRequest, NextResponse } from 'next/server';
 
 import type { BotContext, SessionData } from './types';
+import { redis } from '@/lib/database';
 import { TELEGRAM_BOT_TOKEN, botConfigIsValid } from './config';
 import { authMiddleware, rateLimitMiddleware, maintenanceMiddleware } from './middleware';
 import { registerUrlHandler, registerCallbackHandler } from './handlers';
@@ -28,6 +29,40 @@ import {
 import { adminComposer } from './commands/admin';
 import { initWorker, closeWorker, isQueueAvailable } from './queue';
 import { startMonitoring, stopMonitoring } from './utils/monitoring';
+
+// ============================================================================
+// Redis Session Storage Adapter
+// ============================================================================
+
+/**
+ * Create Redis-backed session storage adapter
+ * Falls back gracefully if Redis is unavailable
+ */
+function createRedisSessionStorage<T>(): StorageAdapter<T> {
+    return {
+        async read(key: string): Promise<T | undefined> {
+            if (!redis) return undefined;
+            try {
+                const data = await redis.get(`bot:session:${key}`);
+                return data ? (typeof data === 'string' ? JSON.parse(data) : data as T) : undefined;
+            } catch {
+                return undefined;
+            }
+        },
+        async write(key: string, value: T): Promise<void> {
+            if (!redis) return;
+            try {
+                await redis.set(`bot:session:${key}`, JSON.stringify(value), { ex: 3600 });
+            } catch {}
+        },
+        async delete(key: string): Promise<void> {
+            if (!redis) return;
+            try {
+                await redis.del(`bot:session:${key}`);
+            } catch {}
+        },
+    };
+}
 
 // ============================================================================
 // Bot Instance (Singleton)
@@ -75,10 +110,10 @@ function getBotInstance(): Bot<BotContext> {
             await next();
         });
         
-        // 2. Setup session with TTL (1 hour)
+        // 2. Setup session with TTL (1 hour) - Redis-backed with memory fallback
         botInstance.use(session({
             initial: (): SessionData => ({}),
-            storage: new MemorySessionStorage<SessionData>(3600), // 1 hour TTL
+            storage: redis ? createRedisSessionStorage<SessionData>() : new MemorySessionStorage<SessionData>(3600),
         }));
         
         // 3. Cleanup stale pendingDownload data

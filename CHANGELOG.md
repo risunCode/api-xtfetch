@@ -2,7 +2,74 @@
 
 All notable changes to the DownAria Backend API will be documented in this file.
 
-## [December 28, 2025] - Bot Refactor Phase 1-3: Complete Implementation
+## [2.0.0] - December 28, 2025 - Major Bot Reliability & Multi-User Fixes
+
+### 🚨 CRITICAL BUG FIXES
+
+#### FATAL: "Processing Stuck" Bug Fixed
+- **Problem**: Bot sent "⏳ Processing TikTok..." but media NEVER arrived, making bot unusable
+- **Root Cause**: Silent failures in `sendVideoDirectly()` catch blocks, no timeout wrapper
+- **Fix**: Added 60-second timeout wrapper with `Promise.race()` around `sendMediaByType()`
+- **Fix**: Proper error cleanup in all catch blocks - processingMsgId always cleaned up
+
+#### Memory Session Storage Leak Fixed
+- **Problem**: `MemorySessionStorage` caused OOM with 1000+ concurrent users
+- **Fix**: Replaced with Redis-backed session storage using existing Upstash Redis
+- **Fallback**: Gracefully falls back to memory storage if Redis unavailable
+
+#### Rate Limit Race Condition Fixed
+- **Problem**: Non-atomic check-then-update allowed users to bypass daily limits at midnight
+- **Fix**: Atomic Redis lock using `SET NX` with 5-second expiry
+- **Fix**: Proper lock release in `finally` block
+
+#### Request Deduplication Added
+- **Problem**: User spam same URL → processed multiple times, wasted resources
+- **Fix**: Redis-based deduplication with 30-second TTL
+- **Functions**: `isDuplicateRequest()`, `clearDuplicateRequest()`
+
+### 🔧 QUEUE & WORKER IMPROVEMENTS
+
+#### Circular Dependency Fixed
+- **Problem**: Dynamic imports in worker caused race conditions during startup
+- **Fix**: Dependency injection pattern with `setBotApi()` function
+
+#### Backpressure Handling Added
+- **Problem**: Queue accepted unlimited jobs, could overflow on traffic spikes
+- **Fix**: `addJobWithBackpressure()` rejects jobs when queue depth > 100
+- **Config**: `MAX_QUEUE_DEPTH: 100` in queue config
+
+#### Graceful Shutdown Added
+- **Problem**: In-flight jobs lost on deploy, stuck in "active" state
+- **Fix**: `gracefulShutdown()` pauses worker, waits 30s for active jobs, then closes
+
+### 📊 MONITORING & ERROR HANDLING
+
+#### Silent Error Handling Fixed
+- **Problem**: Empty `.catch(() => {})` blocks swallowed errors silently
+- **Fix**: All catch blocks now log with `console.warn('[Media] Operation failed:', ...)`
+
+#### Enhanced Metrics Added
+- `errorsByType: Record<string, number>` - Track errors by category
+- `queueDepthHistory: number[]` - Rolling history (100 samples)
+- `peakQueueDepth: number` - Maximum observed queue depth
+- New functions: `recordErrorByType()`, `recordQueueDepth()`
+
+### 📁 FILES CHANGED
+- `src/bot/index.ts` - Redis session storage, StorageAdapter
+- `src/bot/handlers/url.ts` - Timeout wrapper, SEND_TIMEOUT_MS constant
+- `src/bot/middleware/rateLimit.ts` - Atomic reset, deduplication functions
+- `src/bot/queue/worker.ts` - DI pattern, gracefulShutdown()
+- `src/bot/queue/downloadQueue.ts` - addJobWithBackpressure(), MAX_QUEUE_DEPTH
+- `src/bot/queue/config.ts` - MAX_QUEUE_DEPTH constant
+- `src/bot/utils/media.ts` - Proper error logging, cleanup on all paths
+- `src/bot/utils/monitoring.ts` - New metrics fields and functions
+
+### ⚠️ BREAKING CHANGES
+- None - all changes are backward compatible
+
+---
+
+## [1.9.0] - December 28, 2025 - Bot Refactor Phase 1-3: Complete Implementation
 
 ### Phase 1: Memory Management
 - **Session TTL** - Added 1 hour TTL using MemorySessionStorage (prevents memory accumulation)

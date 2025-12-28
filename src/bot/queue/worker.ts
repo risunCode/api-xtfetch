@@ -9,6 +9,7 @@
  */
 
 import { Worker, Job } from 'bullmq';
+import type { Api } from 'grammy';
 
 import { QUEUE_CONFIG } from './config';
 import type { DownloadJobData } from './index';
@@ -16,17 +17,33 @@ import { sendMedia } from '../utils/media';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
 
 // ============================================================================
-// BOT INSTANCE ACCESS
+// BOT INSTANCE ACCESS (Dependency Injection)
 // ============================================================================
 
+let botApiInstance: Api | null = null;
+
 /**
- * Get bot instance dynamically to avoid circular dependency
+ * Set the bot API instance for dependency injection
+ * Call this during bot initialization to avoid circular dependencies
+ */
+export function setBotApi(api: Api): void {
+    botApiInstance = api;
+}
+
+/**
+ * Get bot instance - uses injected instance or falls back to dynamic import
  * The bot is initialized in src/bot/index.ts
  */
-async function getBotApi() {
-    // Dynamic import to avoid circular dependency
+async function getBotApi(): Promise<Api> {
+    if (botApiInstance) {
+        return botApiInstance;
+    }
+    // Fallback to dynamic import if not set
     const { bot } = await import('../index');
-    return bot?.api;
+    if (!bot?.api) {
+        throw new Error('Bot API not available');
+    }
+    return bot.api;
 }
 
 /**
@@ -237,6 +254,31 @@ export async function closeWorker(): Promise<void> {
         downloadWorker = null;
         console.log('[Bot.Worker] Worker closed');
     }
+}
+
+/**
+ * Graceful shutdown handler
+ * Pauses worker, waits for active jobs, then closes
+ */
+export async function gracefulShutdown(): Promise<void> {
+    console.log('[Bot.Worker] Graceful shutdown initiated...');
+    
+    if (downloadWorker) {
+        // Stop accepting new jobs
+        await downloadWorker.pause();
+        
+        // Wait for active jobs (max 30s)
+        const timeout = setTimeout(() => {
+            console.log('[Bot.Worker] Shutdown timeout, forcing close');
+        }, 30000);
+        
+        await downloadWorker.close();
+        clearTimeout(timeout);
+        
+        downloadWorker = null;
+    }
+    
+    console.log('[Bot.Worker] Worker shutdown complete');
 }
 
 // ============================================================================

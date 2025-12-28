@@ -30,6 +30,9 @@ const VIP_COOLDOWN_MS = 0;
 /** Free tier cooldown in seconds (for display) */
 const FREE_COOLDOWN_SECONDS = FREE_COOLDOWN_MS / 1000;
 
+/** Deduplication TTL in seconds */
+const DEDUP_TTL_SECONDS = 30;
+
 // ============================================================================
 // WIB TIMEZONE HELPERS
 // ============================================================================
@@ -126,6 +129,41 @@ async function botRateLimitResetDaily(telegramId: number): Promise<void> {
 }
 
 /**
+ * Atomic check and reset daily downloads using Redis lock
+ * Prevents race condition when multiple requests arrive simultaneously at midnight
+ */
+async function atomicCheckAndReset(telegramId: number, user: BotUser): Promise<void> {
+    if (!redis) {
+        // Fallback to non-atomic if no Redis
+        if (botRateLimitNeedsReset(user)) {
+            await botRateLimitResetDaily(telegramId);
+            user.daily_downloads = 0;
+        }
+        return;
+    }
+
+    const lockKey = `bot:reset_lock:${telegramId}`;
+    
+    // Try to acquire lock (expires in 5 seconds)
+    const acquired = await redis.set(lockKey, '1', { nx: true, ex: 5 });
+    
+    if (!acquired) {
+        // Another request is handling reset, wait briefly and refresh user data
+        await new Promise(r => setTimeout(r, 100));
+        return;
+    }
+    
+    try {
+        if (botRateLimitNeedsReset(user)) {
+            await botRateLimitResetDaily(telegramId);
+            user.daily_downloads = 0;
+        }
+    } finally {
+        await redis.del(lockKey).catch(() => {});
+    }
+}
+
+/**
  * Get cooldown remaining (seconds) for user
  * Returns 0 if no cooldown active
  */
@@ -163,6 +201,51 @@ async function botRateLimitIncrementDownloads(telegramId: number): Promise<void>
     if (error) {
         logger.error('telegram', error, 'INCREMENT_DOWNLOADS');
     }
+}
+
+// ============================================================================
+// REQUEST DEDUPLICATION
+// ============================================================================
+
+/**
+ * Check if this is a duplicate request (same user + URL within TTL)
+ * Returns true if duplicate, false if new request
+ */
+export async function isDuplicateRequest(userId: number, url: string): Promise<boolean> {
+    if (!redis) return false;
+    
+    // Create hash of URL for shorter key
+    const urlHash = url.split('').reduce((a, b) => {
+        a = ((a << 5) - a) + b.charCodeAt(0);
+        return a & a;
+    }, 0).toString(36);
+    
+    const key = `bot:dedup:${userId}:${urlHash}`;
+    
+    try {
+        const exists = await redis.get(key);
+        if (exists) return true;
+        
+        await redis.set(key, '1', { ex: DEDUP_TTL_SECONDS });
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Clear duplicate request marker (call on failure to allow retry)
+ */
+export async function clearDuplicateRequest(userId: number, url: string): Promise<void> {
+    if (!redis) return;
+    
+    const urlHash = url.split('').reduce((a, b) => {
+        a = ((a << 5) - a) + b.charCodeAt(0);
+        return a & a;
+    }, 0).toString(36);
+    
+    const key = `bot:dedup:${userId}:${urlHash}`;
+    await redis.del(key).catch(() => {});
 }
 
 /**
@@ -254,11 +337,8 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
         return next();
     }
 
-    // Check if count needs reset (midnight WIB passed)
-    if (botRateLimitNeedsReset(user)) {
-        await botRateLimitResetDaily(telegramId);
-        user.daily_downloads = 0; // Update local copy
-    }
+    // Check if count needs reset (midnight WIB passed) - using atomic operation
+    await atomicCheckAndReset(telegramId, user);
 
     // Check download limit
     if (user.daily_downloads >= FREE_DAILY_LIMIT) {
@@ -327,10 +407,12 @@ export {
     FREE_COOLDOWN_MS,
     FREE_COOLDOWN_SECONDS,
     VIP_COOLDOWN_MS,
+    DEDUP_TTL_SECONDS,
     botRateLimitNeedsReset,
     botRateLimitResetDaily,
     botRateLimitGetCooldown,
     botRateLimitSetCooldown,
     botRateLimitIncrementDownloads,
     getTimeUntilReset,
+    atomicCheckAndReset,
 };

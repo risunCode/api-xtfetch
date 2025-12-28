@@ -7,12 +7,15 @@
 
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
-import { httpGet, TIKTOK_HEADERS } from '@/lib/http';
-import { createError, ScraperErrorCode, type ScraperResult, type ScraperOptions } from '@/core/scrapers/types';
+import { httpGet, httpGetApiHeaders } from '@/lib/http';
+import { createError, ScraperErrorCode, parseJson, type ScraperResult, type ScraperOptions } from '@/core/scrapers';
 import { platformMatches, sysConfigScraperTimeout } from '@/core/config';
 import { logger } from '../shared/logger';
 
 type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TikWMData = any;
 
 export async function scrapeTikTok(url: string, options?: ScraperOptions): Promise<ScraperResult> {
     const { hd = true } = options || {};
@@ -24,13 +27,15 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
 
     try {
         const apiUrl = `https://tikwm.com/api/?url=${encodeURIComponent(url)}&hd=${hd ? 1 : 0}`;
-        const res = await httpGet(apiUrl, { headers: TIKTOK_HEADERS, timeout });
+        // Use simple headers for external API (TikWM) - no platform referer
+        const res = await httpGet(apiUrl, 'tiktok', { headers: httpGetApiHeaders(), timeout });
 
         if (res.status !== 200) {
             return createError(ScraperErrorCode.API_ERROR, `API error: ${res.status}`);
         }
 
-        const json = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+        const json = parseJson<{ code: number; data?: TikWMData; msg?: string }>(res.data);
+        if (!json) return createError(ScraperErrorCode.PARSE_ERROR, 'Failed to parse response');
         const { code, data: d, msg } = json;
 
         if (code !== 0 || !d) {
@@ -56,8 +61,8 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
             const hdSize = d.hd_size || d.size || 0;
             const sdSize = d.wm_size || d.size || 0;
             if (d.hdplay && d.play && d.hdplay !== d.play) {
-                const [hdUrl, sdUrl, hdFilesize, sdFilesize] = hdSize >= sdSize 
-                    ? [d.hdplay, d.play, hdSize, sdSize] 
+                const [hdUrl, sdUrl, hdFilesize, sdFilesize] = hdSize >= sdSize
+                    ? [d.hdplay, d.play, hdSize, sdSize]
                     : [d.play, d.hdplay, sdSize, hdSize];
                 utilAddFormat(formats, 'HD (No Watermark)', 'video', hdUrl, { itemId: 'video-hd', filesize: hdFilesize || undefined });
                 utilAddFormat(formats, 'SD (No Watermark)', 'video', sdUrl, { itemId: 'video-sd', filesize: sdFilesize || undefined });
@@ -92,10 +97,10 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
             }
         };
 
-        logger.media('tiktok', { 
-            videos: formats.filter(f => f.type === 'video').length, 
+        logger.media('tiktok', {
+            videos: formats.filter(f => f.type === 'video').length,
             images: formats.filter(f => f.type === 'image').length,
-            audio: formats.filter(f => f.type === 'audio').length 
+            audio: formats.filter(f => f.type === 'audio').length
         });
 
         return result;

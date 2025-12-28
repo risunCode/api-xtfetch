@@ -86,6 +86,46 @@ export const downloadQueue: Queue<DownloadJobData> | null = redisConnection
     : null;
 
 /**
+ * Maximum queue depth before rejecting new jobs
+ */
+const MAX_QUEUE_DEPTH = QUEUE_CONFIG.MAX_QUEUE_DEPTH;
+
+/**
+ * Add a job to the queue with backpressure handling
+ * Rejects new jobs if queue depth exceeds MAX_QUEUE_DEPTH
+ */
+export async function addJobWithBackpressure(
+    data: DownloadJobData,
+    options?: { priority?: number }
+): Promise<{ success: boolean; error?: string }> {
+    if (!downloadQueue) {
+        return { success: false, error: 'Queue not available' };
+    }
+    
+    try {
+        const queueDepth = await downloadQueue.count();
+        
+        if (queueDepth >= MAX_QUEUE_DEPTH) {
+            return { 
+                success: false, 
+                error: 'Server sibuk. Coba lagi dalam beberapa menit.' 
+            };
+        }
+        
+        await downloadQueue.add('download', data, {
+            priority: options?.priority ?? 10,
+        });
+        
+        return { success: true };
+    } catch (error) {
+        return { 
+            success: false, 
+            error: 'Gagal menambahkan ke antrian.' 
+        };
+    }
+}
+
+/**
  * Check if queue is available
  */
 export const isQueueAvailable = (): boolean => downloadQueue !== null;
@@ -97,3 +137,5 @@ export const isQueueAvailable = (): boolean => downloadQueue !== null;
 export const getWorkerConnection = (): IORedis | null => {
     return createRedisConnection();
 };
+
+export { MAX_QUEUE_DEPTH };

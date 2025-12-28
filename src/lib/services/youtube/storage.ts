@@ -9,6 +9,7 @@ import { existsSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
+import { formatBytes } from '@/lib/utils';
 
 // ============================================================================
 // Types
@@ -203,13 +204,8 @@ export function extractVideoId(url: string): string {
     return url;
 }
 
-export function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
+// Re-export formatBytes from shared utils for backward compatibility
+export { formatBytes } from '@/lib/utils';
 
 export function qualityToHeight(quality: string): number {
     const q = quality.toLowerCase().replace('p', '');

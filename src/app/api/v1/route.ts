@@ -19,10 +19,10 @@ import { platformDetect } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
 import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
-import { 
-    cacheGetQuick, 
-    cacheGet, 
-    cacheSet, 
+import {
+    cacheGetQuick,
+    cacheGet,
+    cacheSet,
     cacheSetAlias,
     cacheExtractContentId,
     cacheIsShortUrl,
@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
         const url = searchParams.get('url');
         const customCookie = searchParams.get('cookie'); // Optional: override cookie from pool
         const skipCache = searchParams.get('skipCache') === 'true'; // Optional: bypass cache
+        const skipSizes = searchParams.get('skipSizes') === 'true'; // Optional: skip filesize fetch for speed
 
         // Validate required parameters
         if (!apiKey) {
@@ -68,8 +69,8 @@ export async function GET(request: NextRequest) {
         const keyValidation = await validateApiKey(apiKey);
         if (!keyValidation.valid) {
             return NextResponse.json(
-                { 
-                    success: false, 
+                {
+                    success: false,
                     error: keyValidation.error || 'Invalid or expired API key',
                     meta: {
                         tier: 'premium',
@@ -83,12 +84,12 @@ export async function GET(request: NextRequest) {
         // Step 1: Quick platform detection (no HTTP)
         const quickParse = prepareUrlSync(url);
         const detectedPlatform = quickParse.platform || platformDetect(url);
-        
+
         // Log incoming request
         if (detectedPlatform) {
             logger.request(detectedPlatform, 'api');
         }
-        
+
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)
         if (detectedPlatform && !skipCache) {
             let quickCache: { hit: boolean; data?: ScraperResult; source?: string } = { hit: false, data: undefined };
@@ -100,11 +101,11 @@ export async function GET(request: NextRequest) {
             if (quickCache.hit && quickCache.data?.success) {
                 logger.cache(detectedPlatform, true);
                 const responseTime = Date.now() - startTime;
-                
+
                 // Track cache hit as successful request
                 const country = getCountryFromHeaders(request.headers);
-                recordDownloadStat(detectedPlatform, true, responseTime, country, 'api').catch(() => {});
-                
+                recordDownloadStat(detectedPlatform, true, responseTime, country, 'api').catch(() => { });
+
                 return NextResponse.json({
                     success: true,
                     data: quickCache.data.data ? { ...quickCache.data.data, responseTime } : quickCache.data.data,
@@ -152,7 +153,7 @@ export async function GET(request: NextRequest) {
             }
             if (resolvedCache.hit && resolvedCache.data?.success) {
                 logger.cache(urlResult.platform, true);
-                
+
                 // Backfill alias for short URL → content ID mapping
                 const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
                 if (contentId && cacheIsShortUrl(url)) {
@@ -162,13 +163,13 @@ export async function GET(request: NextRequest) {
                         logger.warn('cache', `Cache alias write failed: ${cacheError}`);
                     }
                 }
-                
+
                 const responseTime = Date.now() - startTime;
-                
+
                 // Track cache hit as successful request
                 const country = getCountryFromHeaders(request.headers);
-                recordDownloadStat(urlResult.platform, true, responseTime, country, 'api').catch(() => {});
-                
+                recordDownloadStat(urlResult.platform, true, responseTime, country, 'api').catch(() => { });
+
                 return NextResponse.json({
                     success: true,
                     data: resolvedCache.data.data ? { ...resolvedCache.data.data, responseTime } : resolvedCache.data.data,
@@ -191,8 +192,8 @@ export async function GET(request: NextRequest) {
             skipCache: true // Scrapers no longer handle cache
         });
 
-        // Step 7: Fetch file sizes for formats
-        if (result.success && result.data?.formats) {
+        // Step 7: Fetch file sizes for formats (skip if skipSizes=true for faster response)
+        if (result.success && result.data?.formats && !skipSizes) {
             try {
                 const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
                 if (formatsNeedingSize.length > 0) {
@@ -216,7 +217,7 @@ export async function GET(request: NextRequest) {
             } catch (cacheError) {
                 logger.warn('cache', `Cache write failed: ${cacheError}`);
             }
-            
+
             // Set alias for short URLs
             const contentId = cacheExtractContentId(urlResult.platform, urlResult.resolvedUrl);
             if (contentId && cacheIsShortUrl(url)) {
@@ -239,7 +240,7 @@ export async function GET(request: NextRequest) {
 
         // Track download stat (async, don't wait)
         const country = getCountryFromHeaders(request.headers);
-        recordDownloadStat(urlResult.platform, result.success, responseTime, country, 'api').catch(() => {});
+        recordDownloadStat(urlResult.platform, result.success, responseTime, country, 'api').catch(() => { });
 
         return NextResponse.json({
             success: result.success,
@@ -258,8 +259,8 @@ export async function GET(request: NextRequest) {
         console.error('[API v1] Error:', error);
 
         return NextResponse.json(
-            { 
-                success: false, 
+            {
+                success: false,
                 error: error instanceof Error ? error.message : 'Internal server error',
                 meta: {
                     tier: 'premium',

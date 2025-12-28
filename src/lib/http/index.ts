@@ -1,97 +1,46 @@
 /**
- * HTTP Module - Barrel Export
- * 
- * Re-exports all HTTP functionality from submodules.
+ * HTTP Module
  * 
  * @module http
  */
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HEADERS MODULE
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// Headers
 export {
-  // Types
-  type BrowserProfile,
-  
-  // User Agents
-  USER_AGENT,
-  DESKTOP_USER_AGENT,
-  MOBILE_USER_AGENT,
+  UA_DESKTOP,
+  UA_MOBILE,
+  UA_APPS,
+  UA_IPAD,
+  UA_DESKTOP_POOL,
+  getNextIpadUA,
+  getNextDesktopUA,
+  getPrimaryUA,
+  PLATFORM_CONFIG,
+  type PlatformHttpConfig,
+  httpGetHeaders,
+  httpGetApiHeaders,
   httpGetUserAgent,
-  httpGetUserAgentAsync,
-  
-  // Default Headers
-  BROWSER_HEADERS,
-  API_HEADERS,
-  DESKTOP_HEADERS,
-  FACEBOOK_HEADERS,
-  INSTAGRAM_HEADERS,
-  TIKTOK_HEADERS,
-  
-  // Browser Profiles
-  FALLBACK_PROFILES,
-  httpGetRandomProfile,
-  httpGetRandomProfileAsync,
-  httpMarkProfileUsed,
-  httpMarkProfileSuccess,
-  httpMarkProfileError,
-  httpClearProfileCache,
-  httpClearSyncProfileCache,
-  httpClearUserAgentCache,
-  httpPreloadProfiles,
-  
-  // Rate Limiting
-  httpShouldThrottle,
-  httpTrackRequest,
-  httpMarkRateLimited,
-  
-  // Delay Utilities
   httpGetRandomDelay,
   httpRandomSleep,
-  
-  // Rotating Headers
-  httpGetRotatingHeaders,
-  httpGetRotatingHeadersAsync,
-  
-  // Header Builders
-  httpGetApiHeaders,
-  httpGetApiHeadersAsync,
-  httpGetBrowserHeaders,
-  httpGetBrowserHeadersAsync,
-  httpGetSecureHeaders,
-  httpGetSecureHeadersAsync,
-  
-  // Internal helpers (exported for client.ts)
   getReferer,
   getOrigin,
 } from './headers';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CLIENT MODULE
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// Client
 export {
-  // Types
-  type HttpOptions,
+  type HttpGetOptions,
+  type HttpPostOptions,
+  type HttpHeadOptions,
   type HttpResponse,
   type ResolveResult,
-  
-  // Axios Client
+  PLATFORM_TIMEOUTS,
   axiosClient,
-  
-  // HTTP Methods
   httpGet,
   httpPost,
   httpHead,
-  
-  // URL Resolution
   httpResolveUrl,
+  httpResolveWithFallback,
+  getPoolStats,
 } from './client';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// BACKWARD COMPATIBILITY
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Re-export PlatformId for backward compatibility
+// Types
 export type { PlatformId } from '@/lib/types';

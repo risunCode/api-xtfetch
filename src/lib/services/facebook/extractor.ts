@@ -12,7 +12,7 @@ const DECODE: [RegExp, string][] = [
 
 // Decode unicode escape sequences like \u00e0 -> à
 function decodeUnicode(s: string): string {
-    return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => 
+    return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
         String.fromCharCode(parseInt(hex, 16))
     );
 }
@@ -73,7 +73,7 @@ const BLOCK_KEYS: Record<FbContentType, string[]> = {
 
 function findBlock(html: string, type: FbContentType): string {
     const keys = BLOCK_KEYS[type] || BLOCK_KEYS.post;
-    
+
     // For posts, search for all_subattachments first (multi-image posts)
     if (type === 'post' || type === 'group' || type === 'photo') {
         const subAttachPos = html.indexOf('"all_subattachments"');
@@ -82,7 +82,7 @@ function findBlock(html: string, type: FbContentType): string {
             return html.substring(Math.max(0, subAttachPos - 5000), Math.min(html.length, subAttachPos + 100000));
         }
     }
-    
+
     for (const key of keys) {
         const pos = html.indexOf(key);
         if (pos > -1) {
@@ -96,7 +96,8 @@ function findBlock(html: string, type: FbContentType): string {
 }
 
 // Issue detection - patterns must be specific to avoid false positives
-const ISSUES: [string, string, string][] = [
+// Exported so scraper can use for LOGIN detection
+export const ISSUES: [string, string, string][] = [
     ['/checkpoint/', 'CHECKPOINT', 'Akun memerlukan verifikasi'],
     ['id="login_form"', 'LOGIN_REQUIRED', 'Konten memerlukan login'],
     ['"UnavailableAttachment"', 'UNAVAILABLE', 'Konten tidak tersedia'],
@@ -126,7 +127,7 @@ function extractAssetId(url: string): string | undefined {
     try {
         const efgMatch = url.match(/efg=([^&]+)/);
         if (!efgMatch) return undefined;
-        
+
         // Decode URL encoding then base64
         const efgEncoded = decodeURIComponent(efgMatch[1]);
         const efgJson = Buffer.from(efgEncoded, 'base64').toString('utf-8');
@@ -149,7 +150,7 @@ function detectQuality(url: string): 'HD' | 'SD' {
         /hd_src/i,
         /browser_native_hd/i,
     ];
-    
+
     // SD indicators (360p, 480p, sve_sd)
     const sdPatterns = [
         /360p/i, /480p/i, /_360p/i, /_480p/i,
@@ -160,17 +161,17 @@ function detectQuality(url: string): 'HD' | 'SD' {
         /sd_src/i,
         /browser_native_sd/i,
     ];
-    
+
     // Check SD first (more specific)
     for (const p of sdPatterns) {
         if (p.test(url)) return 'SD';
     }
-    
+
     // Check HD
     for (const p of hdPatterns) {
         if (p.test(url)) return 'HD';
     }
-    
+
     // Fallback: check bitrate from URL
     const bitrateMatch = url.match(/bitrate=(\d+)/);
     if (bitrateMatch) {
@@ -178,7 +179,7 @@ function detectQuality(url: string): 'HD' | 'SD' {
         // < 600kbps = SD, >= 600kbps = HD
         return bitrate < 600000 ? 'SD' : 'HD';
     }
-    
+
     // Default to HD if can't determine
     return 'HD';
 }
@@ -197,18 +198,18 @@ function hasMutedAudio(url: string): boolean {
     if (url.includes('tag=progressive')) {
         return false; // NOT muted
     }
-    
+
     // Rule 4: No _nc_vs = progressive URL = has audio
     if (!url.includes('_nc_vs=')) {
         return false; // NOT muted
     }
-    
+
     // Rule 2 & 3: Check _nc_vs content
     // Direct check for muted indicators in URL
     if (url.includes('dash_muted') || url.includes('ZGFzaF9tdXRlZA')) {
         return true; // MUTED
     }
-    
+
     // Try to decode _nc_vs and check for muted indicator
     try {
         const ncvsMatch = url.match(/_nc_vs=([^&]+)/);
@@ -225,7 +226,7 @@ function hasMutedAudio(url: string): boolean {
     } catch {
         // Decode failed - assume not muted if no obvious indicators
     }
-    
+
     return false; // Default: assume has audio
 }
 
@@ -243,7 +244,7 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
         const assetId = extractAssetId(url);
         const isMuted = hasMutedAudio(url);
         const isProgressive = url.includes('tag=progressive') || !url.includes('_nc_vs=');
-        
+
         let priority = basePriority;
         priority += cdnBoost;
         if (isProgressive) priority += 30;
@@ -270,7 +271,7 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
     while ((m = P.video.browserHd.exec(html)) !== null) {
         addCandidate(decode(m[1]), 'HD', 95);
     }
-    
+
     P.video.browserSd.lastIndex = 0;
     while ((m = P.video.browserSd.exec(html)) !== null) {
         addCandidate(decode(m[1]), 'SD', 45);
@@ -281,7 +282,7 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
     while ((m = P.video.playableHd.exec(html)) !== null) {
         addCandidate(decode(m[1]), 'HD', 90);
     }
-    
+
     P.video.playable.lastIndex = 0;
     while ((m = P.video.playable.exec(html)) !== null) {
         const url = decode(m[1]);
@@ -306,16 +307,7 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
 
     // Sort by priority
     const sorted = candidates.sort((a, b) => b.priority - a.priority);
-    
-    // Log results
-    if (sorted.length > 0) {
-        const withAudio = sorted.filter(v => v.hasMuxedAudio);
-        const muted = sorted.filter(v => !v.hasMuxedAudio);
-        if (muted.length > 0) {
-            console.log(`[FB] Audio: ${withAudio.length} with audio, ${muted.length} muted`);
-        }
-    }
-    
+
     // Filter to first asset if requested
     if (filterToFirstAsset && sorted.length > 0) {
         const firstAssetId = sorted.find(v => v.assetId)?.assetId;
@@ -323,7 +315,7 @@ function extractVideos(html: string, filterToFirstAsset: boolean = false): Video
             return sorted.filter(v => v.assetId === firstAssetId);
         }
     }
-    
+
     return sorted;
 }
 
@@ -349,15 +341,15 @@ function stripStpParam(url: string): string {
     // Case 1: stp= is first param: ?stp=xxx&... -> ?...
     // Case 2: stp= is not first: &stp=xxx&... -> &...
     // Case 3: stp= is only param: ?stp=xxx -> (remove entirely)
-    
+
     // First, try to remove ?stp=xxx& (first param with more params after)
     let result = url.replace(/\?stp=[^&]+&/, '?');
     if (result !== url) return result;
-    
+
     // Then, try to remove &stp=xxx (not first param)
     result = url.replace(/&stp=[^&]+/, '');
     if (result !== url) return result;
-    
+
     // Finally, try to remove ?stp=xxx (only param)
     result = url.replace(/\?stp=[^&]+$/, '');
     return result;
@@ -368,12 +360,12 @@ function extractPostImages(html: string): { urls: string[]; pattern: string } {
     const urls: string[] = [];
     const seen = new Set<string>();
     let patternUsed = 'none';
-    
+
     const addUrl = (url: string): boolean => {
         let cleanUrl = decode(url);
         cleanUrl = stripStpParam(cleanUrl);
         cleanUrl = cleanUrl.replace(/\?\?/, '?').replace(/\?$/, '');
-        
+
         const idMatch = cleanUrl.match(/(\d+_\d+_\d+)_n\.(?:jpg|webp)/) || cleanUrl.match(/(\d{10,})_/);
         const key = idMatch ? idMatch[1] : cleanUrl.split('?')[0];
         if (seen.has(key)) return false;
@@ -382,22 +374,27 @@ function extractPostImages(html: string): { urls: string[]; pattern: string } {
         urls.push(cleanUrl);
         return true;
     };
-    
+
     const postIdMatch = html.match(/"post_id":"(\d+)"/);
     let targetBlock = html;
     let blockType = 'full';
-    
+
+    // Debug: check what patterns exist
+    const hasSubAttach = html.includes('"all_subattachments"');
+    const hasNodes = html.includes('"nodes":[{');
+
     if (postIdMatch) {
         const postId = postIdMatch[1];
         const postIdPos = html.indexOf(`"post_id":"${postId}"`);
         const subAttachPos = html.indexOf('"all_subattachments"');
-        
+
         if (subAttachPos > -1) {
             const nodesCheck = html.substring(subAttachPos, subAttachPos + 100);
             const hasNodes = nodesCheck.includes('"nodes":[{');
-            
+
             if (hasNodes) {
-                targetBlock = html.substring(Math.max(0, subAttachPos - 2000), Math.min(html.length, subAttachPos + 50000));
+                // Multi-image: increase block size to 100kb to capture all images
+                targetBlock = html.substring(Math.max(0, subAttachPos - 2000), Math.min(html.length, subAttachPos + 100000));
                 blockType = 'multi-image';
             } else {
                 targetBlock = html.substring(Math.max(0, postIdPos - 10000), Math.min(html.length, postIdPos + 15000));
@@ -408,54 +405,104 @@ function extractPostImages(html: string): { urls: string[]; pattern: string } {
             blockType = 'post-block';
         }
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════
+    // MULTI-IMAGE: Extract from nodes array inside all_subattachments
+    // Structure: "all_subattachments":{"nodes":[{...media...},{...media...}]}
+    // Each node has: "media":{"image":{"uri":"..."}} or "media":{"viewer_image":{"uri":"..."}}
+    // Index: 0, 1, 2, 3... for each image in the post
+    // ═══════════════════════════════════════════════════════════════
+    if (blockType === 'multi-image') {
+        // Pattern untuk extract semua image dari nodes array
+        // Cari semua "media" objects yang punya image/viewer_image
+        
+        // Pattern 1: media > image > uri (paling umum untuk multi-image)
+        const mediaImageRe = /"media":\{"(?:__typename":"Photo",)?"image":\{"uri":"(https:[^"]+)"/g;
+        let match;
+        while ((match = mediaImageRe.exec(targetBlock)) !== null) {
+            addUrl(match[1]);
+        }
+        
+        // Pattern 2: media > viewer_image > uri
+        const mediaViewerRe = /"media":\{[^}]*"viewer_image":\{[^}]*"uri":"(https:[^"]+)"/g;
+        while ((match = mediaViewerRe.exec(targetBlock)) !== null) {
+            addUrl(match[1]);
+        }
+        
+        // Pattern 3: Langsung cari image dengan height/width di dalam nodes context
+        // Format: "image":{"height":XXX,"width":XXX,"uri":"https://scontent..."}
+        const imageWithDimRe = /"image":\{"height":\d+,"width":\d+,"uri":"(https:\/\/scontent[^"]+)"/g;
+        while ((match = imageWithDimRe.exec(targetBlock)) !== null) {
+            addUrl(match[1]);
+        }
+        
+        // Pattern 4: viewer_image dengan dimensions
+        const viewerWithDimRe = /"viewer_image":\{"height":\d+,"width":\d+,"uri":"(https:\/\/scontent[^"]+)"/g;
+        while ((match = viewerWithDimRe.exec(targetBlock)) !== null) {
+            addUrl(match[1]);
+        }
+        
+        if (urls.length > 0) {
+            patternUsed = `multi-image-nodes (${urls.length} images)`;
+            return { urls, pattern: patternUsed };
+        }
+    }
+
     // Pattern 1: viewer_image
     const viewerImageRe = /"viewer_image":\{[^}]*"uri":"(https:[^"]+)"/g;
     let match;
     while ((match = viewerImageRe.exec(targetBlock)) !== null) {
         addUrl(match[1]);
     }
-    if (urls.length > 0) {
+    if (urls.length > 0 && blockType !== 'multi-image') {
         patternUsed = `viewer_image (${blockType})`;
         return { urls, pattern: patternUsed };
     }
-    
+
     // Pattern 2: photo_image
     const photoImageRe = /"photo_image":\{"uri":"([^"]+)"/g;
     while ((match = photoImageRe.exec(targetBlock)) !== null) {
         addUrl(match[1]);
     }
-    if (urls.length > 0) {
+    if (urls.length > 0 && blockType !== 'multi-image') {
         patternUsed = `photo_image (${blockType})`;
         return { urls, pattern: patternUsed };
     }
-    
+
     // Pattern 3: image with size
     const imageWithSizeRe = /"image":\{"height":\d+,"width":\d+,"uri":"([^"]+)"/g;
     while ((match = imageWithSizeRe.exec(targetBlock)) !== null) {
         addUrl(match[1]);
     }
-    if (urls.length > 0) {
+    if (urls.length > 0 && blockType !== 'multi-image') {
         patternUsed = `image_with_size (${blockType})`;
         return { urls, pattern: patternUsed };
     }
-    
+
     // Pattern 4: full_image
     const fullImageRe = /"full_image":\{"uri":"([^"]+)"/g;
     while ((match = fullImageRe.exec(targetBlock)) !== null) {
         addUrl(match[1]);
     }
-    
+
     // Pattern 5: large_share
     const largeShareRe = /"large_share":\{"uri":"([^"]+)"/g;
     while ((match = largeShareRe.exec(targetBlock)) !== null) {
         addUrl(match[1]);
     }
-    
-    if (urls.length > 0) {
-        patternUsed = `full_image/large_share (${blockType})`;
+
+    // Pattern 6: Generic URI for multi-image fallback
+    if (blockType === 'multi-image' && urls.length < 10) {
+        const genericUriRe = /"uri":"(https:[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/g;
+        while ((match = genericUriRe.exec(targetBlock)) !== null) {
+            addUrl(match[1]);
+        }
     }
-    
+
+    if (urls.length > 0) {
+        patternUsed = `aggregated (${blockType})`;
+    }
+
     return { urls, pattern: patternUsed };
 }
 
@@ -549,23 +596,23 @@ function extractStoryThumbnail(html: string): string | undefined {
     // Pattern 1: previewImage in story context
     const previewMatch = html.match(/"previewImage":\{[^}]*"uri":"(https:[^"]+)"/);
     if (previewMatch) return decode(previewMatch[1]);
-    
+
     // Pattern 2: thumbnailImage
     const thumbMatch = html.match(/"thumbnailImage":\{[^}]*"uri":"(https:[^"]+)"/);
     if (thumbMatch) return decode(thumbMatch[1]);
-    
+
     // Pattern 3: preferred_thumbnail
     const prefMatch = html.match(/"preferred_thumbnail":\{[^}]*"uri":"(https:[^"]+)"/);
     if (prefMatch) return decode(prefMatch[1]);
-    
+
     // Pattern 4: story card image (scontent with story type indicator)
     const storyImgMatch = html.match(/"image":\{"uri":"(https:\/\/scontent[^"]+t51\.29350[^"]+)"/);
     if (storyImgMatch) return decode(storyImgMatch[1]);
-    
+
     // Pattern 5: Any scontent image near story context
     const anyImgMatch = html.match(/"uri":"(https:\/\/scontent[^"]+\.(?:jpg|webp)[^"]*)"/);
     if (anyImgMatch) return decode(anyImgMatch[1]);
-    
+
     return undefined;
 }
 
@@ -585,7 +632,7 @@ function extractStories(html: string): { formats: MediaFormat[]; storyCount: num
         const url = decode(m[1]);
         const quality = m[2] as 'HD' | 'SD';
         const urlKey = url.split('?')[0];
-        
+
         if (seen.has(urlKey)) continue;
         seen.add(urlKey);
 
@@ -597,12 +644,12 @@ function extractStories(html: string): { formats: MediaFormat[]; storyCount: num
     // Group by pairs (SD + HD for same story appear consecutively)
     const MAX_STORIES = 5;
     let storyIdx = 0;
-    
+
     for (let i = 0; i < storyVideos.length && storyIdx < MAX_STORIES; i += 2) {
         storyIdx++;
         const sdVideo = storyVideos[i];
         const hdVideo = storyVideos[i + 1];
-        
+
         if (hdVideo) {
             const cdnInfo = getCdnInfo(hdVideo.url);
             const itemId = `story-${storyIdx}`;
@@ -618,7 +665,7 @@ function extractStories(html: string): { formats: MediaFormat[]; storyCount: num
                 _priority: 100 + cdnInfo.score,
             } as MediaFormat & { storyIndex: number });
         }
-        
+
         if (sdVideo) {
             const cdnInfo = getCdnInfo(sdVideo.url);
             const itemId = `story-${storyIdx}`;
@@ -668,93 +715,157 @@ function extractMeta(html: string, type?: FbContentType): FbMetadata {
     let author: string | undefined;
     let title: string | undefined;
     let description: string | undefined;
+    let groupName: string | undefined;
+
+    // ═══════════════════════════════════════════════════════════════
+    // GROUP NAME EXTRACTION - For posts from Facebook Groups
+    // ═══════════════════════════════════════════════════════════════
+    // Pattern 1: group object with name (most reliable)
+    const groupMatch = html.match(/"group":\{[^}]*"name":"([^"]+)"/);
+    if (groupMatch) groupName = groupMatch[1];
     
+    // Pattern 2: target_group with name
+    if (!groupName) {
+        const targetGroupMatch = html.match(/"target_group":\{[^}]*"name":"([^"]+)"/);
+        if (targetGroupMatch) groupName = targetGroupMatch[1];
+    }
+    
+    // Pattern 3: owning_group with name
+    if (!groupName) {
+        const owningGroupMatch = html.match(/"owning_group":\{[^}]*"name":"([^"]+)"/);
+        if (owningGroupMatch) groupName = owningGroupMatch[1];
+    }
+    
+    // Pattern 4: group_feed context
+    if (!groupName) {
+        const groupFeedMatch = html.match(/"group_feed"[^}]*"group":\{[^}]*"name":"([^"]+)"/);
+        if (groupFeedMatch) groupName = groupFeedMatch[1];
+    }
+
+    // Pattern 5: __typename Group with name nearby
+    if (!groupName) {
+        const typeGroupMatch = html.match(/"__typename":"Group"[^}]*"name":"([^"]+)"/) ||
+                               html.match(/"name":"([^"]+)"[^}]*"__typename":"Group"/);
+        if (typeGroupMatch) groupName = typeGroupMatch[1];
+    }
+
     // For stories, use story-specific patterns first
     if (type === 'story') {
-        // Pattern 1: story_bucket_owner name
         const storyOwnerMatch = html.match(/"story_bucket_owner":\{[^}]*"name":"([^"]+)"/);
         if (storyOwnerMatch) author = storyOwnerMatch[1];
-        
-        // Pattern 2: owner in story context
         if (!author) {
             const ownerMatch = html.match(/"owner":\{[^}]*"name":"([^"]+)"/);
             if (ownerMatch) author = ownerMatch[1];
         }
-        
-        // Pattern 3: actorID context name
         if (!author) {
             const actorMatch = html.match(/"actorID":"[^"]+","name":"([^"]+)"/);
             if (actorMatch) author = actorMatch[1];
         }
     }
-    
-    // Fallback to general patterns
+
+    // Fallback to general patterns for author
     if (!author) {
         author = html.match(P.meta.author)?.[1] || html.match(P.meta.authorAlt)?.[1];
     }
-    
+
     const timestamp = html.match(P.meta.timestamp)?.[1];
     title = html.match(P.meta.title)?.[1];
-    
-    // Extract description/caption
-    // Pattern 1: message text in post
-    const messageMatch = html.match(/"message":\{"text":"([^"]+)"/);
-    if (messageMatch) description = messageMatch[1];
-    
-    // Pattern 2: comet_sections text
+
+    // ═══════════════════════════════════════════════════════════════
+    // DESCRIPTION/CAPTION EXTRACTION - Multiple patterns
+    // ═══════════════════════════════════════════════════════════════
+
+    // Pattern 1: Direct message text (most reliable for posts)
+    const msgPatterns = [
+        /"message":\{"text":"([^"]{3,})"/,
+        /"text":"([^"]{10,})"[^}]*"message"/,
+    ];
+    for (const p of msgPatterns) {
+        const m = html.match(p);
+        if (m && m[1] && !m[1].includes('\\u') && m[1].length > 5) {
+            description = m[1];
+            break;
+        }
+    }
+
+    // Pattern 2: comet_sections message
     if (!description) {
-        const cometMatch = html.match(/"comet_sections":\{[^}]*"message":\{"text":"([^"]+)"/);
+        const cometMatch = html.match(/"comet_sections"[^}]*"message":\{"text":"([^"]+)"/);
         if (cometMatch) description = cometMatch[1];
     }
-    
-    // Pattern 3: story text
+
+    // Pattern 3: story message text
     if (!description) {
-        const storyTextMatch = html.match(/"story":\{[^}]*"message":\{"text":"([^"]+)"/);
-        if (storyTextMatch) description = storyTextMatch[1];
+        const storyMatch = html.match(/"story":\{[^}]*"message":\{"text":"([^"]+)"/);
+        if (storyMatch) description = storyMatch[1];
     }
-    
-    // Pattern 4: og:description meta tag
+
+    // Pattern 4: creation_story message
     if (!description) {
-        const ogDescMatch = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i) ||
-                           html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:description"/i);
-        if (ogDescMatch) description = ogDescMatch[1];
+        const creationMatch = html.match(/"creation_story"[^}]*"message":\{"text":"([^"]+)"/);
+        if (creationMatch) description = creationMatch[1];
     }
-    
-    // For stories without title, use author's name as title
+
+    // Pattern 5: attached_story message  
+    if (!description) {
+        const attachedMatch = html.match(/"attached_story"[^}]*"message":\{"text":"([^"]+)"/);
+        if (attachedMatch) description = attachedMatch[1];
+    }
+
+    // Pattern 6: og:description meta tag (fallback)
+    if (!description) {
+        const ogMatch = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i) ||
+            html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:description"/i);
+        if (ogMatch && ogMatch[1].length > 10) description = ogMatch[1];
+    }
+
+    // Pattern 7: Search for text near post_id (context-aware)
+    if (!description) {
+        const postIdMatch = html.match(/"post_id":"(\d+)"/);
+        if (postIdMatch) {
+            const pos = html.indexOf(postIdMatch[0]);
+            const block = html.substring(Math.max(0, pos - 5000), Math.min(html.length, pos + 5000));
+            const textMatch = block.match(/"text":"([^"]{15,300})"/);
+            if (textMatch && !textMatch[1].startsWith('http')) {
+                description = textMatch[1];
+            }
+        }
+    }
+
+    // Clean up description - decode unicode escapes
+    if (description) {
+        description = description
+            .replace(/\\u[\dA-Fa-f]{4}/g, m => String.fromCharCode(parseInt(m.slice(2), 16)))
+            .replace(/\\n/g, ' ')
+            .replace(/\\"/g, '"')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    // For stories without title, use author's name
     if (!title && type === 'story' && author) {
         title = `${decode(author)}'s Story`;
     }
-    
-    // Extract engagement stats
+
+    // ═══════════════════════════════════════════════════════════════
+    // ENGAGEMENT STATS
+    // ═══════════════════════════════════════════════════════════════
     const engagement: { likes?: number; comments?: number; shares?: number; views?: number } = {};
-    
-    // Reaction count (likes)
+
     const reactionMatch = html.match(/"reaction_count":\{"count":(\d+)/);
     if (reactionMatch) engagement.likes = parseInt(reactionMatch[1]);
-    
-    // Alternative: i18n_reaction_count
+
     if (!engagement.likes) {
-        const i18nReactionMatch = html.match(/"i18n_reaction_count":"([\d,KMB.]+)"/i);
-        if (i18nReactionMatch) {
-            engagement.likes = parseEngagementCount(i18nReactionMatch[1]);
-        }
+        const i18nMatch = html.match(/"i18n_reaction_count":"([\d,KMB.]+)"/i);
+        if (i18nMatch) engagement.likes = parseEngagementCount(i18nMatch[1]);
     }
-    
-    // Comment count
-    const commentMatch = html.match(/"comment_count":\{"total_count":(\d+)/);
+
+    const commentMatch = html.match(/"comment_count":\{"total_count":(\d+)/) || html.match(/"comments":\{"total_count":(\d+)/);
     if (commentMatch) engagement.comments = parseInt(commentMatch[1]);
-    
-    // Alternative: comments.total_count
-    if (!engagement.comments) {
-        const altCommentMatch = html.match(/"comments":\{"total_count":(\d+)/);
-        if (altCommentMatch) engagement.comments = parseInt(altCommentMatch[1]);
-    }
-    
-    // Share count
+
     const shareMatch = html.match(/"share_count":\{"count":(\d+)/);
     if (shareMatch) engagement.shares = parseInt(shareMatch[1]);
-    
-    // View count (for videos/reels)
+
     const viewMatch = html.match(/"video_view_count":(\d+)/) || html.match(/"play_count":(\d+)/);
     if (viewMatch) engagement.views = parseInt(viewMatch[1]);
 
@@ -766,6 +877,7 @@ function extractMeta(html: string, type?: FbContentType): FbMetadata {
         description: description ? decode(description).substring(0, 500) : undefined,
         timestamp: timestamp ? new Date(parseInt(timestamp) * 1000).toISOString() : undefined,
         engagement: hasEngagement ? engagement : undefined,
+        groupName: groupName ? decode(groupName) : undefined,
     };
 }
 
@@ -774,10 +886,10 @@ function parseEngagementCount(str: string): number {
     const cleaned = str.replace(/,/g, '').trim();
     const match = cleaned.match(/([\d.]+)([KMB])?/i);
     if (!match) return 0;
-    
+
     const num = parseFloat(match[1]);
     const suffix = match[2]?.toUpperCase();
-    
+
     switch (suffix) {
         case 'K': return Math.round(num * 1000);
         case 'M': return Math.round(num * 1000000);
@@ -786,28 +898,12 @@ function parseEngagementCount(str: string): number {
     }
 }
 
-// Resolve type for logging
-function resolveType(url: string, type: FbContentType): string {
-    if (type === 'story') return 'stories';
-    if (type === 'reel') return 'reel';
-    if (type === 'video') return 'video';
-    if (type === 'group') return 'group post';
-    if (type === 'photo') return 'photo';
-    if (/\/share\/p\//.test(url)) return 'public post (permalink)';
-    if (/\/posts\//.test(url)) return 'public post';
-    return 'post';
-}
-
 // Main extraction function
 export function extractContent(html: string, type: FbContentType, url?: string): { formats: MediaFormat[]; metadata: FbMetadata; pattern?: string } {
     const decoded = decode(html);
     const formats: MediaFormat[] = [];
     let pattern = 'none';
-    
-    // Log: resolved type
-    const resolved = resolveType(url || '', type);
-    console.log(`[FB] -> Resolved: ${resolved}`);
-    
+
     // For stories, search entire HTML
     if (type === 'story') {
         const stories = extractStories(decoded);
@@ -818,7 +914,7 @@ export function extractContent(html: string, type: FbContentType, url?: string):
     else if (type === 'reel' || type === 'video') {
         const block = findBlock(decoded, type);
         const thumbnail = extractThumbnail(block);
-        
+
         // Extract videos - filter to first asset for reels
         const videos = extractVideos(block, true);
         for (const v of videos) {
@@ -832,7 +928,7 @@ export function extractContent(html: string, type: FbContentType, url?: string):
                 _priority: v.priority,
             } as MediaFormat);
         }
-        
+
         if (videos.length > 0) {
             pattern = `video (${videos.length > 1 ? 'HD/SD' : 'single'})`;
         }
@@ -845,7 +941,7 @@ export function extractContent(html: string, type: FbContentType, url?: string):
             pattern = images.pattern;
         }
     }
-    
+
     // If no formats found, try block-based extraction
     if (formats.length === 0) {
         const block = findBlock(decoded, type);
@@ -865,7 +961,7 @@ export function extractContent(html: string, type: FbContentType, url?: string):
                 _priority: v.priority,
             } as MediaFormat);
         }
-        
+
         if (videos.length > 0) {
             pattern = `video (${videos.length > 1 ? 'HD/SD' : 'single'})`;
         }
@@ -886,11 +982,6 @@ export function extractContent(html: string, type: FbContentType, url?: string):
         seen.add(key);
         return true;
     });
-
-    // Log: pattern and count
-    const mediaType = deduped.some(f => f.type === 'video') ? 'video' : 'image';
-    console.log(`[FB] -> Pattern: ${pattern}`);
-    console.log(`[FB] -> Found: ${deduped.length} ${mediaType}${deduped.length > 1 ? 's' : ''}`);
 
     return {
         formats: deduped,

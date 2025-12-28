@@ -257,8 +257,8 @@ async function sendChatAction(
     } else if (options.api) {
       await options.api.sendChatAction(options.chatId, action);
     }
-  } catch {
-    // Ignore chat action errors
+  } catch (err) {
+    console.warn('[Media] Chat action failed:', err instanceof Error ? err.message : 'Unknown error');
   }
 }
 
@@ -336,8 +336,8 @@ async function deleteMessage(options: SendMediaOptions, messageId: number): Prom
     } else if (options.api) {
       await options.api.deleteMessage(options.chatId, messageId);
     }
-  } catch {
-    // Ignore deletion errors
+  } catch (err) {
+    console.warn('[Media] Delete message failed:', err instanceof Error ? err.message : 'Unknown error');
   }
 }
 
@@ -407,7 +407,8 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
           await sendPhoto(options, new InputFile({ url: result.thumbnail }), caption, keyboard);
           return { success: true };
         }
-      } catch {
+      } catch (err) {
+        console.warn('[Media] Thumbnail send failed:', err instanceof Error ? err.message : 'Unknown error');
         // Fall through to text message
       }
     }
@@ -492,20 +493,42 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
           try {
             const thumbBuffer = await fetchWithRetry(result.thumbnail);
             await sendPhoto(options, new InputFile(thumbBuffer, 'thumb.jpg'), fallbackCaption, fallbackKeyboard);
+            if (processingMsgId) {
+              await deleteMessage(options, processingMsgId).catch((err) => {
+                console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
+              });
+            }
             return { success: true };
-          } catch {
+          } catch (err) {
+            console.warn('[Media] Fallback thumbnail download failed:', err instanceof Error ? err.message : 'Unknown error');
             // Fall through
           }
         } else {
           await sendPhoto(options, new InputFile({ url: result.thumbnail }), fallbackCaption, fallbackKeyboard);
+          if (processingMsgId) {
+            await deleteMessage(options, processingMsgId).catch((err) => {
+              console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
+            });
+          }
           return { success: true };
         }
       }
       
       await sendMessage(options, fallbackCaption, fallbackKeyboard);
+      if (processingMsgId) {
+        await deleteMessage(options, processingMsgId).catch((err) => {
+          console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
+        });
+      }
       return { success: true };
     } catch (fallbackError) {
       logger.error('telegram', fallbackError, 'SEND_VIDEO_FALLBACK');
+      // Always cleanup processingMsgId on error
+      if (processingMsgId) {
+        await deleteMessage(options, processingMsgId).catch((err) => {
+          console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
+        });
+      }
       return { success: false, error: 'Failed to send video and fallback' };
     }
   } finally {

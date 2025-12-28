@@ -1,5 +1,8 @@
 # DownAria Backend (api-xtfetch)
 
+**Version:** 2.0.0  
+**Last Updated:** December 28, 2025
+
 ## Architecture
 
 This is the **backend API** for DownAria social media downloader.
@@ -8,12 +11,33 @@ This is the **backend API** for DownAria social media downloader.
 Backend (Port 3002): api-xtfetch/
 ├── Next.js API routes
 ├── Uses Supabase SERVICE ROLE KEY
-├── Uses Redis for rate limiting
+├── Uses Redis for rate limiting + sessions
 ├── All scraping logic lives here
-└── Telegram Bot (@downariaxt_bot)
+├── Telegram Bot (@downariaxt_bot)
+└── BullMQ Queue for async downloads
 ```
 
-Frontend counterpart: `DownAria/` (Port 3001)
+Frontend counterpart: `DownAria/` (Port 3001) - Version 1.9.0
+
+---
+
+## Recent Major Changes (v2.0.0)
+
+### Critical Bug Fixes
+- ✅ **"Processing Stuck" Bug** - Fixed with 60s timeout wrapper
+- ✅ **Memory Session Leak** - Redis-backed sessions (no more OOM)
+- ✅ **Rate Limit Race Condition** - Atomic Redis lock
+- ✅ **Request Deduplication** - 30s TTL prevents duplicate downloads
+
+### Queue & Worker
+- ✅ **Circular Dependency** - Fixed with dependency injection
+- ✅ **Backpressure Handling** - Rejects when queue > 100 jobs
+- ✅ **Graceful Shutdown** - Waits for active jobs on deploy
+
+### Monitoring
+- ✅ **Error Tracking** - `errorsByType` metrics
+- ✅ **Queue Depth History** - Rolling 100 samples
+- ✅ **Proper Logging** - No more silent failures
 
 ---
 
@@ -179,6 +203,101 @@ src/
 
 ---
 
+## Bot Architecture (v2.0.0)
+
+### Session Storage
+```typescript
+// Redis-backed (production) with memory fallback
+storage: redis 
+  ? createRedisSessionStorage<SessionData>() 
+  : new MemorySessionStorage<SessionData>(3600)
+```
+
+### Request Flow with Timeout
+```
+User sends URL
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ sendProcessingMessage() → "⏳ Processing..." │
+└─────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│ Promise.race([                          │
+│   sendMediaByType(),                    │
+│   timeout(60000)  ← NEW: 60s timeout    │
+│ ])                                      │
+└─────────────────────────────────────────┘
+    │
+    ├── Success → Delete processing msg, send media
+    ├── Timeout → Edit to "⏱️ Timeout" error
+    └── Error → Edit to error message with retry button
+```
+
+### Rate Limiting (Atomic)
+```typescript
+// Atomic daily reset with Redis lock
+const lockKey = `bot:reset_lock:${telegramId}`;
+const acquired = await redis.set(lockKey, '1', { nx: true, ex: 5 });
+```
+
+### Request Deduplication
+```typescript
+// Prevents duplicate downloads (30s TTL)
+isDuplicateRequest(userId, url)  // Check before processing
+clearDuplicateRequest(userId, url)  // Clear on failure for retry
+```
+
+---
+
+## Queue System (BullMQ)
+
+### Configuration
+```typescript
+QUEUE_CONFIG = {
+  QUEUE_NAME: 'bot-downloads',
+  CONCURRENCY: 10,
+  MAX_QUEUE_DEPTH: 100,  // Backpressure threshold
+  RATE_LIMIT: { MAX_JOBS: 30, DURATION_MS: 60000 },
+  PRIORITY: { PREMIUM: 1, FREE: 10 }
+}
+```
+
+### Backpressure Handling
+```typescript
+// Rejects new jobs when queue is full
+addJobWithBackpressure(data, { priority })
+// Returns: { success: false, error: 'Server sibuk...' }
+```
+
+### Graceful Shutdown
+```typescript
+// On SIGTERM: pause → wait 30s → close
+gracefulShutdown()
+```
+
+---
+
+## Monitoring Metrics
+
+```typescript
+interface BotMetrics {
+  downloadsProcessed: number;
+  downloadsFailed: number;
+  averageProcessingTimeMs: number;
+  queuedJobs: number;
+  activeWorkers: number;
+  // NEW in v2.0.0
+  errorsByType: Record<string, number>;
+  queueDepthHistory: number[];
+  peakQueueDepth: number;
+}
+```
+
+---
+
+
 ## Known Issues / TODO
 
 ### Facebook Scraper (needs refactor)
@@ -190,3 +309,20 @@ src/
 ### URL Resolution
 - [x] Pass cookie to `prepareUrl` for proper resolution
 - [x] Retry with cookie if guest mode redirects to login
+
+### Bot Improvements (v2.0.0 - COMPLETED)
+- [x] Fix "Processing Stuck" bug with timeout wrapper
+- [x] Replace MemorySessionStorage with Redis
+- [x] Fix rate limit race condition with atomic lock
+- [x] Add request deduplication
+- [x] Fix queue worker circular dependency
+- [x] Add backpressure handling
+- [x] Add graceful shutdown
+- [x] Fix silent error handling
+- [x] Add enhanced monitoring metrics
+
+### Future Improvements
+- [ ] Stream-based downloads (reduce memory usage for large files)
+- [ ] Grammy Runner for long polling mode (if needed)
+- [ ] Per-user queue priority based on history
+- [ ] Webhook retry deduplication at Telegram leve

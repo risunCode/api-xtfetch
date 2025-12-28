@@ -59,6 +59,9 @@ export {
     type SystemConfigDB,
 } from '@/lib/config/system';
 
+// Scraper Configuration
+export { SCRAPER_CONFIG } from './scrapers';
+
 // Environment Helpers
 export function getEnv(key: string, defaultValue?: string): string {
     const value = process.env[key];
