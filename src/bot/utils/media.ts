@@ -192,24 +192,41 @@ function deduplicateImages(images: VideoFormat[]): VideoFormat[] {
 }
 
 // ============================================================================
-// FETCH WITH RETRY
+// FETCH WITH RETRY (USING PROXY FOR CDN)
 // ============================================================================
+
+import { API_BASE_URL } from '../config';
+
+/**
+ * Build proxy URL for CDN media
+ * Uses internal proxy API to bypass geo-restrictions and handle expired URLs
+ */
+function buildProxyUrl(url: string, platform?: string): string {
+  const proxyUrl = new URL(`${API_BASE_URL}/api/v1/proxy`);
+  proxyUrl.searchParams.set('url', url);
+  if (platform) proxyUrl.searchParams.set('platform', platform);
+  proxyUrl.searchParams.set('inline', '1');
+  return proxyUrl.toString();
+}
 
 /**
  * Fetch URL with retry logic and exponential backoff
- * Handles transient network failures for CDN URLs
+ * Uses proxy API for CDN URLs to bypass geo-restrictions
  */
-export async function fetchWithRetry(url: string, maxRetries = MAX_RETRY_ATTEMPTS): Promise<Buffer> {
+export async function fetchWithRetry(url: string, maxRetries = MAX_RETRY_ATTEMPTS, platform?: string): Promise<Buffer> {
+  // Use proxy for CDN URLs
+  const shouldProxy = needsDownloadFirst(url);
+  const fetchUrl = shouldProxy ? buildProxyUrl(url, platform) : url;
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[Media.Fetch] Attempt ${attempt}/${maxRetries}`);
-      console.log(`[Media.Fetch] URL: ${url}`);
+      console.log(`[Media.Fetch] Attempt ${attempt}/${maxRetries}${shouldProxy ? ' (via proxy)' : ''}`);
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
       
-      const response = await fetch(url, {
-        headers: {
+      const response = await fetch(fetchUrl, {
+        headers: shouldProxy ? {} : {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': '*/*',
           'Referer': 'https://www.facebook.com/',
@@ -400,7 +417,7 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
     if (result.thumbnail) {
       try {
         if (needsDownloadFirst(result.thumbnail)) {
-          const thumbBuffer = await fetchWithRetry(result.thumbnail);
+          const thumbBuffer = await fetchWithRetry(result.thumbnail, MAX_RETRY_ATTEMPTS, result.platform);
           await sendPhoto(options, new InputFile(thumbBuffer, 'thumb.jpg'), caption, keyboard);
           return { success: true };
         } else {
@@ -456,7 +473,7 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
       
       await sendChatAction(options, 'upload_video');
       
-      buffer = await fetchWithRetry(optimizedUrl);
+      buffer = await fetchWithRetry(optimizedUrl, MAX_RETRY_ATTEMPTS, result.platform);
       console.log(`[Media.Video] Uploading to Telegram...`);
       
       await sendChatAction(options, 'upload_video');
@@ -491,7 +508,7 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
       if (result.thumbnail) {
         if (needsDownloadFirst(result.thumbnail)) {
           try {
-            const thumbBuffer = await fetchWithRetry(result.thumbnail);
+            const thumbBuffer = await fetchWithRetry(result.thumbnail, MAX_RETRY_ATTEMPTS, result.platform);
             await sendPhoto(options, new InputFile(thumbBuffer, 'thumb.jpg'), fallbackCaption, fallbackKeyboard);
             if (processingMsgId) {
               await deleteMessage(options, processingMsgId).catch((err) => {
@@ -563,7 +580,7 @@ async function sendSinglePhotoMedia(options: SendMediaOptions): Promise<SendMedi
     await sendChatAction(options, 'upload_photo');
     
     if (needsDownloadFirst(photoUrl)) {
-      buffer = await fetchWithRetry(photoUrl);
+      buffer = await fetchWithRetry(photoUrl, MAX_RETRY_ATTEMPTS, result.platform);
       await sendPhoto(options, new InputFile(buffer, 'photo.jpg'), caption || undefined, keyboard);
     } else {
       await sendPhoto(options, new InputFile({ url: photoUrl }), caption || undefined, keyboard);
@@ -604,7 +621,7 @@ async function sendPhotoAlbumMedia(options: SendMediaOptions): Promise<SendMedia
     
     if (requiresDownload) {
       // Download all images to buffers first
-      const downloadPromises = bestImages.slice(0, 10).map(img => fetchWithRetry(img.url));
+      const downloadPromises = bestImages.slice(0, 10).map(img => fetchWithRetry(img.url, MAX_RETRY_ATTEMPTS, result.platform));
       const downloadedBuffers = await Promise.all(downloadPromises);
       buffers.push(...downloadedBuffers);
       

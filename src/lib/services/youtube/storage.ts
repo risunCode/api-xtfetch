@@ -59,18 +59,32 @@ export interface PreparedDownload {
 
 export const YOUTUBE_DOWNLOAD_BASE = path.join(tmpdir(), 'xtfetch-youtube');
 export const SESSION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes (CDN URLs valid)
-export const DOWNLOAD_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes (merged files)
+export const DOWNLOAD_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (merged files - cleanup faster)
+
+// Duration limits
+export const YOUTUBE_MAX_DURATION_SECONDS = 5 * 60; // 5 minutes max for YouTube videos
+export const GENERAL_MAX_DURATION_SECONDS = 2 * 60 * 60; // 2 hours max for other platforms
+// Note: Non-YouTube platforms are limited by Telegram's 50MB file size limit,
+// which effectively limits video duration to ~10-15 minutes for HD quality
 
 // ============================================================================
-// Storage (In-memory - use Redis in production)
+// Storage (Redis-backed with in-memory fallback)
 // ============================================================================
 
-const sessions = new Map<string, YouTubeSession>();
+import { redis, isRedisAvailable } from '@/lib/database';
+
+// In-memory fallback when Redis unavailable
+const sessionsMemory = new Map<string, YouTubeSession>();
+
+// Redis key prefix for YouTube sessions
+const REDIS_SESSION_PREFIX = 'yt:session:';
+const REDIS_SESSION_TTL = Math.ceil(SESSION_EXPIRY_MS / 1000); // Convert to seconds
+
 // File-based storage for downloads (survives across route invocations)
 // Each download has a .meta.json file next to the video file
 
 // ============================================================================
-// Session Functions
+// Session Functions (Redis-backed with in-memory fallback)
 // ============================================================================
 
 export function ytSessionHash(videoUrl: string): string {
@@ -79,21 +93,88 @@ export function ytSessionHash(videoUrl: string): string {
     return createHash('sha256').update(videoId).digest('hex').slice(0, 12);
 }
 
-export function ytSessionGet(hash: string): YouTubeSession | undefined {
-    const session = sessions.get(hash);
+/**
+ * Get YouTube session from Redis (with in-memory fallback)
+ */
+export async function ytSessionGet(hash: string): Promise<YouTubeSession | undefined> {
+    // Try Redis first
+    if (isRedisAvailable() && redis) {
+        try {
+            const key = `${REDIS_SESSION_PREFIX}${hash}`;
+            const session = await redis.get<YouTubeSession>(key);
+            if (session) {
+                // Check expiry (Redis TTL handles this, but double-check)
+                if (Date.now() > session.expiresAt) {
+                    await redis.del(key);
+                    return undefined;
+                }
+                return session;
+            }
+        } catch {
+            // Fall through to memory
+        }
+    }
+    
+    // Fallback to in-memory
+    const session = sessionsMemory.get(hash);
     if (session && Date.now() > session.expiresAt) {
-        sessions.delete(hash);
+        sessionsMemory.delete(hash);
         return undefined;
     }
     return session;
 }
 
-export function ytSessionSet(session: YouTubeSession): void {
-    sessions.set(session.hash, session);
+/**
+ * Sync version for backward compatibility (checks memory only)
+ */
+export function ytSessionGetSync(hash: string): YouTubeSession | undefined {
+    const session = sessionsMemory.get(hash);
+    if (session && Date.now() > session.expiresAt) {
+        sessionsMemory.delete(hash);
+        return undefined;
+    }
+    return session;
 }
 
-export function ytSessionDelete(hash: string): void {
-    sessions.delete(hash);
+/**
+ * Set YouTube session in Redis (with in-memory fallback)
+ */
+export async function ytSessionSet(session: YouTubeSession): Promise<void> {
+    // Always set in memory for sync access
+    sessionsMemory.set(session.hash, session);
+    
+    // Also set in Redis if available
+    if (isRedisAvailable() && redis) {
+        try {
+            const key = `${REDIS_SESSION_PREFIX}${session.hash}`;
+            await redis.set(key, session, { ex: REDIS_SESSION_TTL });
+        } catch {
+            // Redis failed, memory fallback is already set
+        }
+    }
+}
+
+/**
+ * Delete YouTube session from Redis and memory
+ */
+export async function ytSessionDelete(hash: string): Promise<void> {
+    sessionsMemory.delete(hash);
+    
+    if (isRedisAvailable() && redis) {
+        try {
+            await redis.del(`${REDIS_SESSION_PREFIX}${hash}`);
+        } catch {
+            // Ignore Redis errors
+        }
+    }
+}
+
+/**
+ * Invalidate cache for a specific video (for retry with fresh data)
+ */
+export async function ytSessionInvalidate(videoUrl: string): Promise<void> {
+    const hash = ytSessionHash(videoUrl);
+    await ytSessionDelete(hash);
 }
 
 // ============================================================================
@@ -149,15 +230,17 @@ export function ytDownloadDelete(hash: string): void {
 // Cleanup Functions
 // ============================================================================
 
-export function ytCleanupExpired(): void {
+export async function ytCleanupExpired(): Promise<void> {
     const now = Date.now();
     
-    // Cleanup expired sessions
-    for (const [hash, session] of sessions.entries()) {
+    // Cleanup expired in-memory sessions
+    for (const [hash, session] of sessionsMemory.entries()) {
         if (now > session.expiresAt) {
-            sessions.delete(hash);
+            sessionsMemory.delete(hash);
         }
     }
+    
+    // Note: Redis sessions auto-expire via TTL, no manual cleanup needed
     
     // Cleanup expired downloads (scan filesystem)
     try {
@@ -171,15 +254,25 @@ export function ytCleanupExpired(): void {
                         const meta = JSON.parse(require('fs').readFileSync(metaPath, 'utf8'));
                         if (now > meta.expiresAt) {
                             rmSync(path.join(YOUTUBE_DOWNLOAD_BASE, folder), { recursive: true, force: true });
+                            console.log(`[YouTube.Cleanup] Deleted expired: ${folder}`);
                         }
                     } catch {
                         // Invalid meta, cleanup
                         rmSync(path.join(YOUTUBE_DOWNLOAD_BASE, folder), { recursive: true, force: true });
+                        console.log(`[YouTube.Cleanup] Deleted invalid: ${folder}`);
                     }
+                } else {
+                    // No meta file, cleanup orphaned folder
+                    try {
+                        rmSync(path.join(YOUTUBE_DOWNLOAD_BASE, folder), { recursive: true, force: true });
+                        console.log(`[YouTube.Cleanup] Deleted orphaned: ${folder}`);
+                    } catch {}
                 }
             }
         }
-    } catch {}
+    } catch (e) {
+        console.error('[YouTube.Cleanup] Error:', e);
+    }
 }
 
 export function ytEnsureDownloadDir(): void {

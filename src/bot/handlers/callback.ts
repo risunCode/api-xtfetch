@@ -640,10 +640,18 @@ async function botCallbackDownloadQuality(
             } catch (mergeError) {
                 logger.error('telegram', mergeError, 'YOUTUBE_MERGE');
                 
-                // Fallback: send link instead
-                const fallbackMsg = lang === 'id'
-                    ? `❌ Gagal memproses video.\n\n🔗 Coba download manual:`
-                    : `❌ Failed to process video.\n\n🔗 Try manual download:`;
+                // Extract error message
+                const errorMsg = mergeError instanceof Error ? mergeError.message : 'Unknown error';
+                const isDurationError = errorMsg.includes('too long') || errorMsg.includes('duration');
+                
+                // Show specific error for duration limit
+                const fallbackMsg = isDurationError
+                    ? (lang === 'id'
+                        ? `❌ Video terlalu panjang.\n\n⏱️ Maksimal 5 menit untuk YouTube.\n\n🔗 Download manual:`
+                        : `❌ Video too long.\n\n⏱️ Maximum 5 minutes for YouTube.\n\n🔗 Manual download:`)
+                    : (lang === 'id'
+                        ? `❌ Gagal memproses video.\n\n🔗 Coba download manual:`
+                        : `❌ Failed to process video.\n\n🔗 Try manual download:`);
                 
                 await ctx.reply(fallbackMsg, {
                     reply_markup: new InlineKeyboard()

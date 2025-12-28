@@ -64,14 +64,21 @@ async function getHandler() {
     }
     
     // Initialize worker if not done yet
-    if (!workerInitialized && isQueueAvailable()) {
-      try {
-        console.log('[Webhook] Queue available, initializing worker...');
-        const started = await initWorker();
-        workerInitialized = true;
-        console.log('[Webhook] Worker initialized:', started ? 'SUCCESS' : 'FAILED');
-      } catch (error) {
-        console.error('[Webhook] Worker init failed:', error);
+    if (!workerInitialized) {
+      const queueAvailable = isQueueAvailable();
+      console.log('[Webhook] Queue available:', queueAvailable);
+      
+      if (queueAvailable) {
+        try {
+          console.log('[Webhook] Initializing worker...');
+          const started = await initWorker();
+          workerInitialized = started;
+          console.log('[Webhook] Worker initialized:', started ? 'SUCCESS' : 'FAILED');
+        } catch (error) {
+          console.error('[Webhook] Worker init failed:', error);
+        }
+      } else {
+        console.log('[Webhook] Skipping worker init - queue not available');
       }
     }
     

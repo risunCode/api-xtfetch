@@ -38,71 +38,74 @@ export interface CacheStats {
 // CONSTANTS - SMART TTL BY CONTENT TYPE
 // ============================================================================
 
+// MAX TTL: 2 hours for all platforms (CDN URLs can expire)
+const MAX_TTL = 2 * 3600; // 2 hours
+
 const SMART_TTL: Record<PlatformId, Record<ContentType, number>> = {
     twitter: {
-        post: 3 * 3600,           // 3 hours
-        video: 3 * 3600,
-        reel: 3 * 3600,
+        post: 2 * 3600,           // 2 hours (max)
+        video: 2 * 3600,
+        reel: 2 * 3600,
         story: 1 * 3600,          // 1 hour (fleets - deprecated but just in case)
-        image: 3 * 3600,
-        slideshow: 3 * 3600,
-        mixed: 3 * 3600,
-        unknown: 3 * 3600,
+        image: 2 * 3600,
+        slideshow: 2 * 3600,
+        mixed: 2 * 3600,
+        unknown: 2 * 3600,
     },
     instagram: {
-        post: 3 * 3600,           // 3 hours
-        video: 3 * 3600,
-        reel: 3 * 3600,
+        post: 2 * 3600,           // 2 hours (max)
+        video: 2 * 3600,
+        reel: 2 * 3600,
         story: 30 * 60,           // 30 minutes (stories expire in 24h, URLs may change)
-        image: 3 * 3600,
-        slideshow: 3 * 3600,
-        mixed: 3 * 3600,
-        unknown: 3 * 3600,
+        image: 2 * 3600,
+        slideshow: 2 * 3600,
+        mixed: 2 * 3600,
+        unknown: 2 * 3600,
     },
     tiktok: {
-        post: 3 * 3600,           // 3 hours
-        video: 3 * 3600,
-        reel: 3 * 3600,
+        post: 2 * 3600,           // 2 hours (max)
+        video: 2 * 3600,
+        reel: 2 * 3600,
         story: 1 * 3600,
-        image: 3 * 3600,
-        slideshow: 3 * 3600,      // TikTok slideshows
-        mixed: 3 * 3600,
-        unknown: 3 * 3600,
+        image: 2 * 3600,
+        slideshow: 2 * 3600,      // TikTok slideshows
+        mixed: 2 * 3600,
+        unknown: 2 * 3600,
     },
     youtube: {
-        post: 10 * 60,            // 10 minutes - YouTube URLs expire quickly (~6h)
-        video: 10 * 60,           // 10 minutes
-        reel: 10 * 60,            // Shorts - 10 minutes
-        story: 10 * 60,
-        image: 10 * 60,
-        slideshow: 10 * 60,
-        mixed: 10 * 60,
-        unknown: 10 * 60,
+        post: 5 * 60,             // 5 minutes - YouTube URLs expire quickly (~6h)
+        video: 5 * 60,            // 5 minutes
+        reel: 5 * 60,             // Shorts - 5 minutes
+        story: 5 * 60,
+        image: 5 * 60,
+        slideshow: 5 * 60,
+        mixed: 5 * 60,
+        unknown: 5 * 60,
     },
     facebook: {
-        post: 3 * 3600,           // 3 hours
-        video: 3 * 3600,
-        reel: 3 * 3600,
+        post: 2 * 3600,           // 2 hours (max)
+        video: 2 * 3600,
+        reel: 2 * 3600,
         story: 30 * 60,           // 30 minutes (stories expire)
-        image: 3 * 3600,
-        slideshow: 3 * 3600,
-        mixed: 3 * 3600,
-        unknown: 3 * 3600,
+        image: 2 * 3600,
+        slideshow: 2 * 3600,
+        mixed: 2 * 3600,
+        unknown: 2 * 3600,
     },
     weibo: {
-        post: 3 * 3600,           // 3 hours
-        video: 3 * 3600,
-        reel: 3 * 3600,
+        post: 2 * 3600,           // 2 hours (max)
+        video: 2 * 3600,
+        reel: 2 * 3600,
         story: 1 * 3600,
-        image: 3 * 3600,
-        slideshow: 3 * 3600,
-        mixed: 3 * 3600,
-        unknown: 3 * 3600,
+        image: 2 * 3600,
+        slideshow: 2 * 3600,
+        mixed: 2 * 3600,
+        unknown: 2 * 3600,
     },
 };
 
-// Default TTL fallback (3 hours)
-const DEFAULT_TTL = 3 * 3600;
+// Default TTL fallback (2 hours max)
+const DEFAULT_TTL = 2 * 3600;
 
 // Alias TTL (30 days - short URL mappings)
 const ALIAS_TTL = 30 * 24 * 3600;
@@ -681,5 +684,42 @@ export async function cacheResetStats(): Promise<void> {
         await redis.del(...keysToDelete);
     } catch {
         // Stats reset failed, not critical
+    }
+}
+
+/**
+ * Delete specific cache entry by URL
+ * Used when scrape fails to force fresh retry
+ */
+export async function cacheDelete(platform: PlatformId, url: string): Promise<boolean> {
+    if (!isRedisAvailable() || !redis) return false;
+    
+    try {
+        const keysToDelete: string[] = [];
+        
+        // Try content ID key
+        const contentId = cacheExtractContentId(platform, url);
+        if (contentId) {
+            keysToDelete.push(cacheGenerateKey(platform, contentId));
+        }
+        
+        // Try URL hash key (fallback)
+        keysToDelete.push(cacheGenerateUrlKey(platform, url));
+        
+        // Try alias key for short URLs
+        if (cacheIsShortUrl(url)) {
+            keysToDelete.push(cacheGenerateAliasKey(url));
+        }
+        
+        if (keysToDelete.length > 0) {
+            await redis.del(...keysToDelete);
+            console.log(`[Cache] Deleted ${keysToDelete.length} keys for ${platform}:${url.substring(0, 50)}...`);
+            return true;
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('[Cache] Delete failed:', error);
+        return false;
     }
 }

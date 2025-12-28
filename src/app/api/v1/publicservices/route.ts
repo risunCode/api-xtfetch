@@ -25,6 +25,7 @@ import {
     cacheGetQuick,
     cacheGetWithFallback,
     cacheSetWithAlias,
+    cacheDelete,
     type ContentType
 } from '@/lib/cache';
 import type { ScraperResult } from '@/core/scrapers/types';
@@ -67,6 +68,13 @@ function isOriginAllowed(originHostname: string, allowedOrigins: string[]): bool
 }
 
 function isRequestAllowed(request: NextRequest): boolean {
+    // Allow internal requests from Telegram bot (same server)
+    const internalRequest = request.headers.get('x-internal-request');
+    if (internalRequest === 'telegram-bot') {
+        console.log('[publicservices] Internal request from telegram-bot allowed');
+        return true;
+    }
+
     // SECURITY: Require explicit whitelist in production
     // If no whitelist configured, block all requests (fail-safe)
     if (ALLOWED_ORIGINS.length === 0) {
@@ -211,11 +219,29 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 6: Run scraper (cache miss)
+        // Step 6: Run scraper (cache miss) - with retry on failure
         logger.cache(urlResult.platform, false);
-        const result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+        let result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
             cookie: poolCookie || undefined,
         });
+
+        // If scrape failed, clear cache and retry once with fresh data
+        if (!result.success && !skipCache) {
+            console.log(`[publicservices] Scrape failed, clearing cache and retrying...`);
+            await cacheDelete(urlResult.platform, url);
+            if (urlResult.resolvedUrl !== url) {
+                await cacheDelete(urlResult.platform, urlResult.resolvedUrl);
+            }
+            
+            // Retry scrape
+            result = await runScraper(urlResult.platform, urlResult.resolvedUrl, {
+                cookie: poolCookie || undefined,
+            });
+            
+            if (result.success) {
+                console.log(`[publicservices] Retry successful!`);
+            }
+        }
 
         // Step 7: Fetch file sizes for formats (all platforms - YouTube already has estimated sizes)
         if (result.success && result.data?.formats) {

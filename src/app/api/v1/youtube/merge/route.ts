@@ -7,12 +7,14 @@
  * - Per-IP rate limiting (5 requests per 10 minutes)
  * - Queue system for overflow requests
  * - Disk space monitoring
+ * - Duration limit: max 5 minutes for YouTube videos
  * 
  * Flow:
  * 1. Check rate limit & acquire queue slot
- * 2. Run yt-dlp with format selector to download+merge
- * 3. Stream the output file to client
- * 4. Release slot & cleanup temp files
+ * 2. Validate video duration (max 5 minutes)
+ * 3. Run yt-dlp with format selector to download+merge
+ * 4. Stream the output file to client
+ * 5. Release slot & cleanup temp files
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -22,6 +24,10 @@ import { homedir, tmpdir } from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { mergeQueueAcquire, mergeQueueRelease, mergeQueueStatus } from '@/lib/services/youtube/merge-queue';
+import { YOUTUBE_MAX_DURATION_SECONDS } from '@/lib/services/youtube/storage';
+
+// Max duration in seconds (5 minutes) - imported from storage.ts
+const MAX_DURATION_SECONDS = YOUTUBE_MAX_DURATION_SECONDS;
 
 // ============================================================================
 // FFmpeg Path Detection (kept as fallback, yt-dlp uses it internally)
@@ -227,6 +233,62 @@ const VALID_HEIGHTS = [144, 240, 360, 480, 720, 1080, 1440, 2160];
 
 // Valid audio formats
 const VALID_AUDIO_FORMATS = ['mp3', 'm4a'];
+
+// ============================================================================
+// Duration Check (using yt-dlp)
+// ============================================================================
+
+interface DurationResult {
+    success: boolean;
+    duration?: number;
+    title?: string;
+    error?: string;
+}
+
+/**
+ * Get video duration using yt-dlp --dump-json (fast, no download)
+ */
+async function getVideoDuration(url: string): Promise<DurationResult> {
+    return new Promise((resolve) => {
+        const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+        const args = [
+            '-m', 'yt_dlp',
+            '--dump-json',
+            '--no-download',
+            '--no-playlist',
+            '--no-warnings',
+            url
+        ];
+        
+        const proc = spawn(pythonCmd, args, { timeout: 30000 });
+        let stdout = '';
+        let stderr = '';
+        
+        proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+        proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+        
+        proc.on('close', (code) => {
+            if (code === 0 && stdout) {
+                try {
+                    const data = JSON.parse(stdout);
+                    resolve({
+                        success: true,
+                        duration: data.duration || 0,
+                        title: data.title
+                    });
+                } catch {
+                    resolve({ success: false, error: 'Failed to parse video info' });
+                }
+            } else {
+                resolve({ success: false, error: stderr.slice(-200) || 'Failed to get video info' });
+            }
+        });
+        
+        proc.on('error', (e) => {
+            resolve({ success: false, error: e.message });
+        });
+    });
+}
 
 // ============================================================================
 // Quality to Height Mapping
@@ -470,6 +532,30 @@ export async function POST(req: NextRequest) {
         
         slotAcquired = true;
         console.log(`[merge] Request ${id} acquired slot (remaining: ${queueResult.rateLimitRemaining})`);
+        
+        // ========================================
+        // Check video duration (max 5 minutes)
+        // ========================================
+        const durationCheck = await getVideoDuration(youtubeUrl);
+        
+        if (durationCheck.success && durationCheck.duration) {
+            const durationMinutes = Math.ceil(durationCheck.duration / 60);
+            console.log(`[merge] Video duration: ${durationCheck.duration}s (${durationMinutes} min)`);
+            
+            if (durationCheck.duration > MAX_DURATION_SECONDS) {
+                console.log(`[merge] Request ${id} rejected: duration ${durationCheck.duration}s exceeds max ${MAX_DURATION_SECONDS}s`);
+                mergeQueueRelease(id);
+                return NextResponse.json({ 
+                    success: false,
+                    error: `Video too long (${durationMinutes} minutes). Maximum allowed is ${MAX_DURATION_SECONDS / 60} minutes.`,
+                    duration: durationCheck.duration,
+                    maxDuration: MAX_DURATION_SECONDS
+                }, { status: 400 });
+            }
+        } else {
+            // If we can't get duration, log warning but continue (don't block)
+            console.warn(`[merge] Could not verify duration: ${durationCheck.error}`);
+        }
         
         // Check if audio-only request
         const isAudioOnly = quality.toLowerCase().includes('audio') || 

@@ -13,11 +13,7 @@ import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import type { InputMediaPhoto } from 'grammy/types';
 
 import { platformDetect, type PlatformId } from '@/core/config';
-import { runScraper } from '@/core/scrapers';
-import { prepareUrl } from '@/lib/url';
-import { cookiePoolGetRotating } from '@/lib/cookies';
 import { logger } from '@/lib/services/shared/logger';
-import { recordDownloadStat } from '@/lib/database';
 import { optimizeCdnUrl } from '@/lib/services/facebook/cdn';
 
 import type { BotContext, DownloadResult } from '../types';
@@ -115,67 +111,80 @@ function botUrlGetPlatformName(platform: PlatformId): string {
 }
 
 // ============================================================================
-// SCRAPER
+// SCRAPER VIA INTERNAL API
 // ============================================================================
 
+import { API_BASE_URL } from '../config';
+
+/**
+ * Call internal API to scrape URL (same as frontend)
+ * This ensures bot uses the same logic as web frontend
+ */
 async function botUrlCallScraper(url: string, isPremium: boolean = false): Promise<DownloadResult> {
     const startTime = Date.now();
 
     try {
-        // Get cookie first for URL resolution (Facebook share links need cookie to resolve)
+        // Detect platform for logging
         const platform = platformDetect(url);
-        const tier = isPremium ? 'private' : 'public';
-        const poolCookie = platform ? await cookiePoolGetRotating(platform, tier) : null;
-        
-        // Pass cookie to prepareUrl for proper URL resolution
-        const urlResult = await prepareUrl(url, { cookie: poolCookie || undefined });
-        
-        if (!urlResult.assessment.isValid || !urlResult.platform) {
-            return {
-                success: false,
-                error: urlResult.assessment.errorMessage || 'Invalid URL',
-                errorCode: 'INVALID_URL',
-            };
+        if (platform) {
+            logger.request(platform, 'telegram' as 'web');
         }
 
-        const resolvedPlatform = urlResult.platform;
-        logger.request(resolvedPlatform, 'telegram' as 'web');
-
-        // Get cookie for resolved platform if different from original
-        const scraperCookie = resolvedPlatform !== platform 
-            ? await cookiePoolGetRotating(resolvedPlatform, tier) 
-            : poolCookie;
-
-        const result = await runScraper(resolvedPlatform, urlResult.resolvedUrl, {
-            cookie: scraperCookie || undefined,
+        // Call internal API (bypass origin check by using internal URL)
+        const apiUrl = `${API_BASE_URL}/api/v1/publicservices`;
+        
+        console.log(`[Bot.API] Calling ${apiUrl} for ${url.substring(0, 50)}...`);
+        
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Internal request marker - bypass origin check
+                'X-Internal-Request': 'telegram-bot',
+                'Origin': API_BASE_URL,
+                'Referer': `${API_BASE_URL}/`,
+            },
+            body: JSON.stringify({ 
+                url,
+                // VIP users get private cookies
+                cookie: isPremium ? undefined : undefined, // Let API handle cookie selection
+            }),
         });
 
+        const data = await response.json();
         const responseTime = Date.now() - startTime;
-        recordDownloadStat(resolvedPlatform, result.success, responseTime, undefined, 'telegram').catch(() => {});
 
-        if (result.success && result.data) {
+        if (data.success && data.data) {
+            const resolvedPlatform = data.meta?.platform || platform;
             logger.complete(resolvedPlatform, responseTime);
+            
+            console.log(`[Bot.API] Success! Platform: ${resolvedPlatform}, Formats: ${data.data.formats?.length || 0}`);
+            
             return {
                 success: true,
                 platform: resolvedPlatform,
-                title: result.data.title,
-                thumbnail: result.data.thumbnail,
-                author: result.data.author,
-                formats: result.data.formats,
-                usedCookie: !!scraperCookie,  // Track whether cookie was used
+                title: data.data.title,
+                thumbnail: data.data.thumbnail,
+                author: data.data.author,
+                formats: data.data.formats,
+                usedCookie: true,
             };
         }
 
-        logger.scrapeError(resolvedPlatform, result.errorCode || 'UNKNOWN', result.error);
+        const resolvedPlatform = data.meta?.platform || platform;
+        console.log(`[Bot.API] Failed: ${data.error} (${data.errorCode})`);
+        logger.scrapeError(resolvedPlatform || 'unknown', data.errorCode || 'UNKNOWN', data.error);
+        
         return {
             success: false,
             platform: resolvedPlatform,
-            error: result.error || 'Failed to download',
-            errorCode: result.errorCode,
+            error: data.error || 'Failed to download',
+            errorCode: data.errorCode,
         };
 
     } catch (error) {
-        logger.error('telegram', error, 'SCRAPER_CALL');
+        console.error('[Bot.API] Error:', error);
+        logger.error('telegram', error, 'API_CALL');
         return {
             success: false,
             error: error instanceof Error ? error.message : 'Internal error',
