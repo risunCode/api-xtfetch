@@ -32,21 +32,61 @@ interface YtDlpResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// URL VALIDATION
+// URL VALIDATION & SANITIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/** Allowed YouTube hostnames */
+const ALLOWED_YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com', 'music.youtube.com'];
+
+/** Allowed YouTube path patterns */
+const ALLOWED_PATH_PATTERN = /^\/(watch|shorts|embed|v|live|playlist|@[\w-]+|channel|c|user|feed|results|hashtag)?/;
+
+/** Shell metacharacters that could enable command injection */
+const SHELL_METACHARACTERS = /[;&|`$(){}[\]<>]/g;
+
+/**
+ * Sanitize and validate YouTube URL to prevent command injection (RCE)
+ * 
+ * @param url - The URL to sanitize
+ * @returns Sanitized URL string
+ * @throws Error if URL is invalid or potentially malicious
+ */
+function sanitizeYouTubeUrl(url: string): string {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        throw new Error('Invalid URL format');
+    }
+
+    // Validate protocol - only allow http/https
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error('Invalid URL protocol - only HTTP/HTTPS allowed');
+    }
+
+    // Validate hostname against allowlist
+    if (!ALLOWED_YOUTUBE_HOSTS.includes(parsed.hostname)) {
+        throw new Error(`Invalid YouTube hostname: ${parsed.hostname}`);
+    }
+
+    // Validate path matches allowed patterns
+    if (!ALLOWED_PATH_PATTERN.test(parsed.pathname)) {
+        throw new Error(`Invalid YouTube path: ${parsed.pathname}`);
+    }
+
+    // Build sanitized URL and remove any shell metacharacters
+    const sanitizedUrl = parsed.toString().replace(SHELL_METACHARACTERS, '');
+    
+    return sanitizedUrl;
+}
 
 /**
  * Strict YouTube URL validation to prevent command injection
  */
-function isValidYouTubeUrl(url: string): boolean {
+export function isValidYouTubeUrl(url: string): boolean {
     try {
-        const parsed = new URL(url);
-        const validHosts = ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com', 'music.youtube.com'];
-        if (!validHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
-            return false;
-        }
-        const safePattern = /^[a-zA-Z0-9\-_=&?\/%.]+$/;
-        return safePattern.test(parsed.pathname + parsed.search);
+        sanitizeYouTubeUrl(url);
+        return true;
     } catch {
         return false;
     }
@@ -210,18 +250,24 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
     try {
         const cleanUrl = cleanYouTubeUrl(url);
         
-        if (!isValidYouTubeUrl(cleanUrl)) {
-            return createError(ScraperErrorCode.INVALID_URL, 'Invalid YouTube URL format');
+        // Sanitize URL to prevent command injection before passing to execFile
+        let sanitizedUrl: string;
+        try {
+            sanitizedUrl = sanitizeYouTubeUrl(cleanUrl);
+        } catch (sanitizeError) {
+            const errorMsg = sanitizeError instanceof Error ? sanitizeError.message : 'URL sanitization failed';
+            logger.warn('youtube', `URL sanitization failed: ${errorMsg}`);
+            return createError(ScraperErrorCode.INVALID_URL, `Invalid YouTube URL: ${errorMsg}`);
         }
         
         const scriptPath = path.join(process.cwd(), 'scripts', 'ytdlp-extract.py');
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         
         // First attempt: WITHOUT cookie to get all formats
-        logger.debug('youtube', `Extracting with yt-dlp (no cookie): ${cleanUrl}`);
+        logger.debug('youtube', `Extracting with yt-dlp (no cookie): ${sanitizedUrl}`);
         const startTime = Date.now();
 
-        let args = [scriptPath, cleanUrl];
+        let args = [scriptPath, sanitizedUrl];
         let execResult = await execFileAsync(pythonCmd, args, {
             timeout: 90000,
             maxBuffer: 10 * 1024 * 1024,
@@ -239,7 +285,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
         if (needsCookie) {
             const poolCookie = await cookiePoolGetRotating('youtube');
             if (poolCookie) {
-                logger.debug('youtube', `Retrying with cookie for: ${cleanUrl}`);
+                logger.debug('youtube', `Retrying with cookie for: ${sanitizedUrl}`);
                 
                 const tempDir = os.tmpdir();
                 cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
@@ -247,7 +293,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 await fs.writeFile(cookieFilePath, netscapeCookie, 'utf-8');
                 usedCookie = true;
                 
-                args = [scriptPath, cleanUrl, cookieFilePath];
+                args = [scriptPath, sanitizedUrl, cookieFilePath];
                 const retryResult = await execFileAsync(pythonCmd, args, {
                     timeout: 90000,
                     maxBuffer: 10 * 1024 * 1024,

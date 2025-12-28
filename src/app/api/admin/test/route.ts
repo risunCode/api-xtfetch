@@ -1,71 +1,58 @@
 /**
- * Simple test endpoint for debugging
+ * Admin Test Endpoint
+ * For debugging admin auth flow - REQUIRES ADMIN AUTH
+ * 
+ * SECURITY: This endpoint is protected and only accessible by admins
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { authVerifyAdminSession } from '@/core/security';
 
 export async function GET(request: NextRequest) {
-    console.log('[TEST] Request received');
-    
-    // Test 1: Basic response
-    console.log('[TEST] Step 1: Basic check OK');
-    
-    // Test 2: Check auth header
-    const authHeader = request.headers.get('Authorization');
-    console.log('[TEST] Step 2: Auth header:', authHeader ? 'Present' : 'Missing');
-    
-    // Test 3: Try importing auth
-    try {
-        const { authVerifyAdminSession } = await import('@/core/security');
-        console.log('[TEST] Step 3: Auth import OK');
-        
-        const auth = await authVerifyAdminSession(request);
-        console.log('[TEST] Step 4: Auth result:', auth);
-        
-        if (!auth.valid) {
-            return NextResponse.json({ 
-                success: false, 
-                error: auth.error,
-                step: 'auth_failed'
-            }, { status: 401 });
-        }
-    } catch (e) {
-        console.error('[TEST] Auth error:', e);
+    // SECURITY: Require admin auth FIRST before any processing
+    const auth = await authVerifyAdminSession(request);
+    if (!auth.valid) {
         return NextResponse.json({ 
             success: false, 
-            error: String(e),
-            step: 'auth_import_error'
-        }, { status: 500 });
+            error: 'Unauthorized' 
+        }, { status: 401 });
     }
-    
-    // Test 4: Try importing database
+
+    // Only log in development
+    if (process.env.NODE_ENV === 'development') {
+        console.log('[TEST] Admin auth verified:', auth.userId);
+    }
+
     try {
         const { supabase } = await import('@/lib/database');
-        console.log('[TEST] Step 5: Database import OK, supabase:', supabase ? 'Configured' : 'NULL');
         
         if (!supabase) {
             return NextResponse.json({ 
                 success: false, 
-                error: 'Supabase not configured',
-                step: 'db_null'
+                error: 'Database not configured'
             }, { status: 500 });
         }
         
-        // Test 5: Simple query
+        // Simple health check query
         const { data, error } = await supabase.from('users').select('id').limit(1);
-        console.log('[TEST] Step 6: Query result:', { data, error });
+        
+        if (error) {
+            return NextResponse.json({ 
+                success: false, 
+                error: 'Database query failed'
+            }, { status: 500 });
+        }
         
         return NextResponse.json({ 
             success: true, 
-            message: 'All tests passed',
-            hasUsers: data && data.length > 0
+            message: 'Admin test passed',
+            adminId: auth.userId,
+            dbConnected: true
         });
     } catch (e) {
-        console.error('[TEST] Database error:', e);
         return NextResponse.json({ 
             success: false, 
-            error: String(e),
-            step: 'db_error'
+            error: 'Internal error'
         }, { status: 500 });
     }
 }

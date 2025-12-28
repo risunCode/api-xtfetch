@@ -27,7 +27,7 @@ import {
     privacyComposer,
 } from './commands';
 import { adminComposer } from './commands/admin';
-import { initWorker, closeWorker, isQueueAvailable } from './queue';
+import { initWorker, closeWorker, isQueueAvailable, setBotApi } from './queue';
 import { startMonitoring, stopMonitoring } from './utils/monitoring';
 
 // ============================================================================
@@ -171,15 +171,24 @@ async function initBot(): Promise<void> {
             await bot.init();
             botInitialized = true;
             
+            // Set bot API for worker (dependency injection)
+            setBotApi(bot.api);
+            console.log('[Bot] Bot API set for worker');
+            
             // Start monitoring (logs memory warnings, tracks metrics)
             startMonitoring(60000); // Check every minute
             
             // Initialize queue worker if Redis is available
             if (isQueueAvailable()) {
+                console.log('[Bot] Queue available, initializing worker...');
                 const workerStarted = await initWorker();
                 if (workerStarted) {
-                    console.log('[Bot] Queue worker started');
+                    console.log('[Bot] Queue worker started successfully');
+                } else {
+                    console.log('[Bot] Queue worker failed to start');
                 }
+            } else {
+                console.log('[Bot] Queue not available, skipping worker init');
             }
         } catch (error) {
             console.error('[Bot] Failed to initialize:', error);
@@ -282,6 +291,7 @@ export {
     isQueueAvailable,
     downloadQueue,
     QUEUE_CONFIG,
+    setBotApi,
     type DownloadJobData,
 } from './queue';
 

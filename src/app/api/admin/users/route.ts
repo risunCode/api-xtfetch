@@ -77,27 +77,49 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: false, error: 'Database not configured' }, { status: 500 });
     }
 
+    // Store reference to avoid null checks in nested functions
+    const db = supabase;
+
     try {
         const body = await request.json();
         const { action, userId, ...data } = body;
 
+        // SECURITY: Helper to check if target user is admin
+        const isTargetAdmin = async (targetId: string): Promise<boolean> => {
+            const { data: targetUser } = await db
+                .from('users')
+                .select('role')
+                .eq('id', targetId)
+                .single();
+            return targetUser?.role === 'admin';
+        };
+
+        // SECURITY: Prevent self-modification for critical actions
+        if (['updateRole', 'toggleStatus', 'banUser', 'freezeUser'].includes(action)) {
+            if (userId === auth.userId) {
+                return NextResponse.json({ 
+                    success: false, 
+                    error: 'Cannot modify your own account. Ask another admin.' 
+                }, { status: 403 });
+            }
+        }
+
         switch (action) {
             case 'updateRole': {
-                // PROTECTION: Cannot demote admin to user
-                if (data.role === 'user') {
-                    // Check if target user is admin
-                    const { data: targetUser } = await supabase
-                        .from('users')
-                        .select('role')
-                        .eq('id', userId)
-                        .single();
-                    
-                    if (targetUser?.role === 'admin') {
-                        return NextResponse.json({ 
-                            success: false, 
-                            error: 'Cannot demote admin to user. Admins can only be promoted, not demoted.' 
-                        }, { status: 403 });
-                    }
+                // PROTECTION: Cannot modify admin users at all
+                if (await isTargetAdmin(userId)) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: 'Cannot modify admin role. Admin accounts are protected.' 
+                    }, { status: 403 });
+                }
+                
+                // Validate role value
+                if (!['user', 'admin'].includes(data.role)) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: 'Invalid role value' 
+                    }, { status: 400 });
                 }
                 
                 const { error } = await supabase.from('users').update({ role: data.role }).eq('id', userId);
@@ -106,15 +128,33 @@ export async function POST(request: NextRequest) {
             }
 
             case 'toggleStatus': {
+                // PROTECTION: Cannot modify admin status
+                if (await isTargetAdmin(userId)) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: 'Cannot modify admin status. Admin accounts are protected.' 
+                    }, { status: 403 });
+                }
+                
                 // New: Set status enum value ('active' | 'frozen' | 'banned')
                 const newStatus: UserStatus = data.status || (data.isActive ? 'active' : 'frozen');
+                if (!['active', 'frozen', 'banned'].includes(newStatus)) {
+                    return NextResponse.json({ success: false, error: 'Invalid status value' }, { status: 400 });
+                }
                 const { error } = await supabase.from('users').update({ status: newStatus }).eq('id', userId);
                 if (error) throw error;
                 return NextResponse.json({ success: true, message: `User status set to ${newStatus}` });
             }
 
             case 'banUser': {
-                // New action: Set status to 'banned'
+                // PROTECTION: Cannot ban admin
+                if (await isTargetAdmin(userId)) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: 'Cannot ban admin users. Admin accounts are protected.' 
+                    }, { status: 403 });
+                }
+                
                 const { error } = await supabase.from('users').update({ status: 'banned' as UserStatus }).eq('id', userId);
                 if (error) throw error;
                 return NextResponse.json({ success: true, message: 'User banned' });
@@ -128,7 +168,14 @@ export async function POST(request: NextRequest) {
             }
 
             case 'freezeUser': {
-                // New action: Set status to 'frozen'
+                // PROTECTION: Cannot freeze admin
+                if (await isTargetAdmin(userId)) {
+                    return NextResponse.json({ 
+                        success: false, 
+                        error: 'Cannot freeze admin users. Admin accounts are protected.' 
+                    }, { status: 403 });
+                }
+                
                 const { error } = await supabase.from('users').update({ status: 'frozen' as UserStatus }).eq('id', userId);
                 if (error) throw error;
                 return NextResponse.json({ success: true, message: 'User frozen' });
@@ -139,9 +186,28 @@ export async function POST(request: NextRequest) {
                     return NextResponse.json({ success: false, error: 'Admin client not configured' }, { status: 500 });
                 }
                 const { email, password, role: userRole } = data;
+                
+                // Input validation
                 if (!email || !password) {
                     return NextResponse.json({ success: false, error: 'Email and password required' }, { status: 400 });
                 }
+                
+                // Email format validation
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(email)) {
+                    return NextResponse.json({ success: false, error: 'Invalid email format' }, { status: 400 });
+                }
+                
+                // Password strength validation
+                if (password.length < 8) {
+                    return NextResponse.json({ success: false, error: 'Password must be at least 8 characters' }, { status: 400 });
+                }
+                
+                // Role validation
+                if (userRole && !['user', 'admin'].includes(userRole)) {
+                    return NextResponse.json({ success: false, error: 'Invalid role value' }, { status: 400 });
+                }
+                
                 const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
                     email, password, email_confirm: true
                 });
@@ -180,6 +246,29 @@ export async function DELETE(request: NextRequest) {
         if (!userId) {
             return NextResponse.json({ success: false, error: 'userId required' }, { status: 400 });
         }
+        
+        // SECURITY: Cannot delete yourself
+        if (userId === auth.userId) {
+            return NextResponse.json({ 
+                success: false, 
+                error: 'Cannot delete your own account' 
+            }, { status: 403 });
+        }
+        
+        // SECURITY: Cannot delete admin users
+        const { data: targetUser } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', userId)
+            .single();
+            
+        if (targetUser?.role === 'admin') {
+            return NextResponse.json({ 
+                success: false, 
+                error: 'Cannot delete admin users. Admin accounts are protected.' 
+            }, { status: 403 });
+        }
+        
         const { error } = await supabase.from('users').delete().eq('id', userId);
         if (error) throw error;
         return NextResponse.json({ success: true, message: 'User deleted' });

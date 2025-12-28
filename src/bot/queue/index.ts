@@ -11,8 +11,9 @@ export {
     downloadQueue,
     isQueueAvailable,
     getWorkerConnection,
+    addJobWithBackpressure,
     type DownloadJobData,
 } from './downloadQueue';
 
 // Worker
-export { initWorker, closeWorker, downloadWorker } from './worker';
+export { initWorker, closeWorker, downloadWorker, setBotApi } from './worker';
