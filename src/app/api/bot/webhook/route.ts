@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { webhookCallback } from 'grammy';
-import { bot, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET } from '@/bot';
+import { bot, botConfigIsValid, TELEGRAM_WEBHOOK_SECRET, initWorker, isQueueAvailable, setBotApi } from '@/bot';
 
 // Telegram's official IP ranges for webhook requests
 // https://core.telegram.org/bots/webhooks#the-short-version
@@ -43,6 +43,7 @@ function isFromTelegram(ip: string): boolean {
 // Lazy-init webhook handler (avoid build-time errors when bot is null)
 let handleUpdate: ((req: Request) => Promise<Response>) | null = null;
 let botInitialized = false;
+let workerInitialized = false;
 
 async function getHandler() {
   if (!handleUpdate && bot) {
@@ -51,9 +52,26 @@ async function getHandler() {
       try {
         await bot.init();
         botInitialized = true;
+        console.log('[Webhook] Bot initialized');
+        
+        // Set bot API for worker
+        setBotApi(bot.api);
+        console.log('[Webhook] Bot API set for worker');
       } catch (error) {
         console.error('[Webhook] Bot init failed:', error);
         return null;
+      }
+    }
+    
+    // Initialize worker if not done yet
+    if (!workerInitialized && isQueueAvailable()) {
+      try {
+        console.log('[Webhook] Queue available, initializing worker...');
+        const started = await initWorker();
+        workerInitialized = true;
+        console.log('[Webhook] Worker initialized:', started ? 'SUCCESS' : 'FAILED');
+      } catch (error) {
+        console.error('[Webhook] Worker init failed:', error);
       }
     }
     

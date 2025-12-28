@@ -192,6 +192,7 @@ let downloadWorker: Worker<DownloadJobData> | null = null;
  */
 export async function initWorker(): Promise<boolean> {
     if (downloadWorker) {
+        console.log('[Bot.Worker] Worker already initialized');
         return true;
     }
 
@@ -203,6 +204,33 @@ export async function initWorker(): Promise<boolean> {
     
     if (!connection) {
         console.log('[Bot.Worker] Redis not configured - worker disabled');
+        return false;
+    }
+
+    // Wait for Redis connection to be ready
+    try {
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Redis connection timeout')), 10000);
+            
+            if (connection.status === 'ready') {
+                clearTimeout(timeout);
+                resolve();
+                return;
+            }
+            
+            connection.once('ready', () => {
+                clearTimeout(timeout);
+                console.log('[Bot.Worker] Redis connection ready');
+                resolve();
+            });
+            
+            connection.once('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+    } catch (error) {
+        console.error('[Bot.Worker] Redis connection failed:', error);
         return false;
     }
 
@@ -222,11 +250,11 @@ export async function initWorker(): Promise<boolean> {
 
         // Worker event handlers
         downloadWorker.on('completed', (job) => {
-            console.log(`[Bot.Worker] Job ${job.id} completed`);
+            console.log(`[Bot.Worker] ✅ Job ${job.id} completed`);
         });
 
         downloadWorker.on('failed', (job, err) => {
-            console.log(`[Bot.Worker] Job ${job?.id} failed: ${err.message}`);
+            console.log(`[Bot.Worker] ❌ Job ${job?.id} failed: ${err.message}`);
         });
 
         downloadWorker.on('error', (err) => {
@@ -234,7 +262,11 @@ export async function initWorker(): Promise<boolean> {
         });
         
         downloadWorker.on('active', (job) => {
-            console.log(`[Bot.Worker] Processing job ${job.id}...`);
+            console.log(`[Bot.Worker] 🔄 Processing job ${job.id} for user ${job.data.userId}...`);
+        });
+        
+        downloadWorker.on('ready', () => {
+            console.log('[Bot.Worker] ✅ Worker is ready and listening for jobs');
         });
 
         console.log(`[Bot.Worker] Worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
