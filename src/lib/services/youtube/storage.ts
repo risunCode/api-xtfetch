@@ -61,8 +61,10 @@ export const YOUTUBE_DOWNLOAD_BASE = path.join(tmpdir(), 'xtfetch-youtube');
 export const SESSION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes (CDN URLs valid)
 export const DOWNLOAD_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (merged files - cleanup faster)
 
-// Duration limits
-export const YOUTUBE_MAX_DURATION_SECONDS = 5 * 60; // 5 minutes max for YouTube videos
+// Duration limits - REMOVED, using filesize limit instead
+// export const YOUTUBE_MAX_DURATION_SECONDS = 5 * 60; // OLD: 5 minutes max
+export const YOUTUBE_MAX_FILESIZE_MB = 500; // 500MB max for YouTube videos
+export const YOUTUBE_MAX_FILESIZE_BYTES = YOUTUBE_MAX_FILESIZE_MB * 1024 * 1024;
 export const GENERAL_MAX_DURATION_SECONDS = 2 * 60 * 60; // 2 hours max for other platforms
 // Note: Non-YouTube platforms are limited by Telegram's 50MB file size limit,
 // which effectively limits video duration to ~10-15 minutes for HD quality
