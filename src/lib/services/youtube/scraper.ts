@@ -404,7 +404,7 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
                 return {
                     success: false,
                     error: 'Video requires authentication or is restricted. Please try again later.',
-                    errorCode: 'NO_FORMATS',
+                    errorCode: ScraperErrorCode.BLOCKED,
                 };
             }
 
