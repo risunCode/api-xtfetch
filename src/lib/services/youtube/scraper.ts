@@ -397,6 +397,17 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
             const formats = extractFormats(ytdlpResult.data);
             const metadata = extractMetadata(ytdlpResult.data);
 
+            // Check if we got usable formats
+            // Empty formats means bot detection or restricted video (no audio available)
+            if (formats.length === 0) {
+                logger.warn('youtube', 'No usable formats extracted - likely bot detection or restricted video');
+                return {
+                    success: false,
+                    error: 'Video requires authentication or is restricted. Please try again later.',
+                    errorCode: 'NO_FORMATS',
+                };
+            }
+
             const result: ScraperResult = {
                 success: true,
                 data: {

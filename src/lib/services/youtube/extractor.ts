@@ -152,10 +152,19 @@ function findTargetHeight(height: number): number | null {
 /**
  * Extract formats from yt-dlp output
  * 
- * Priority:
+ * VALID combinations:
+ * 1. Video-only + Audio-only = VALID (can merge)
+ * 2. Audio-only alone = VALID (user can download audio)
+ * 3. Combined 360p = VALID (direct download)
+ * 
+ * INVALID (broken state - bot detection/restricted):
+ * - Video-only WITHOUT audio-only = can't merge, unusable
+ * - Combined > 360p WITHOUT audio-only = broken extraction, skip
+ * 
+ * Priority for valid state:
  * 1. Video-only + best audio (smaller filesize, same quality)
- * 2. Combined formats as fallback
- * 3. NO HDR/fps filtering - accept all formats
+ * 2. Combined 360p as fallback
+ * 3. Audio-only formats
  */
 export function extractFormats(output: YtDlpOutput): MediaFormat[] {
     const rawFormats = output.formats.filter(f => f.url);
@@ -174,11 +183,31 @@ export function extractFormats(output: YtDlpOutput): MediaFormat[] {
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0]
         || audioOnly.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
     
-    // 1. PRIORITY: Video-only + audio
+    // Check valid state
+    const hasAudioOnly = audioOnly.length > 0;
+    const hasVideoOnly = videoOnly.length > 0;
+    const hasCombined360 = combined.some(f => f.height && f.height <= 400); // 360p or lower
+    const hasCombinedHigher = combined.some(f => f.height && f.height > 400); // > 360p
+    
+    // INVALID STATE CHECK:
+    // If we have video-only but NO audio-only, video formats are unusable
+    // If we have combined > 360p but NO audio-only, it's broken extraction
+    if (!hasAudioOnly) {
+        if (hasVideoOnly) {
+            console.warn('[YouTube Extractor] Video-only formats without audio - unusable');
+            return [];
+        }
+        if (hasCombinedHigher && !hasCombined360) {
+            console.warn('[YouTube Extractor] Combined > 360p without audio - broken extraction');
+            return [];
+        }
+    }
+    
+    // 1. PRIORITY: Video-only + audio (only if we have audio)
     // Strategy: Prefer av01 (AV1) - smaller size, good quality, will be merged to mp4/h264
     // Fallback to avc1 (H.264) if no av01 available
     // Skip vp9 - too large
-    if (bestAudio) {
+    if (hasAudioOnly && hasVideoOnly) {
         // Group by height, prefer av01 (smaller) > avc1 (fallback), skip vp9
         const byHeight = new Map<number, YtDlpFormat>();
         
@@ -255,8 +284,9 @@ export function extractFormats(output: YtDlpOutput): MediaFormat[] {
         }
     }
     
-    // 2. FALLBACK: Combined formats for missing resolutions
-    for (const f of combined.filter(f => f.height && f.height >= 360).sort((a, b) => (b.height || 0) - (a.height || 0))) {
+    // 2. FALLBACK: Combined 360p only (higher combined formats are broken state)
+    // Only add combined formats if they're 360p or lower
+    for (const f of combined.filter(f => f.height && f.height <= 400).sort((a, b) => (b.height || 0) - (a.height || 0))) {
         const target = findTargetHeight(f.height!);
         if (!target || addedHeights.has(target)) continue;
         
