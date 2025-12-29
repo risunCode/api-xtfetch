@@ -2,7 +2,7 @@
  * YouTube Extractor
  * 
  * Parses yt-dlp JSON output and extracts normalized formats.
- * Handles format filtering, quality selection, and metadata extraction.
+ * Prioritizes video-only + audio (smaller filesize) over combined formats.
  * 
  * @module youtube/extractor
  */
@@ -27,7 +27,7 @@ export interface YtDlpFormat {
     filesize_approx?: number;
     vcodec?: string;
     acodec?: string;
-    tbr?: number;
+    tbr?: number;  // Total bitrate (kbps) - used for accurate filesize calculation
     abr?: number;
     fps?: number;
     quality?: string;
@@ -39,10 +39,10 @@ export interface YtDlpFormat {
 export interface YtDlpOutput {
     id: string;
     title: string;
-    author?: string;        // From Python script (uploader || channel)
-    uploader?: string;      // Raw yt-dlp field
-    channel?: string;       // Raw yt-dlp field
-    uploader_id?: string;   // Raw yt-dlp field
+    author?: string;
+    uploader?: string;
+    channel?: string;
+    uploader_id?: string;
     thumbnail: string;
     description?: string;
     upload_date?: string;
@@ -77,278 +77,257 @@ const TARGET_HEIGHTS = [1080, 720, 480, 360];
 /** Maximum number of formats to return */
 const MAX_FORMATS = 10;
 
-/** Typical bitrates for YouTube video streams (in kbps) for estimation */
+/** Typical bitrates for estimation (kbps) */
 const VIDEO_BITRATES: Record<number, number> = {
-    2160: 8000,   // 4K
-    1440: 4000,   // 2K
-    1080: 2000,   // FHD
-    720: 1200,    // HD
-    480: 600,     // SD
-    360: 350,     // Low
+    2160: 8000, 1440: 4000, 1080: 2000, 720: 1200, 480: 600, 360: 350,
 };
-
-/** Audio bitrate for estimation (kbps) */
 const AUDIO_BITRATE = 128;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Checks if format has video codec
- */
-function hasVideo(format: YtDlpFormat): boolean {
-    return !!format.vcodec && format.vcodec !== 'none';
+function hasVideo(f: YtDlpFormat): boolean {
+    return !!f.vcodec && f.vcodec !== 'none';
+}
+
+function hasAudio(f: YtDlpFormat): boolean {
+    return !!f.acodec && f.acodec !== 'none';
+}
+
+function isVideoOnly(f: YtDlpFormat): boolean {
+    return hasVideo(f) && !hasAudio(f);
+}
+
+function isAudioOnly(f: YtDlpFormat): boolean {
+    return hasAudio(f) && !hasVideo(f);
+}
+
+function isCombined(f: YtDlpFormat): boolean {
+    return hasVideo(f) && hasAudio(f);
 }
 
 /**
- * Checks if format has audio codec
+ * Get filesize - priority: exact > tbr calculation > approx
+ * Formula: filesize = (tbr_kbps * 1000 * duration) / 8
  */
-function hasAudio(format: YtDlpFormat): boolean {
-    return !!format.acodec && format.acodec !== 'none';
-}
-
-/**
- * Checks if format is combined (has both video and audio)
- */
-function isCombined(format: YtDlpFormat): boolean {
-    return hasVideo(format) && hasAudio(format);
-}
-
-/**
- * Checks if format is video-only (needs audio merge)
- */
-function isVideoOnly(format: YtDlpFormat): boolean {
-    return hasVideo(format) && !hasAudio(format);
-}
-
-/**
- * Checks if format is audio-only
- */
-function isAudioOnly(format: YtDlpFormat): boolean {
-    return hasAudio(format) && !hasVideo(format);
-}
-
-/**
- * Gets filesize from format (actual or approximate)
- */
-function getFilesize(format: YtDlpFormat): number | undefined {
-    if (format.filesize && format.filesize > 0) return format.filesize;
-    if (format.filesize_approx && format.filesize_approx > 0) return format.filesize_approx;
+function getFilesize(f: YtDlpFormat, duration?: number): number | undefined {
+    if (f.filesize && f.filesize > 0) return f.filesize;
+    if (f.tbr && f.tbr > 0 && duration && duration > 0) {
+        return Math.round((f.tbr * 1000 * duration) / 8);
+    }
+    if (f.filesize_approx && f.filesize_approx > 0) return f.filesize_approx;
     return undefined;
 }
 
-/**
- * Estimates filesize based on resolution and duration
- */
 function estimateFilesize(height: number, duration: number, includeAudio: boolean): number {
-    const heights = Object.keys(VIDEO_BITRATES).map(Number).sort((a, b) => b - a);
-    let videoBitrate = VIDEO_BITRATES[360];
-    
-    for (const h of heights) {
-        if (height >= h) {
-            videoBitrate = VIDEO_BITRATES[h];
-            break;
-        }
+    let bitrate = VIDEO_BITRATES[360];
+    for (const h of Object.keys(VIDEO_BITRATES).map(Number).sort((a, b) => b - a)) {
+        if (height >= h) { bitrate = VIDEO_BITRATES[h]; break; }
     }
-    
-    const totalBitrate = videoBitrate + (includeAudio ? AUDIO_BITRATE : 0);
-    return Math.round((totalBitrate * duration * 1000) / 8);
+    const total = bitrate + (includeAudio ? AUDIO_BITRATE : 0);
+    return Math.round((total * 1000 * duration) / 8);
 }
 
-/**
- * Finds the closest target height for a given resolution
- */
-function findClosestTargetHeight(height: number): number | null {
+function findTargetHeight(height: number): number | null {
+    // Map actual height to target quality label
+    // Only match if height is close to target (within reasonable range)
     for (const target of TARGET_HEIGHTS) {
-        if (height >= target - 50) return target; // Allow 50px tolerance
+        // Match if height is within target range:
+        // - 1080p: 1030-1180 (allows 1080, but not 1440)
+        // - 720p: 670-820
+        // - 480p: 430-580
+        // - 360p: 310-460
+        const minHeight = target - 50;
+        const maxHeight = target + 100;
+        if (height >= minHeight && height <= maxHeight) return target;
     }
     return null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAIN EXTRACTION FUNCTIONS
+// MAIN EXTRACTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Extracts and filters formats from yt-dlp output
+ * Extract formats from yt-dlp output
  * 
- * Rules:
- * 1. Prefer formats with both video AND audio (no merge needed)
- * 2. Keep only: 1080p, 720p, 480p, 360p, audio-only
- * 3. Max 10 formats total
- * 4. Sort by quality (highest first)
+ * Priority:
+ * 1. Video-only + best audio (smaller filesize, same quality)
+ * 2. Combined formats as fallback
+ * 3. NO HDR/fps filtering - accept all formats
  */
 export function extractFormats(output: YtDlpOutput): MediaFormat[] {
     const rawFormats = output.formats.filter(f => f.url);
     const duration = output.duration || 0;
     const formats: MediaFormat[] = [];
-    
-    // Separate formats by type
-    const combinedFormats = rawFormats.filter(isCombined);
-    const videoOnlyFormats = rawFormats.filter(isVideoOnly);
-    const audioOnlyFormats = rawFormats.filter(isAudioOnly);
-    
-    // Get best audio for merging
-    const bestAudio = audioOnlyFormats
-        .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-    
-    // Track which heights we've added
     const addedHeights = new Set<number>();
     
-    // 1. Process combined formats first (preferred - no merge needed)
-    const sortedCombined = combinedFormats
-        .filter(f => f.height && f.height >= 360)
-        .sort((a, b) => (b.height || 0) - (a.height || 0));
+    // Separate by type
+    const videoOnly = rawFormats.filter(isVideoOnly);
+    const audioOnly = rawFormats.filter(isAudioOnly);
+    const combined = rawFormats.filter(isCombined);
     
-    for (const format of sortedCombined) {
-        const targetHeight = findClosestTargetHeight(format.height!);
-        if (!targetHeight || addedHeights.has(targetHeight)) continue;
-        
-        const actualSize = getFilesize(format);
-        const filesize = actualSize || (duration ? estimateFilesize(format.height!, duration, true) : undefined);
-        
-        formats.push({
-            quality: `${targetHeight}p`,
-            type: 'video',
-            url: format.url,
-            format: format.ext || 'mp4',
-            width: format.width,
-            height: format.height,
-            filesize,
-            fileSize: filesize ? formatBytes(filesize) : undefined,
-            filesizeEstimated: !actualSize && !!filesize,
-        });
-        
-        addedHeights.add(targetHeight);
-    }
+    // Get best audio (prefer m4a for compatibility)
+    const bestAudio = audioOnly
+        .filter(f => f.ext === 'm4a' || f.ext === 'mp4')
+        .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0]
+        || audioOnly.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
     
-    // 2. Fill missing resolutions with video-only formats (need merge)
+    // 1. PRIORITY: Video-only + audio
+    // Strategy: Prefer av01 (AV1) - smaller size, good quality, will be merged to mp4/h264
+    // Fallback to avc1 (H.264) if no av01 available
+    // Skip vp9 - too large
     if (bestAudio) {
-        const sortedVideoOnly = videoOnlyFormats
-            .filter(f => f.height && f.height >= 360)
-            .sort((a, b) => (b.height || 0) - (a.height || 0));
-        
-        // Group by height, prefer mp4 over webm
+        // Group by height, prefer av01 (smaller) > avc1 (fallback), skip vp9
         const byHeight = new Map<number, YtDlpFormat>();
-        for (const format of sortedVideoOnly) {
-            const targetHeight = findClosestTargetHeight(format.height!);
-            if (!targetHeight || addedHeights.has(targetHeight)) continue;
+        
+        for (const f of videoOnly.filter(f => f.height && f.height >= 360)) {
+            const target = findTargetHeight(f.height!);
+            if (!target) continue;
             
-            const existing = byHeight.get(targetHeight);
+            const existing = byHeight.get(target);
+            const vcodec = (f.vcodec || '').toLowerCase();
+            const existVcodec = existing ? (existing.vcodec || '').toLowerCase() : '';
+            
+            // Skip vp9 - too large
+            if (vcodec.startsWith('vp9') || vcodec.startsWith('vp09')) continue;
+            
+            // Codec priority: av01 (AV1) > avc1 (H.264)
+            // av01 = smaller size, good quality
+            // avc1 = fallback, compatible
+            const getCodecPriority = (codec: string): number => {
+                if (codec.startsWith('av01') || codec.startsWith('av1')) return 2; // AV1 - preferred (smaller)
+                if (codec.startsWith('avc1') || codec.startsWith('avc')) return 1; // H.264 - fallback
+                return 0;
+            };
+            
             if (!existing) {
-                byHeight.set(targetHeight, format);
-            } else if (format.ext === 'mp4' && existing.ext !== 'mp4') {
-                byHeight.set(targetHeight, format);
+                byHeight.set(target, f);
+            } else {
+                const existPriority = getCodecPriority(existVcodec);
+                const newPriority = getCodecPriority(vcodec);
+                
+                if (newPriority > existPriority) {
+                    // Better codec (av01 over avc1)
+                    byHeight.set(target, f);
+                } else if (newPriority === existPriority) {
+                    // Same codec, prefer higher bitrate for better quality
+                    const existTbr = existing.tbr || 0;
+                    const newTbr = f.tbr || 0;
+                    if (newTbr > existTbr) {
+                        byHeight.set(target, f);
+                    }
+                }
             }
         }
         
-        for (const [targetHeight, format] of byHeight) {
-            const videoSize = getFilesize(format);
-            const audioSize = getFilesize(bestAudio);
+        // Add video-only formats
+        for (const [height, f] of byHeight) {
+            const videoSize = getFilesize(f, duration);
+            const audioSize = getFilesize(bestAudio, duration);
             
             let filesize: number | undefined;
-            let isEstimated = false;
-            
             if (videoSize && audioSize) {
                 filesize = videoSize + audioSize;
             } else if (videoSize) {
-                const estimatedAudio = duration ? Math.round((AUDIO_BITRATE * duration * 1000) / 8) : Math.round(videoSize * 0.1);
-                filesize = videoSize + estimatedAudio;
-                isEstimated = true;
+                const audioBitrate = bestAudio.abr || AUDIO_BITRATE;
+                filesize = videoSize + Math.round((audioBitrate * 1000 * duration) / 8);
             } else if (duration) {
-                filesize = estimateFilesize(format.height!, duration, true);
-                isEstimated = true;
+                filesize = estimateFilesize(f.height!, duration, true);
             }
             
             formats.push({
-                quality: `${targetHeight}p`,
+                quality: `${height}p`,
                 type: 'video',
-                url: format.url,
-                format: 'mp4', // Output as mp4 after merge
-                width: format.width,
-                height: format.height,
+                url: f.url,
+                format: 'mp4',
+                width: f.width,
+                height: f.height,
                 filesize,
                 fileSize: filesize ? formatBytes(filesize) : undefined,
-                filesizeEstimated: isEstimated,
+                filesizeEstimated: !f.filesize,
                 needsMerge: true,
                 audioUrl: bestAudio.url,
             });
             
-            addedHeights.add(targetHeight);
+            addedHeights.add(height);
         }
     }
     
-    // 3. Add audio-only formats
-    if (audioOnlyFormats.length > 0) {
-        const bestAudioFormat = audioOnlyFormats
-            .filter(f => f.abr && f.abr > 0)
-            .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+    // 2. FALLBACK: Combined formats for missing resolutions
+    for (const f of combined.filter(f => f.height && f.height >= 360).sort((a, b) => (b.height || 0) - (a.height || 0))) {
+        const target = findTargetHeight(f.height!);
+        if (!target || addedHeights.has(target)) continue;
         
-        if (bestAudioFormat) {
-            const actualSize = getFilesize(bestAudioFormat);
-            const bitrate = Math.round(bestAudioFormat.abr || 128);
-            const audioFilesize = actualSize || (duration ? Math.round((bitrate * duration * 1000) / 8) : undefined);
+        const filesize = getFilesize(f, duration) || (duration ? estimateFilesize(f.height!, duration, true) : undefined);
+        
+        formats.push({
+            quality: `${target}p`,
+            type: 'video',
+            url: f.url,
+            format: f.ext || 'mp4',
+            width: f.width,
+            height: f.height,
+            filesize,
+            fileSize: filesize ? formatBytes(filesize) : undefined,
+            filesizeEstimated: !f.filesize,
+        });
+        
+        addedHeights.add(target);
+    }
+    
+    // 3. Audio formats
+    if (audioOnly.length > 0) {
+        const best = audioOnly.filter(f => f.abr).sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
+        if (best) {
+            const size = getFilesize(best, duration);
             
-            // M4A format (best quality)
             formats.push({
                 quality: 'M4A',
                 type: 'audio',
-                url: bestAudioFormat.url,
+                url: best.url,
                 format: 'm4a',
-                filesize: audioFilesize,
-                fileSize: audioFilesize ? formatBytes(audioFilesize) : undefined,
-                filesizeEstimated: !actualSize && !!audioFilesize,
+                filesize: size,
+                fileSize: size ? formatBytes(size) : undefined,
+                filesizeEstimated: !best.filesize,
             });
             
-            // MP3 format (most compatible, converted)
             formats.push({
                 quality: 'MP3',
                 type: 'audio',
-                url: bestAudioFormat.url,
+                url: best.url,
                 format: 'mp3',
-                filesize: audioFilesize ? Math.round(audioFilesize * 0.9) : undefined,
-                fileSize: audioFilesize ? formatBytes(Math.round(audioFilesize * 0.9)) : undefined,
+                filesize: size ? Math.round(size * 0.9) : undefined,
+                fileSize: size ? formatBytes(Math.round(size * 0.9)) : undefined,
                 filesizeEstimated: true,
             });
         }
     }
     
-    // 4. Sort by quality (video first by height desc, then audio)
+    // Sort: video by height desc, then audio
     formats.sort((a, b) => {
         if (a.type === 'audio' && b.type !== 'audio') return 1;
         if (a.type !== 'audio' && b.type === 'audio') return -1;
         return (b.height || 0) - (a.height || 0);
     });
     
-    // 5. Limit to max formats
     return formats.slice(0, MAX_FORMATS);
 }
 
 /**
- * Extracts metadata from yt-dlp output
+ * Extract metadata from yt-dlp output
  */
 export function extractMetadata(output: YtDlpOutput): ExtractedMetadata {
-    // Use fallback chain for author: author (from Python) -> uploader -> channel -> uploader_id -> 'Unknown'
-    const author = output.author || output.uploader || output.channel || output.uploader_id || 'Unknown';
-    
     return {
         title: output.title || 'Untitled',
-        author,
+        author: output.author || output.uploader || output.channel || output.uploader_id || 'Unknown',
         thumbnail: output.thumbnail || '',
-        description: output.description || undefined,
-        postedAt: output.upload_date ? formatUploadDate(output.upload_date) : undefined,
+        description: output.description,
+        postedAt: output.upload_date ? `${output.upload_date.slice(0, 4)}-${output.upload_date.slice(4, 6)}-${output.upload_date.slice(6, 8)}` : undefined,
         engagement: {
             views: output.view_count ?? undefined,
             likes: output.like_count ?? undefined,
         },
     };
-}
-
-/**
- * Formats yt-dlp upload_date (YYYYMMDD) to ISO date string
- */
-function formatUploadDate(date: string): string {
-    if (date.length !== 8) return date;
-    return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
 }

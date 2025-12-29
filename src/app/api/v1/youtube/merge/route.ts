@@ -3,17 +3,19 @@
  * POST /api/v1/youtube/merge
  * 
  * Production-ready with:
- * - Concurrency control (max 3 simultaneous merges)
+ * - Concurrency control (max 2 simultaneous merges)
  * - Per-IP rate limiting (5 requests per 10 minutes)
  * - Queue system for overflow requests
  * - Disk space monitoring
- * - Filesize limit: max 500MB for YouTube videos (no duration limit)
+ * - Memory protection (auto-reject if RAM > 900MB)
+ * - Filesize pre-check before download (max 400MB)
  * 
  * Flow:
- * 1. Check rate limit & acquire queue slot
- * 2. Run yt-dlp with format selector to download+merge
- * 3. Stream the output file to client
- * 4. Release slot & cleanup temp files
+ * 1. Check memory usage & rate limit
+ * 2. Pre-check estimated filesize via yt-dlp --dump-json
+ * 3. Run yt-dlp with format selector to download+merge
+ * 4. Stream the output file to client
+ * 5. Release slot & cleanup temp files
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -25,9 +27,13 @@ import { randomUUID } from 'crypto';
 import { mergeQueueAcquire, mergeQueueRelease, mergeQueueStatus } from '@/lib/services/youtube/merge-queue';
 import { YOUTUBE_MAX_FILESIZE_MB, YOUTUBE_MAX_FILESIZE_BYTES } from '@/lib/services/youtube/storage';
 
-// Max filesize: 500MB (no duration limit)
+// Max filesize: 400MB (prevent OOM on high-res videos)
 const MAX_FILESIZE_MB = YOUTUBE_MAX_FILESIZE_MB;
 const MAX_FILESIZE_BYTES = YOUTUBE_MAX_FILESIZE_BYTES;
+
+// Memory protection threshold (900MB)
+const MAX_MEMORY_MB = 900;
+const MAX_MEMORY_BYTES = MAX_MEMORY_MB * 1024 * 1024;
 
 // ============================================================================
 // FFmpeg Path Detection (kept as fallback, yt-dlp uses it internally)
@@ -246,17 +252,54 @@ interface DurationResult {
 }
 
 /**
- * Get video duration using yt-dlp --dump-json (fast, no download)
+ * Check current memory usage
+ * Returns true if memory is below threshold
  */
-async function getVideoDuration(url: string): Promise<DurationResult> {
+function checkMemoryUsage(): { ok: boolean; usedMB: number; maxMB: number } {
+    const used = process.memoryUsage();
+    const heapUsed = used.heapUsed;
+    const usedMB = Math.round(heapUsed / 1024 / 1024);
+    
+    return {
+        ok: heapUsed < MAX_MEMORY_BYTES,
+        usedMB,
+        maxMB: MAX_MEMORY_MB
+    };
+}
+
+interface VideoInfoResult {
+    success: boolean;
+    duration?: number;
+    title?: string;
+    estimatedFilesize?: number;
+    selectedFormats?: { type: string; quality: string; filesize: number }[];
+    error?: string;
+}
+
+/**
+ * Get video info using yt-dlp --dump-json (fast, no download)
+ * Returns duration, title, and ACCURATE estimated filesize from selected formats
+ * 
+ * Format selection matches extractor:
+ * - Prefer av01 (AV1) - smaller size, good quality
+ * - Fallback to avc1 (H.264)
+ * - Skip vp9 (too large)
+ * - Best m4a audio
+ */
+async function getVideoInfo(url: string, height: number = 720): Promise<VideoInfoResult> {
     return new Promise((resolve) => {
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+        
+        // Format selector: prefer av01 (AV1) > avc1 (H.264), skip vp9
+        const formatSelector = `bestvideo[height<=${height}][vcodec^=av01]+bestaudio[ext=m4a]/bestvideo[height<=${height}][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=${height}][vcodec!^=vp9][vcodec!^=vp09]+bestaudio/best[height<=${height}]/best`;
+        
         const args = [
             '-m', 'yt_dlp',
             '--dump-json',
             '--no-download',
             '--no-playlist',
             '--no-warnings',
+            '-f', formatSelector,
             url
         ];
 
@@ -271,10 +314,56 @@ async function getVideoDuration(url: string): Promise<DurationResult> {
             if (code === 0 && stdout) {
                 try {
                     const data = JSON.parse(stdout);
+                    let estimatedFilesize = 0;
+                    const selectedFormats: { type: string; quality: string; filesize: number }[] = [];
+                    
+                    // PRIORITY 1: Use requested_formats (most accurate - what yt-dlp will actually download)
+                    if (data.requested_formats && Array.isArray(data.requested_formats)) {
+                        for (const fmt of data.requested_formats) {
+                            const size = fmt.filesize || fmt.filesize_approx || 0;
+                            estimatedFilesize += size;
+                            selectedFormats.push({
+                                type: fmt.vcodec !== 'none' ? 'video' : 'audio',
+                                quality: fmt.format_note || fmt.format || 'unknown',
+                                filesize: size
+                            });
+                        }
+                    }
+                    
+                    // PRIORITY 2: Single format (when video+audio combined)
+                    if (!estimatedFilesize && (data.filesize || data.filesize_approx)) {
+                        estimatedFilesize = data.filesize || data.filesize_approx;
+                    }
+                    
+                    // PRIORITY 3: Calculate from tbr (total bitrate) - very accurate
+                    if (!estimatedFilesize && data.tbr && data.duration) {
+                        estimatedFilesize = (data.tbr * 1000 * data.duration) / 8;
+                    }
+                    
+                    // PRIORITY 4: Calculate from vbr + abr (video + audio bitrate)
+                    if (!estimatedFilesize && data.duration) {
+                        const vbr = data.vbr || 0;
+                        const abr = data.abr || 128;
+                        if (vbr > 0) {
+                            estimatedFilesize = ((vbr + abr) * 1000 * data.duration) / 8;
+                        }
+                    }
+                    
+                    // PRIORITY 5: Fallback estimate based on resolution and duration
+                    if (!estimatedFilesize && data.duration) {
+                        const bitrateKbps = height >= 1080 ? 2000 :
+                                           height >= 720 ? 1200 :
+                                           height >= 480 ? 600 : 350;
+                        const audioBitrate = 128;
+                        estimatedFilesize = ((bitrateKbps + audioBitrate) * 1000 * data.duration) / 8;
+                    }
+                    
                     resolve({
                         success: true,
                         duration: data.duration || 0,
-                        title: data.title
+                        title: data.title,
+                        estimatedFilesize,
+                        selectedFormats
                     });
                 } catch {
                     resolve({ success: false, error: 'Failed to parse video info' });
@@ -288,6 +377,20 @@ async function getVideoDuration(url: string): Promise<DurationResult> {
             resolve({ success: false, error: e.message });
         });
     });
+}
+
+/**
+ * Get video duration using yt-dlp --dump-json (fast, no download)
+ * @deprecated Use getVideoInfo instead
+ */
+async function getVideoDuration(url: string): Promise<DurationResult> {
+    const info = await getVideoInfo(url);
+    return {
+        success: info.success,
+        duration: info.duration,
+        title: info.title,
+        error: info.error
+    };
 }
 
 // ============================================================================
@@ -351,10 +454,11 @@ async function downloadAndMergeWithYtdlp(
                 url
             ];
 
-            console.log(`[merge] Running yt-dlp (audio-only, format=${audioFormat})...`);
-        } else {
-            // Video: best video up to height + best audio, merged to mp4
-            const formatSelector = `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+            } else {
+            // Video: prefer av01 (AV1) - smaller size, will be merged to mp4/h264
+            // Fallback to avc1 (H.264), skip vp9 (too large)
+            const formatSelector = `bestvideo[height<=${height}][vcodec^=av01]+bestaudio[ext=m4a]/bestvideo[height<=${height}][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=${height}][vcodec!^=vp9][vcodec!^=vp09]+bestaudio/best[height<=${height}]/best`;
+            
             ytdlpArgs = [
                 '-m', 'yt_dlp',
                 '-f', formatSelector,
@@ -368,11 +472,7 @@ async function downloadAndMergeWithYtdlp(
                 '--print', 'after_move:filepath',
                 url
             ];
-
-            console.log(`[merge] Running yt-dlp (video height<=${height})...`);
         }
-
-        console.log(`[merge] Command: ${pythonCmd} ${ytdlpArgs.join(' ')}`);
 
         const proc = spawn(pythonCmd, ytdlpArgs, {
             timeout: 300000,
@@ -389,26 +489,18 @@ async function downloadAndMergeWithYtdlp(
         proc.stderr?.on('data', (d) => {
             stderr += d.toString();
             const line = d.toString().trim();
-            // Log all stderr for debugging (including download progress for errors)
-            if (line) {
-                // Always log errors and warnings
-                if (line.includes('ERROR') || line.includes('WARNING') || line.includes('error')) {
-                    console.error(`[merge] yt-dlp stderr: ${line}`);
-                } else if (!line.includes('[download]') || line.includes('100%')) {
-                    console.log(`[merge] yt-dlp: ${line}`);
-                }
+            // Only log errors
+            if (line && (line.includes('ERROR') || line.includes('error'))) {
+                console.error(`[merge] yt-dlp: ${line}`);
             }
         });
 
         proc.on('close', (code) => {
-            console.log(`[merge] yt-dlp exited with code ${code}`);
-
             if (code === 0) {
                 const outputPath = stdout.trim().split('\n').pop()?.trim();
 
                 if (outputPath && existsSync(outputPath)) {
                     const stats = statSync(outputPath);
-                    console.log(`[merge] Output: ${outputPath} (${stats.size} bytes)`);
                     const ext = path.extname(outputPath);
                     const basename = path.basename(outputPath, ext);
 
@@ -419,13 +511,10 @@ async function downloadAndMergeWithYtdlp(
                     });
                 } else {
                     const files = readdirSync(outputDir);
-                    // Look for mp4 or mp3 output
-                    const outputFile = files.find((f: string) => f.endsWith('.mp4') || f.endsWith('.mp3'));
+                    const outputFile = files.find((f: string) => f.endsWith('.mp4') || f.endsWith('.mp3') || f.endsWith('.m4a'));
 
                     if (outputFile) {
                         const fullPath = path.join(outputDir, outputFile);
-                        const stats = statSync(fullPath);
-                        console.log(`[merge] Found output: ${fullPath} (${stats.size} bytes)`);
                         const ext = path.extname(outputFile);
 
                         resolve({
@@ -434,7 +523,7 @@ async function downloadAndMergeWithYtdlp(
                             title: path.basename(outputFile, ext)
                         });
                     } else {
-                        console.error(`[merge] No output file found. stdout: ${stdout}, stderr: ${stderr}`);
+                        console.error(`[merge] No output file found`);
                         resolve({
                             success: false,
                             error: 'Download completed but output file not found'
@@ -442,7 +531,7 @@ async function downloadAndMergeWithYtdlp(
                     }
                 }
             } else {
-                console.error(`[merge] yt-dlp failed:`, stderr.slice(-1000));
+                console.error(`[merge] yt-dlp failed:`, stderr.slice(-500));
 
                 let errorMsg = 'Download failed';
                 if (stderr.includes('Video unavailable')) {
@@ -495,6 +584,20 @@ export async function POST(req: NextRequest) {
     console.log(`[merge] Request ${id} from ${ip}`);
 
     try {
+        // ========================================
+        // Memory check FIRST (before any processing)
+        // ========================================
+        const memCheck = checkMemoryUsage();
+        if (!memCheck.ok) {
+            console.warn(`[merge] Memory limit exceeded: ${memCheck.usedMB}MB / ${memCheck.maxMB}MB`);
+            return NextResponse.json({
+                success: false,
+                error: 'Server sedang sibuk memproses video lain. Coba lagi dalam 1-2 menit.',
+                errorCode: 'SERVER_BUSY',
+                details: { memoryUsedMB: memCheck.usedMB }
+            }, { status: 503 });
+        }
+
         const body = await req.json();
         const { url, quality = '720p', filename } = body;
 
@@ -523,8 +626,24 @@ export async function POST(req: NextRequest) {
 
         if (!queueResult.allowed) {
             console.log(`[merge] Request ${id} rejected: ${queueResult.error}`);
+            
+            // User-friendly error messages
+            let userError = queueResult.error || 'Server busy';
+            let errorCode = 'QUEUE_ERROR';
+            
+            if (queueResult.error?.includes('Rate limit')) {
+                const minutes = Math.ceil((queueResult.rateLimitResetIn || 60000) / 60000);
+                userError = `Kamu sudah download ${5} video dalam 10 menit terakhir. Tunggu ${minutes} menit lagi ya!`;
+                errorCode = 'RATE_LIMITED';
+            } else if (queueResult.error?.includes('queue')) {
+                userError = 'Server sedang penuh. Coba lagi dalam beberapa menit.';
+                errorCode = 'QUEUE_FULL';
+            }
+            
             return NextResponse.json({
-                error: queueResult.error,
+                success: false,
+                error: userError,
+                errorCode,
                 rateLimitRemaining: queueResult.rateLimitRemaining,
                 rateLimitResetIn: queueResult.rateLimitResetIn
             }, { status: 429 });
@@ -533,23 +652,43 @@ export async function POST(req: NextRequest) {
         slotAcquired = true;
         console.log(`[merge] Request ${id} acquired slot (remaining: ${queueResult.rateLimitRemaining})`);
 
-        // ========================================
-        // Log video duration (no limit, just info)
-        // ========================================
-        const durationCheck = await getVideoDuration(youtubeUrl);
-
-        if (durationCheck.success && durationCheck.duration) {
-            const durationMinutes = Math.ceil(durationCheck.duration / 60);
-            console.log(`[merge] Video duration: ${durationCheck.duration}s (${durationMinutes} min)`);
-        } else {
-            console.warn(`[merge] Could not get duration: ${durationCheck.error}`);
-        }
-
         // Check if audio-only request
         const isAudioOnly = quality.toLowerCase().includes('audio') ||
             quality.toLowerCase().includes('kbps') ||
             quality.toLowerCase() === 'mp3' ||
             quality.toLowerCase() === 'm4a';
+
+        // Parse quality - for video, extract height
+        let targetHeight: number;
+        if (isAudioOnly) {
+            targetHeight = 720; // Placeholder, not used for audio
+        } else {
+            targetHeight = qualityToHeight(quality);
+            // Validate height parameter (RCE prevention)
+            if (!VALID_HEIGHTS.includes(targetHeight)) {
+                mergeQueueRelease(id);
+                return NextResponse.json(
+                    { success: false, error: 'Invalid height parameter' },
+                    { status: 400 }
+                );
+            }
+        }
+
+        // ========================================
+        // Get video info (for logging only, no size rejection)
+        // ========================================
+        const videoInfo = await getVideoInfo(youtubeUrl, targetHeight);
+
+        if (videoInfo.success) {
+            const durationMinutes = Math.ceil((videoInfo.duration || 0) / 60);
+            const estimatedMB = Math.round((videoInfo.estimatedFilesize || 0) / 1024 / 1024);
+            console.log(`[merge] "${videoInfo.title?.slice(0, 50)}" - ${durationMinutes}min, ~${estimatedMB}MB`);
+            
+            // Warning only - don't reject, trust frontend filesize
+            if (videoInfo.estimatedFilesize && videoInfo.estimatedFilesize > MAX_FILESIZE_BYTES) {
+                console.warn(`[merge] Warning: ~${estimatedMB}MB > ${MAX_FILESIZE_MB}MB limit`);
+            }
+        }
 
         // Determine output format for audio
         const audioOutputFormat = quality.toLowerCase() === 'mp3' ? 'mp3' :
@@ -559,28 +698,14 @@ export async function POST(req: NextRequest) {
 
         // Validate audio format (RCE prevention)
         if (isAudioOnly && !VALID_AUDIO_FORMATS.includes(audioOutputFormat)) {
+            mergeQueueRelease(id);
             return NextResponse.json(
                 { success: false, error: 'Invalid audio format' },
                 { status: 400 }
             );
         }
 
-        // Parse quality - for video, extract height
-        let targetValue: number;
-        if (isAudioOnly) {
-            targetValue = 320; // Placeholder, not used for audio
-        } else {
-            targetValue = qualityToHeight(quality);
-            // Validate height parameter (RCE prevention)
-            if (!VALID_HEIGHTS.includes(targetValue)) {
-                return NextResponse.json(
-                    { success: false, error: 'Invalid height parameter' },
-                    { status: 400 }
-                );
-            }
-        }
-
-        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}, AudioOnly: ${isAudioOnly}`);
+        console.log(`[merge] URL: ${youtubeUrl}, Quality: ${quality}`);
 
         // Setup temp folder
         temp = getTempFolder(id);
@@ -591,17 +716,14 @@ export async function POST(req: NextRequest) {
         // Download using yt-dlp
         let result = await downloadAndMergeWithYtdlp(
             youtubeUrl,
-            targetValue,
+            targetHeight,
             temp,
             ffmpegPath,
             isAudioOnly,
             audioOutputFormat as 'mp3' | 'm4a'
         );
 
-        // Retry with simpler format if first attempt fails (video only)
         if (!result.success && !isAudioOnly) {
-            console.log(`[merge] First attempt failed, retrying with simpler format (best[height<=720])...`);
-
             // Clean up any partial files from first attempt
             cleanupArtifacts(temp);
 
@@ -644,14 +766,30 @@ export async function POST(req: NextRequest) {
             }, { status: 500 });
         }
 
-        console.log(`[merge] Output validated successfully: ${validation.size} bytes`);
+        // Check actual filesize AFTER download
+        if (validation.size && validation.size > MAX_FILESIZE_BYTES) {
+            const actualMB = Math.round(validation.size / 1024 / 1024);
+            console.error(`[merge] File too large: ${actualMB}MB > ${MAX_FILESIZE_MB}MB limit`);
+            if (temp) cleanupFull(temp);
+            mergeQueueRelease(id);
+            return NextResponse.json({
+                success: false,
+                error: `Video terlalu besar (${actualMB}MB). Maksimal ${MAX_FILESIZE_MB}MB.`,
+                errorCode: 'FILE_TOO_LARGE',
+                details: {
+                    actualSizeMB: actualMB,
+                    maxSizeMB: MAX_FILESIZE_MB
+                }
+            }, { status: 400 });
+        }
+
+        console.log(`[merge] Output validated: ${validation.size} bytes`);
 
         // Cleanup artifacts but keep output
         cleanupArtifacts(temp, result.outputPath);
 
         // Get file stats
         const stats = statSync(result.outputPath);
-        console.log(`[merge] Output ready for streaming: ${stats.size} bytes, validated: true`);
 
         // Prepare filename
         const ext = isAudioOnly ? `.${audioOutputFormat}` : '.mp4';
@@ -673,7 +811,6 @@ export async function POST(req: NextRequest) {
                 stream.on('data', (chunk) => ctrl.enqueue(chunk));
                 stream.on('end', () => {
                     ctrl.close();
-                    console.log(`[merge] Stream completed: ${fileSize} bytes sent`);
                     mergeQueueRelease(requestId);
                     scheduleCleanup(folder);
                 });
@@ -685,7 +822,6 @@ export async function POST(req: NextRequest) {
                 });
             },
             cancel() {
-                console.log(`[merge] Stream cancelled by client`);
                 stream.destroy();
                 mergeQueueRelease(requestId);
                 cleanupFull(folder);

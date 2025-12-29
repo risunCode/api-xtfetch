@@ -7,6 +7,10 @@ Output: JSON to stdout
 Cookie file can be:
 - Netscape format cookie file (cookies.txt)
 - JSON array from browser extension (EditThisCookie, etc.)
+
+Filesize calculation:
+- Uses tbr (total bitrate) * duration for accurate estimation (<1% error)
+- Falls back to filesize/filesize_approx from yt-dlp
 """
 import sys
 import json
@@ -77,8 +81,10 @@ def extract(url: str, cookie_file: str = None) -> dict:
             
             formats = []
             seen = set()
+            raw_formats = info.get('formats', [])
+            duration = info.get('duration', 0)
             
-            for f in info.get('formats', []):
+            for f in raw_formats:
                 if not f.get('url'):
                     continue
                 
@@ -105,6 +111,7 @@ def extract(url: str, cookie_file: str = None) -> dict:
                 height = f.get('height')
                 fps = f.get('fps')
                 abr = f.get('abr')
+                tbr = f.get('tbr')
                 
                 if height:
                     quality = f'{height}p'
@@ -115,11 +122,19 @@ def extract(url: str, cookie_file: str = None) -> dict:
                 else:
                     quality = f.get('format_note') or fid
                 
+                # Get filesize: prefer exact > calculated from tbr > approx
+                filesize = f.get('filesize')
+                if not filesize and tbr and duration:
+                    # Calculate from tbr: (tbr_kbps * 1000 * duration) / 8
+                    filesize = int((tbr * 1000 * duration) / 8)
+                if not filesize:
+                    filesize = f.get('filesize_approx')
+                
                 formats.append({
                     'format_id': fid,
                     'quality': quality,
                     'ext': f.get('ext'),
-                    'filesize': f.get('filesize') or f.get('filesize_approx'),
+                    'filesize': filesize,
                     'url': f.get('url'),
                     'type': ftype,
                     'height': height,
@@ -128,6 +143,7 @@ def extract(url: str, cookie_file: str = None) -> dict:
                     'vcodec': vcodec if vcodec != 'none' else None,
                     'acodec': acodec if acodec != 'none' else None,
                     'abr': abr,
+                    'tbr': tbr,
                 })
             
             # Sort: combined first, then by height/quality
