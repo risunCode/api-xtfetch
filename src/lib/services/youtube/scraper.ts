@@ -22,6 +22,16 @@ import { extractFormats, extractMetadata, type YtDlpOutput } from './extractor';
 const execFileAsync = promisify(execFile);
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Maximum number of retries for timeout errors */
+const MAX_RETRIES = 2;
+
+/** Delay between retries in milliseconds */
+const RETRY_DELAY = 2000;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -233,11 +243,33 @@ function convertToNetscapeFormat(cookieData: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sleep for specified milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if error is a timeout error that should trigger retry
+ */
+function isTimeoutError(error: unknown): boolean {
+    const err = error as { code?: string; killed?: boolean; message?: string };
+    return err.code === 'ETIMEDOUT' || 
+           err.killed === true || 
+           (err.message?.toLowerCase().includes('timeout') ?? false) ||
+           (err.message?.toLowerCase().includes('timed out') ?? false);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN SCRAPER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Scrape YouTube video using yt-dlp
+ * Scrape YouTube video using yt-dlp with retry mechanism
  */
 export async function scrapeYouTube(url: string, options?: ScraperOptions): Promise<ScraperResult> {
     if (!isYouTubeUrl(url)) {
@@ -246,145 +278,197 @@ export async function scrapeYouTube(url: string, options?: ScraperOptions): Prom
 
     let cookieFilePath: string | null = null;
     let usedCookie = false;
+    let lastError: unknown = null;
 
-    try {
-        const cleanUrl = cleanYouTubeUrl(url);
-        
-        // Sanitize URL to prevent command injection before passing to execFile
-        let sanitizedUrl: string;
+    // Retry loop for timeout errors
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-            sanitizedUrl = sanitizeYouTubeUrl(cleanUrl);
-        } catch (sanitizeError) {
-            const errorMsg = sanitizeError instanceof Error ? sanitizeError.message : 'URL sanitization failed';
-            logger.warn('youtube', `URL sanitization failed: ${errorMsg}`);
-            return createError(ScraperErrorCode.INVALID_URL, `Invalid YouTube URL: ${errorMsg}`);
-        }
-        
-        const scriptPath = path.join(process.cwd(), 'scripts', 'ytdlp-extract.py');
-        const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-        
-        // First attempt: WITHOUT cookie to get all formats
-        logger.debug('youtube', `Extracting with yt-dlp (no cookie): ${sanitizedUrl}`);
-        const startTime = Date.now();
-
-        let args = [scriptPath, sanitizedUrl];
-        let execResult = await execFileAsync(pythonCmd, args, {
-            timeout: 90000,
-            maxBuffer: 10 * 1024 * 1024,
-        }).catch(e => ({ stdout: '', stderr: e.message || String(e) }));
-        
-        let { stdout, stderr } = execResult;
-        
-        // Check if we need to retry with cookie
-        const needsCookie = !stdout || 
-            stderr?.includes('Sign in') || 
-            stderr?.includes('age') || 
-            stderr?.includes('private') ||
-            stderr?.includes('confirm your age');
-        
-        if (needsCookie) {
-            const poolCookie = await cookiePoolGetRotating('youtube');
-            if (poolCookie) {
-                logger.debug('youtube', `Retrying with cookie for: ${sanitizedUrl}`);
-                
-                const tempDir = os.tmpdir();
-                cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
-                const netscapeCookie = convertToNetscapeFormat(poolCookie);
-                await fs.writeFile(cookieFilePath, netscapeCookie, 'utf-8');
-                usedCookie = true;
-                
-                args = [scriptPath, sanitizedUrl, cookieFilePath];
-                const retryResult = await execFileAsync(pythonCmd, args, {
-                    timeout: 90000,
-                    maxBuffer: 10 * 1024 * 1024,
-                }).catch(e => ({ stdout: '', stderr: e.message || String(e) }));
-                
-                stdout = retryResult.stdout;
-                stderr = retryResult.stderr;
+            // Add delay before retry (not on first attempt)
+            if (attempt > 0) {
+                logger.debug('youtube', `Retry attempt ${attempt}/${MAX_RETRIES} after ${RETRY_DELAY}ms delay`);
+                await sleep(RETRY_DELAY);
             }
-        }
-        
-        const extractTime = Date.now() - startTime;
-        logger.debug('youtube', `yt-dlp extraction took ${extractTime}ms${usedCookie ? ' (with cookie)' : ''}`);
 
-        if (stderr) {
-            logger.warn('youtube', `yt-dlp stderr: ${stderr}`);
-        }
-
-        // Parse result
-        const ytdlpResult: YtDlpResult = JSON.parse(stdout);
-
-        if (!ytdlpResult.success || !ytdlpResult.data) {
-            const errorMsg = ytdlpResult.error?.toLowerCase() || '';
-            if (usedCookie && (errorMsg.includes('sign in') || errorMsg.includes('login') || errorMsg.includes('cookie'))) {
-                cookiePoolMarkExpired('YouTube cookie expired or invalid').catch(() => {});
-            } else if (usedCookie) {
-                cookiePoolMarkError(ytdlpResult.error).catch(() => {});
+            const cleanUrl = cleanYouTubeUrl(url);
+            
+            // Sanitize URL to prevent command injection before passing to execFile
+            let sanitizedUrl: string;
+            try {
+                sanitizedUrl = sanitizeYouTubeUrl(cleanUrl);
+            } catch (sanitizeError) {
+                const errorMsg = sanitizeError instanceof Error ? sanitizeError.message : 'URL sanitization failed';
+                logger.warn('youtube', `URL sanitization failed: ${errorMsg}`);
+                return createError(ScraperErrorCode.INVALID_URL, `Invalid YouTube URL: ${errorMsg}`);
             }
-            return createError(ScraperErrorCode.PARSE_ERROR, ytdlpResult.error || 'Failed to extract video');
-        }
+            
+            const scriptPath = path.join(process.cwd(), 'scripts', 'ytdlp-extract.py');
+            const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+            
+            // First attempt: WITHOUT cookie to get all formats
+            logger.debug('youtube', `Extracting with yt-dlp (no cookie): ${sanitizedUrl}${attempt > 0 ? ` [retry ${attempt}]` : ''}`);
+            const startTime = Date.now();
 
-        if (usedCookie) {
-            cookiePoolMarkSuccess().catch(() => {});
-        }
+            let args = [scriptPath, sanitizedUrl];
+            let execResult = await execFileAsync(pythonCmd, args, {
+                timeout: 90000,
+                maxBuffer: 10 * 1024 * 1024,
+            }).catch(e => ({ stdout: '', stderr: e.message || String(e), error: e }));
+            
+            // Check if this was a timeout error - if so, retry
+            if ('error' in execResult && isTimeoutError(execResult.error)) {
+                if (attempt < MAX_RETRIES) {
+                    lastError = execResult.error;
+                    logger.warn('youtube', `Timeout on attempt ${attempt + 1}, will retry...`);
+                    continue; // Retry
+                }
+            }
+            
+            let { stdout, stderr } = execResult;
+            
+            // Check if we need to retry with cookie
+            const needsCookie = !stdout || 
+                stderr?.includes('Sign in') || 
+                stderr?.includes('age') || 
+                stderr?.includes('private') ||
+                stderr?.includes('confirm your age');
+            
+            if (needsCookie) {
+                const poolCookie = await cookiePoolGetRotating('youtube');
+                if (poolCookie) {
+                    logger.debug('youtube', `Retrying with cookie for: ${sanitizedUrl}`);
+                    
+                    const tempDir = os.tmpdir();
+                    cookieFilePath = path.join(tempDir, `yt-cookie-${Date.now()}.txt`);
+                    const netscapeCookie = convertToNetscapeFormat(poolCookie);
+                    await fs.writeFile(cookieFilePath, netscapeCookie, 'utf-8');
+                    usedCookie = true;
+                    
+                    args = [scriptPath, sanitizedUrl, cookieFilePath];
+                    const retryResult = await execFileAsync(pythonCmd, args, {
+                        timeout: 90000,
+                        maxBuffer: 10 * 1024 * 1024,
+                    }).catch(e => ({ stdout: '', stderr: e.message || String(e), error: e }));
+                    
+                    // Check if cookie retry also timed out
+                    if ('error' in retryResult && isTimeoutError(retryResult.error)) {
+                        if (attempt < MAX_RETRIES) {
+                            lastError = retryResult.error;
+                            logger.warn('youtube', `Timeout with cookie on attempt ${attempt + 1}, will retry...`);
+                            // Clean up cookie file before retry
+                            if (cookieFilePath) {
+                                fs.unlink(cookieFilePath).catch(() => {});
+                                cookieFilePath = null;
+                            }
+                            usedCookie = false;
+                            continue; // Retry
+                        }
+                    }
+                    
+                    stdout = retryResult.stdout;
+                    stderr = retryResult.stderr;
+                }
+            }
+            
+            const extractTime = Date.now() - startTime;
+            logger.debug('youtube', `yt-dlp extraction took ${extractTime}ms${usedCookie ? ' (with cookie)' : ''}${attempt > 0 ? ` [attempt ${attempt + 1}]` : ''}`);
 
-        // Use extractor to parse formats and metadata
-        const formats = extractFormats(ytdlpResult.data);
-        const metadata = extractMetadata(ytdlpResult.data);
+            if (stderr) {
+                logger.warn('youtube', `yt-dlp stderr: ${stderr}`);
+            }
 
-        const result: ScraperResult = {
-            success: true,
-            data: {
-                title: metadata.title,
-                description: metadata.description,
-                author: metadata.author,
-                thumbnail: metadata.thumbnail,
-                url,
-                formats,
-                engagement: metadata.engagement,
-                usedCookie,
-            },
-        };
+            // Parse result
+            const ytdlpResult: YtDlpResult = JSON.parse(stdout);
 
-        logger.complete('youtube', Date.now());
-        
-        return result;
+            if (!ytdlpResult.success || !ytdlpResult.data) {
+                const errorMsg = ytdlpResult.error?.toLowerCase() || '';
+                if (usedCookie && (errorMsg.includes('sign in') || errorMsg.includes('login') || errorMsg.includes('cookie'))) {
+                    cookiePoolMarkExpired('YouTube cookie expired or invalid').catch(() => {});
+                } else if (usedCookie) {
+                    cookiePoolMarkError(ytdlpResult.error).catch(() => {});
+                }
+                return createError(ScraperErrorCode.PARSE_ERROR, ytdlpResult.error || 'Failed to extract video');
+            }
 
-    } catch (error: unknown) {
-        const err = error as { code?: string; killed?: boolean; message?: string };
-        
-        if (usedCookie) {
+            if (usedCookie) {
+                cookiePoolMarkSuccess().catch(() => {});
+            }
+
+            // Use extractor to parse formats and metadata
+            const formats = extractFormats(ytdlpResult.data);
+            const metadata = extractMetadata(ytdlpResult.data);
+
+            const result: ScraperResult = {
+                success: true,
+                data: {
+                    title: metadata.title,
+                    description: metadata.description,
+                    author: metadata.author,
+                    thumbnail: metadata.thumbnail,
+                    url,
+                    formats,
+                    engagement: metadata.engagement,
+                    usedCookie,
+                },
+            };
+
+            logger.complete('youtube', Date.now());
+            
+            return result;
+
+        } catch (error: unknown) {
+            lastError = error;
+            const err = error as { code?: string; killed?: boolean; message?: string };
+            
+            // Check if this is a timeout error that should trigger retry
+            if (isTimeoutError(error) && attempt < MAX_RETRIES) {
+                logger.warn('youtube', `Timeout error on attempt ${attempt + 1}, will retry...`);
+                // Clean up cookie file before retry
+                if (cookieFilePath) {
+                    fs.unlink(cookieFilePath).catch(() => {});
+                    cookieFilePath = null;
+                }
+                usedCookie = false;
+                continue; // Retry
+            }
+            
+            if (usedCookie) {
+                const msg = err.message?.toLowerCase() || '';
+                if (msg.includes('sign in') || msg.includes('login') || msg.includes('cookie')) {
+                    cookiePoolMarkExpired('YouTube cookie expired').catch(() => {});
+                } else {
+                    cookiePoolMarkError(err.message).catch(() => {});
+                }
+            }
+            
+            if (err.code === 'ETIMEDOUT' || err.killed) {
+                return createError(ScraperErrorCode.TIMEOUT, `YouTube extraction timed out after ${attempt + 1} attempt(s)`);
+            }
+            
+            if (err.message?.includes('not found') || err.code === 'ENOENT') {
+                return createError(ScraperErrorCode.API_ERROR, 'yt-dlp not installed on server');
+            }
+
             const msg = err.message?.toLowerCase() || '';
-            if (msg.includes('sign in') || msg.includes('login') || msg.includes('cookie')) {
-                cookiePoolMarkExpired('YouTube cookie expired').catch(() => {});
-            } else {
-                cookiePoolMarkError(err.message).catch(() => {});
+            if (msg.includes('private') || msg.includes('sign in')) {
+                return createError(ScraperErrorCode.PRIVATE_CONTENT, 'This video is private or requires login');
             }
-        }
-        
-        if (err.code === 'ETIMEDOUT' || err.killed) {
-            return createError(ScraperErrorCode.TIMEOUT, 'YouTube extraction timed out');
-        }
-        
-        if (err.message?.includes('not found') || err.code === 'ENOENT') {
-            return createError(ScraperErrorCode.API_ERROR, 'yt-dlp not installed on server');
-        }
+            if (msg.includes('unavailable') || msg.includes('removed')) {
+                return createError(ScraperErrorCode.NOT_FOUND, 'Video unavailable or removed');
+            }
+            if (msg.includes('age') || msg.includes('confirm your age')) {
+                return createError(ScraperErrorCode.AGE_RESTRICTED, 'This video is age-restricted');
+            }
 
-        const msg = err.message?.toLowerCase() || '';
-        if (msg.includes('private') || msg.includes('sign in')) {
-            return createError(ScraperErrorCode.PRIVATE_CONTENT, 'This video is private or requires login');
-        }
-        if (msg.includes('unavailable') || msg.includes('removed')) {
-            return createError(ScraperErrorCode.NOT_FOUND, 'Video unavailable or removed');
-        }
-        if (msg.includes('age') || msg.includes('confirm your age')) {
-            return createError(ScraperErrorCode.AGE_RESTRICTED, 'This video is age-restricted');
-        }
-
-        return createError(ScraperErrorCode.UNKNOWN, (err.message || 'Unknown error').substring(0, 200));
-    } finally {
-        if (cookieFilePath) {
-            fs.unlink(cookieFilePath).catch(() => {});
+            return createError(ScraperErrorCode.UNKNOWN, (err.message || 'Unknown error').substring(0, 200));
+        } finally {
+            if (cookieFilePath) {
+                fs.unlink(cookieFilePath).catch(() => {});
+            }
         }
     }
+
+    // If we exhausted all retries (should only happen for timeout errors)
+    const err = lastError as { message?: string };
+    logger.error('youtube', `All ${MAX_RETRIES + 1} attempts failed for URL: ${url}`);
+    return createError(ScraperErrorCode.TIMEOUT, `YouTube extraction timed out after ${MAX_RETRIES + 1} attempts: ${err?.message || 'Unknown error'}`);
 }

@@ -19,7 +19,9 @@ import {
     extractFromStories,
     getContentType,
     generateTitle,
+    EngagementStats,
 } from './extractor';
+import { parseEngagementFromHtml, mergeEngagementStats, cleanEngagementStats } from '../shared/engagement-parser';
 
 type ContentType = 'post' | 'reel' | 'tv' | 'story';
 const GRAPHQL_DOC_ID = '8845758582119845';
@@ -59,7 +61,26 @@ async function fetchGraphQL(shortcode: string, cookie?: string): Promise<{ media
     }
 }
 
-function buildGraphQLResult(media: GraphQLMedia, shortcode: string, usedCookie: boolean): ScraperResult {
+/**
+ * Fetch HTML page to extract engagement stats as fallback
+ */
+async function fetchHtmlEngagement(shortcode: string): Promise<EngagementStats> {
+    const url = `https://www.instagram.com/p/${shortcode}/`;
+    const timeout = sysConfigScraperTimeout('instagram');
+    
+    try {
+        const res = await httpGet(url, 'instagram', {
+            headers: httpGetHeaders('instagram'),
+            timeout
+        });
+        if (res.status !== 200) return {};
+        return parseEngagementFromHtml(res.data, 'instagram');
+    } catch {
+        return {};
+    }
+}
+
+async function buildGraphQLResult(media: GraphQLMedia, shortcode: string, usedCookie: boolean): Promise<ScraperResult> {
     const { formats, thumbnail, metadata } = extractFromGraphQL(media, shortcode);
 
     if (formats.length === 0) {
@@ -68,6 +89,17 @@ function buildGraphQLResult(media: GraphQLMedia, shortcode: string, usedCookie: 
 
     const title = generateTitle(metadata.caption);
     const type = getContentType(formats);
+
+    // If comments is 0 or missing, try to fetch from HTML page as fallback
+    let engagement = metadata.engagement;
+    if (engagement && !engagement.comments) {
+        logger.debug('instagram', 'Comments missing from GraphQL, fetching HTML fallback...');
+        const htmlEngagement = await fetchHtmlEngagement(shortcode);
+        if (htmlEngagement.comments && htmlEngagement.comments > 0) {
+            engagement = cleanEngagementStats(mergeEngagementStats([engagement, htmlEngagement]));
+            logger.debug('instagram', `HTML fallback found ${htmlEngagement.comments} comments`);
+        }
+    }
 
     return {
         success: true,
@@ -78,7 +110,7 @@ function buildGraphQLResult(media: GraphQLMedia, shortcode: string, usedCookie: 
             authorName: metadata.authorName,
             description: metadata.caption,
             postedAt: metadata.postedAt,
-            engagement: metadata.engagement,
+            engagement,
             formats,
             url: `https://www.instagram.com/p/${shortcode}/`,
             type,
@@ -197,7 +229,7 @@ export async function scrapeInstagram(url: string, options?: ScraperOptions): Pr
     logger.debug('instagram', 'GraphQL probe (no cookie)...');
     const { media, error: gqlError } = await fetchGraphQL(shortcode);
     if (media) {
-        return buildGraphQLResult(media, shortcode, false);
+        return await buildGraphQLResult(media, shortcode, false);
     }
 
     if (cookie) {
@@ -205,7 +237,7 @@ export async function scrapeInstagram(url: string, options?: ScraperOptions): Pr
         const { media: authMedia } = await fetchGraphQL(shortcode, cookie);
         if (authMedia) {
             cookiePoolMarkSuccess().catch(() => { });
-            return buildGraphQLResult(authMedia, shortcode, true);
+            return await buildGraphQLResult(authMedia, shortcode, true);
         }
         cookiePoolMarkError('GraphQL failed with cookie').catch(() => { });
         return createError(ScraperErrorCode.PRIVATE_CONTENT, 'Post is private or has been deleted');

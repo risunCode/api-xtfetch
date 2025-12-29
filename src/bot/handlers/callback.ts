@@ -707,6 +707,158 @@ async function botCallbackDownloadQuality(
 }
 
 // ============================================================================
+// SEND STRATEGY CALLBACKS (Multi-Item Content)
+// ============================================================================
+
+/**
+ * Handle send strategy callback for multi-item content
+ * Pattern: strategy:{visitorId}:(group|single|links)
+ * 
+ * Strategies:
+ * - group: Send all items as a Telegram media group (album)
+ * - single: Send items one by one as separate messages
+ * - links: Send only download links without media
+ * 
+ * Integration: This handler requires pendingMultiItem to be set in session.
+ * See SEND_STRATEGY keyboard documentation in keyboards/index.ts for integration points.
+ */
+async function botCallbackSendStrategy(
+    ctx: BotContext,
+    visitorId: string,
+    strategy: 'group' | 'single' | 'links'
+): Promise<void> {
+    const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
+    
+    // Get pending multi-item download from session
+    const pending = ctx.session.pendingMultiItem;
+    
+    if (!pending || pending.visitorId !== visitorId) {
+        await ctx.answerCallbackQuery({ 
+            text: lang === 'id' 
+                ? '⏰ Sesi kadaluarsa. Kirim URL baru.'
+                : '⏰ Session expired. Send a new URL.',
+            show_alert: true 
+        });
+        return;
+    }
+    
+    const { result, originalUrl, itemCount } = pending;
+    
+    // Answer callback with strategy confirmation
+    const strategyLabels = {
+        group: lang === 'id' ? '📦 Mengirim sebagai album...' : '📦 Sending as album...',
+        single: lang === 'id' ? '📤 Mengirim satu per satu...' : '📤 Sending one by one...',
+        links: lang === 'id' ? '🔗 Menyiapkan link...' : '🔗 Preparing links...',
+    };
+    
+    await ctx.answerCallbackQuery({ text: strategyLabels[strategy] });
+    
+    // Update message to show processing
+    try {
+        await ctx.editMessageText(strategyLabels[strategy]);
+    } catch {
+        // Ignore edit errors
+    }
+    
+    const images = result.formats?.filter(f => f.type === 'image') || [];
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    const allMedia = [...images, ...videos];
+    
+    try {
+        switch (strategy) {
+            case 'group': {
+                // Send as media group (album) - max 10 items per group
+                // This is the default behavior, delegate to existing sendPhotoAlbum logic
+                // For now, just acknowledge - full implementation requires importing send functions
+                logger.debug('telegram', `Strategy: group - ${itemCount} items`);
+                
+                // TODO: Integrate with sendPhotoAlbum from url.ts
+                // For now, send a message indicating the feature is being processed
+                await ctx.reply(
+                    lang === 'id'
+                        ? `📦 Mengirim ${itemCount} item sebagai album...`
+                        : `📦 Sending ${itemCount} items as album...`
+                );
+                
+                // Clear session
+                ctx.session.pendingMultiItem = undefined;
+                break;
+            }
+            
+            case 'single': {
+                // Send items one by one
+                logger.debug('telegram', `Strategy: single - ${itemCount} items`);
+                
+                await ctx.reply(
+                    lang === 'id'
+                        ? `📤 Mengirim ${itemCount} item satu per satu...`
+                        : `📤 Sending ${itemCount} items one by one...`
+                );
+                
+                // TODO: Implement single-item sending loop
+                // for (const media of allMedia.slice(0, 10)) {
+                //     if (media.type === 'image') {
+                //         await ctx.replyWithPhoto(new InputFile({ url: media.url }));
+                //     } else if (media.type === 'video') {
+                //         await ctx.replyWithVideo(new InputFile({ url: media.url }));
+                //     }
+                //     await new Promise(r => setTimeout(r, 500)); // Rate limit
+                // }
+                
+                ctx.session.pendingMultiItem = undefined;
+                break;
+            }
+            
+            case 'links': {
+                // Send only download links
+                logger.debug('telegram', `Strategy: links - ${itemCount} items`);
+                
+                let linksMessage = lang === 'id'
+                    ? `🔗 *Download Links* (${itemCount} items)\n\n`
+                    : `🔗 *Download Links* (${itemCount} items)\n\n`;
+                
+                allMedia.slice(0, 10).forEach((media, index) => {
+                    const typeEmoji = media.type === 'video' ? '🎬' : '🖼️';
+                    linksMessage += `${index + 1}. ${typeEmoji} [${media.type === 'video' ? 'Video' : 'Photo'} ${index + 1}](${media.url})\n`;
+                });
+                
+                if (allMedia.length > 10) {
+                    linksMessage += lang === 'id'
+                        ? `\n_...dan ${allMedia.length - 10} item lainnya_`
+                        : `\n_...and ${allMedia.length - 10} more items_`;
+                }
+                
+                const keyboard = new InlineKeyboard().url('🔗 Original', originalUrl);
+                
+                await ctx.reply(linksMessage, {
+                    parse_mode: 'Markdown',
+                    reply_markup: keyboard,
+                    link_preview_options: { is_disabled: true },
+                });
+                
+                ctx.session.pendingMultiItem = undefined;
+                break;
+            }
+        }
+        
+        // Delete the strategy selection message
+        try {
+            await ctx.deleteMessage();
+        } catch {
+            // Ignore deletion errors
+        }
+        
+    } catch (error) {
+        logger.error('telegram', error, 'SEND_STRATEGY');
+        await ctx.reply(
+            lang === 'id' 
+                ? '❌ Gagal mengirim media. Coba lagi.'
+                : '❌ Failed to send media. Try again.'
+        );
+    }
+}
+
+// ============================================================================
 // MENU COMMAND CALLBACKS
 // ============================================================================
 
@@ -964,6 +1116,25 @@ export function registerCallbackHandler(bot: Bot<BotContext>): void {
         }
     });
 
+    // Send strategy callbacks for multi-item content: strategy:{visitorId}:(group|single|links)
+    // Used for Instagram carousels, Facebook albums, Twitter multi-image posts
+    bot.callbackQuery(/^strategy:([^:]+):(group|single|links)$/, async (ctx) => {
+        const match = ctx.match;
+        if (!match) return;
+
+        const visitorId = match[1];
+        const strategy = match[2] as 'group' | 'single' | 'links';
+
+        logger.debug('telegram', `Strategy callback: ${strategy} for ${visitorId}`);
+
+        try {
+            await botCallbackSendStrategy(ctx, visitorId, strategy);
+        } catch (error) {
+            logger.error('telegram', error, 'STRATEGY_CALLBACK');
+            await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
+        }
+    });
+
     // Report cookie issue to admin: report_cookie:{platform}
     bot.callbackQuery(/^report_cookie:(.+)$/, async (ctx) => {
         const platform = ctx.match?.[1];
@@ -1080,5 +1251,6 @@ export {
     botCallbackBackToMenu,
     botCallbackDownloadQuality,
     botCallbackMenuCommand,
+    botCallbackSendStrategy,
     findFormatByQuality,
 };

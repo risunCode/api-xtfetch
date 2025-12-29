@@ -37,6 +37,16 @@ export interface DetailedQualityInfo {
     audio: QualityOption;
 }
 
+/** All available quality options for YouTube */
+export interface YouTubeQualityOptions {
+    qualities: Array<{
+        resolution: string;  // "1080p", "720p", "480p", "360p"
+        label: string;       // Display label
+        filesize?: number;   // bytes
+        type: 'video' | 'audio';
+    }>;
+}
+
 // ============================================================================
 // Quality Detection
 // ============================================================================
@@ -232,51 +242,179 @@ export function buildVideoKeyboard(
 }
 
 /**
- * Build keyboard for YouTube content (preview with cancel option)
- * Supports both QualityInfo (legacy) and DetailedQualityInfo
+ * Extract all available YouTube qualities from download result
+ * Returns all video qualities (1080p, 720p, 480p, 360p) and audio option
+ */
+export function extractYouTubeQualities(result: DownloadResult): YouTubeQualityOptions {
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    const audios = result.formats?.filter(f => f.type === 'audio') || [];
+    
+    const qualities: YouTubeQualityOptions['qualities'] = [];
+    
+    // Define quality priority order
+    const qualityOrder = ['1080p', '720p', '480p', '360p'];
+    
+    for (const targetQuality of qualityOrder) {
+        const video = videos.find(v => {
+            const q = v.quality.toLowerCase();
+            return q.includes(targetQuality.replace('p', ''));
+        });
+        
+        if (video) {
+            qualities.push({
+                resolution: targetQuality,
+                label: targetQuality,
+                filesize: video.filesize,
+                type: 'video',
+            });
+        }
+    }
+    
+    // If no specific qualities found, check for generic HD/SD
+    if (qualities.length === 0) {
+        const hdVideo = videos.find(v => {
+            const q = v.quality.toLowerCase();
+            return q.includes('hd') || q.includes('high') || q.includes('original');
+        });
+        if (hdVideo) {
+            qualities.push({
+                resolution: 'HD',
+                label: extractResolutionLabel(hdVideo.quality) || 'HD',
+                filesize: hdVideo.filesize,
+                type: 'video',
+            });
+        }
+        
+        const sdVideo = videos.find(v => {
+            const q = v.quality.toLowerCase();
+            return q.includes('sd') || q.includes('low') || q.includes('medium');
+        });
+        if (sdVideo) {
+            qualities.push({
+                resolution: 'SD',
+                label: extractResolutionLabel(sdVideo.quality) || 'SD',
+                filesize: sdVideo.filesize,
+                type: 'video',
+            });
+        }
+    }
+    
+    // Add audio option (from audio formats or first video for extraction)
+    const audioFormat = audios[0];
+    if (audioFormat || videos.length > 0) {
+        qualities.push({
+            resolution: 'audio',
+            label: 'MP3',
+            filesize: audioFormat?.filesize,
+            type: 'audio',
+        });
+    }
+    
+    return { qualities };
+}
+
+/**
+ * Build quality button label with filesize for YouTube
+ * Examples: "🎬 1080p (25MB)", "🎵 Audio (3.5MB)"
+ */
+function buildYouTubeQualityLabel(
+    icon: string,
+    label: string,
+    filesize?: number
+): string {
+    let text = `${icon} ${label}`;
+    
+    // Show filesize if available
+    if (filesize && filesize > 0) {
+        text += ` (${formatFilesize(filesize)})`;
+    }
+    
+    return text;
+}
+
+/**
+ * Build keyboard for YouTube content showing all available qualities
+ * Shows all quality options (1080p, 720p, 480p, 360p, audio) with filesizes
  */
 export function buildYouTubeKeyboard(
     originalUrl: string,
     visitorId: string,
-    qualities: QualityInfo | DetailedQualityInfo
+    qualities: QualityInfo | DetailedQualityInfo,
+    result?: DownloadResult
 ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     
-    // Check if it's DetailedQualityInfo
-    const isDetailed = 'hd' in qualities && typeof qualities.hd === 'object';
-    
-    if (isDetailed) {
-        const detailed = qualities as DetailedQualityInfo;
+    // If result is provided, extract all YouTube qualities
+    if (result) {
+        const ytQualities = extractYouTubeQualities(result);
         
-        // Row 1: Quality options with labels and filesizes
-        if (detailed.hd.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎬', 'HD', detailed.hd.label, detailed.hd.filesize),
-                `dl:hd:${visitorId}`
-            );
+        // Add video quality buttons (2 per row)
+        let buttonCount = 0;
+        for (const quality of ytQualities.qualities) {
+            if (quality.type === 'video') {
+                const icon = quality.resolution === '1080p' || quality.resolution === '720p' || quality.resolution === 'HD' 
+                    ? '🎬' : '📹';
+                const callbackQuality = quality.resolution.toLowerCase().replace('p', '');
+                
+                keyboard.text(
+                    buildYouTubeQualityLabel(icon, quality.label, quality.filesize),
+                    `dl:${callbackQuality}:${visitorId}`
+                );
+                buttonCount++;
+                
+                // New row after every 2 buttons
+                if (buttonCount % 2 === 0) {
+                    keyboard.row();
+                }
+            }
         }
-        if (detailed.sd.available) {
+        
+        // Add audio button on new row if we have odd number of video buttons
+        const audioQuality = ytQualities.qualities.find(q => q.type === 'audio');
+        if (audioQuality) {
+            if (buttonCount % 2 !== 0) {
+                keyboard.row();
+            }
             keyboard.text(
-                buildQualityButtonLabel('📹', 'SD', detailed.sd.label, detailed.sd.filesize),
-                `dl:sd:${visitorId}`
-            );
-        }
-        if (detailed.audio.available) {
-            keyboard.text(
-                buildQualityButtonLabel('🎵', 'Audio', detailed.audio.label, detailed.audio.filesize),
+                buildYouTubeQualityLabel('🎵', 'Audio', audioQuality.filesize),
                 `dl:audio:${visitorId}`
             );
         }
     } else {
-        const simple = qualities as QualityInfo;
+        // Fallback to legacy behavior if no result provided
+        const isDetailed = 'hd' in qualities && typeof qualities.hd === 'object';
         
-        // Row 1: Quality options (legacy)
-        if (simple.hasHD) keyboard.text('🎬 HD', `dl:hd:${visitorId}`);
-        if (simple.hasSD) keyboard.text('📹 SD', `dl:sd:${visitorId}`);
-        if (simple.hasAudio) keyboard.text('🎵 Audio', `dl:audio:${visitorId}`);
+        if (isDetailed) {
+            const detailed = qualities as DetailedQualityInfo;
+            
+            if (detailed.hd.available) {
+                keyboard.text(
+                    buildQualityButtonLabel('🎬', 'HD', detailed.hd.label, detailed.hd.filesize),
+                    `dl:hd:${visitorId}`
+                );
+            }
+            if (detailed.sd.available) {
+                keyboard.text(
+                    buildQualityButtonLabel('📹', 'SD', detailed.sd.label, detailed.sd.filesize),
+                    `dl:sd:${visitorId}`
+                );
+            }
+            if (detailed.audio.available) {
+                keyboard.text(
+                    buildQualityButtonLabel('🎵', 'Audio', detailed.audio.label, detailed.audio.filesize),
+                    `dl:audio:${visitorId}`
+                );
+            }
+        } else {
+            const simple = qualities as QualityInfo;
+            
+            if (simple.hasHD) keyboard.text('🎬 HD', `dl:hd:${visitorId}`);
+            if (simple.hasSD) keyboard.text('📹 SD', `dl:sd:${visitorId}`);
+            if (simple.hasAudio) keyboard.text('🎵 Audio', `dl:audio:${visitorId}`);
+        }
     }
     
-    // Row 2: Original URL + Cancel
+    // Row: Original URL + Cancel
     keyboard.row();
     keyboard.url('🔗 Original', originalUrl);
     keyboard.text('❌ Cancel', `dl:cancel:${visitorId}`);

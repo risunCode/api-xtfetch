@@ -13,6 +13,8 @@ export interface EngagementMapping {
     comments?: string;
     shares?: string;
     views?: string;
+    plays?: string;
+    saves?: string;
     bookmarks?: string;
     replies?: string;
 }
@@ -36,6 +38,8 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
         views: [
             /"video_view_count":(\d+)/,
         ],
+        plays: [],
+        saves: [],
         bookmarks: [],
         replies: [],
     },
@@ -43,15 +47,28 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
         likes: [
             /"edge_media_preview_like":\{"count":(\d+)/,
             /"like_count":(\d+)/,
+            /"likeCount":(\d+)/,
+            /"edge_liked_by":\{"count":(\d+)/,
         ],
         comments: [
             /"edge_media_to_comment":\{"count":(\d+)/,
             /"comment_count":(\d+)/,
+            /"commentCount":(\d+)/,
+            // HTML fallback: <span class="...">72</span> after Comment SVG
+            /Comment<\/title><\/svg><\/div><span[^>]*>(\d+)<\/span>/,
         ],
         shares: [],
         views: [
             /"video_view_count":(\d+)/,
+        ],
+        plays: [
             /"play_count":(\d+)/,
+            /"playCount":(\d+)/,
+            /"video_play_count":(\d+)/,
+        ],
+        saves: [
+            /"save_count":(\d+)/,
+            /"saveCount":(\d+)/,
         ],
         bookmarks: [],
         replies: [],
@@ -70,6 +87,8 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
             /"views_count":(\d+)/,
             /"view_count":(\d+)/,
         ],
+        plays: [],
+        saves: [],
         bookmarks: [
             /"bookmark_count":(\d+)/,
         ],
@@ -94,6 +113,14 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
             /"play_count":(\d+)/,
             /"playCount":(\d+)/,
         ],
+        plays: [
+            /"play_count":(\d+)/,
+            /"playCount":(\d+)/,
+        ],
+        saves: [
+            /"collect_count":(\d+)/,
+            /"collectCount":(\d+)/,
+        ],
         bookmarks: [
             /"collect_count":(\d+)/,
             /"collectCount":(\d+)/,
@@ -113,6 +140,10 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
         views: [
             /"play_count":(\d+)/,
         ],
+        plays: [
+            /"play_count":(\d+)/,
+        ],
+        saves: [],
         bookmarks: [],
         replies: [],
     },
@@ -129,6 +160,8 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
             /"viewCount":"(\d+)"/,
             /"view_count":(\d+)/,
         ],
+        plays: [],
+        saves: [],
         bookmarks: [],
         replies: [],
     },
@@ -147,7 +180,9 @@ const PLATFORM_JSON_MAPPINGS: Record<PlatformId, EngagementMapping> = {
     instagram: {
         likes: 'like_count',
         comments: 'comment_count',
-        views: 'play_count',
+        views: 'video_view_count',
+        plays: 'play_count',
+        saves: 'save_count',
     },
     twitter: {
         likes: 'favorite_count',
@@ -162,6 +197,8 @@ const PLATFORM_JSON_MAPPINGS: Record<PlatformId, EngagementMapping> = {
         comments: 'comment_count',
         shares: 'share_count',
         views: 'play_count',
+        plays: 'play_count',
+        saves: 'collect_count',
         bookmarks: 'collect_count',
     },
     weibo: {
@@ -169,6 +206,7 @@ const PLATFORM_JSON_MAPPINGS: Record<PlatformId, EngagementMapping> = {
         comments: 'comments_count',
         shares: 'reposts_count',
         views: 'play_count',
+        plays: 'play_count',
     },
     youtube: {
         likes: 'likeCount',
@@ -225,10 +263,10 @@ export function parseEngagement(
 ): EngagementStats {
     const result: EngagementStats = {};
     
-    const fields: (keyof EngagementStats)[] = ['likes', 'comments', 'shares', 'views', 'bookmarks', 'replies'];
+    const fields: (keyof EngagementStats)[] = ['likes', 'comments', 'shares', 'views', 'plays', 'saves', 'bookmarks', 'replies'];
     
     for (const field of fields) {
-        const sourceField = mapping[field];
+        const sourceField = mapping[field as keyof EngagementMapping];
         if (sourceField) {
             const value = getNestedValue(data, sourceField);
             const parsed = safeParseNumber(value);
@@ -255,7 +293,7 @@ export function parseEngagementFromHtml(
         return result;
     }
     
-    const fields: (keyof EngagementStats)[] = ['likes', 'comments', 'shares', 'views', 'bookmarks', 'replies'];
+    const fields: (keyof EngagementStats)[] = ['likes', 'comments', 'shares', 'views', 'plays', 'saves', 'bookmarks', 'replies'];
     
     for (const field of fields) {
         const fieldPatterns = patterns[field];
@@ -305,6 +343,8 @@ export function mergeEngagementStats(stats: EngagementStats[]): EngagementStats 
         if (stat.comments !== undefined) result.comments = stat.comments;
         if (stat.shares !== undefined) result.shares = stat.shares;
         if (stat.views !== undefined) result.views = stat.views;
+        if (stat.plays !== undefined) result.plays = stat.plays;
+        if (stat.saves !== undefined) result.saves = stat.saves;
         if (stat.bookmarks !== undefined) result.bookmarks = stat.bookmarks;
         if (stat.replies !== undefined) result.replies = stat.replies;
     }
@@ -321,9 +361,30 @@ export function hasEngagementStats(stats: EngagementStats): boolean {
         stats.comments !== undefined ||
         stats.shares !== undefined ||
         stats.views !== undefined ||
+        stats.plays !== undefined ||
+        stats.saves !== undefined ||
         stats.bookmarks !== undefined ||
         stats.replies !== undefined
     );
+}
+
+/**
+ * Clean engagement stats by removing fields with value 0 or undefined
+ * Only includes fields that have actual values > 0
+ */
+export function cleanEngagementStats(stats: EngagementStats): EngagementStats {
+    const result: EngagementStats = {};
+    
+    if (stats.likes !== undefined && stats.likes > 0) result.likes = stats.likes;
+    if (stats.comments !== undefined && stats.comments > 0) result.comments = stats.comments;
+    if (stats.shares !== undefined && stats.shares > 0) result.shares = stats.shares;
+    if (stats.views !== undefined && stats.views > 0) result.views = stats.views;
+    if (stats.plays !== undefined && stats.plays > 0) result.plays = stats.plays;
+    if (stats.saves !== undefined && stats.saves > 0) result.saves = stats.saves;
+    if (stats.bookmarks !== undefined && stats.bookmarks > 0) result.bookmarks = stats.bookmarks;
+    if (stats.replies !== undefined && stats.replies > 0) result.replies = stats.replies;
+    
+    return result;
 }
 
 /**

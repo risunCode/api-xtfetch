@@ -81,14 +81,23 @@ export async function scrapeTikTok(url: string, options?: ScraperOptions): Promi
             return createError(ScraperErrorCode.NO_MEDIA);
         }
 
+        // Extract postedAt from createTime (Unix timestamp)
+        const postedAt = d.create_time || d.createTime
+            ? new Date((d.create_time || d.createTime) * 1000).toISOString()
+            : undefined;
+
+        // Format author with @ prefix
+        const author = d.author?.unique_id ? `@${d.author.unique_id}` : '';
+
         const result: ScraperResult = {
             success: true,
             data: {
                 title: d.title || 'TikTok Video',
-                author: d.author?.unique_id || '',
+                author,
                 authorName: d.author?.nickname || '',
                 description: d.title || undefined, // TikTok caption is in title field
                 thumbnail: d.cover || d.origin_cover || '',
+                postedAt,
                 formats,
                 url,
                 type: isSlideshow ? 'slideshow' : 'video',

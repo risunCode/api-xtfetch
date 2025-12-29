@@ -10,10 +10,12 @@ export type AlertType = 'error_rate' | 'response_time' | 'cookie_health' | 'rate
  */
 export interface EngagementStats {
     views?: number;       // View/play count
+    plays?: number;       // Play count (Instagram reels/videos)
     likes?: number;       // Like/favorite/heart count
     comments?: number;    // Comment count
     shares?: number;      // Unified: retweets, reposts, shares
     bookmarks?: number;   // Save/bookmark count
+    saves?: number;       // Save count (Instagram)
     replies?: number;     // Reply count (Twitter)
 }
 

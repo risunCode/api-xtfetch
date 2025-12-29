@@ -175,6 +175,94 @@ export const DONATE = {
 
 
 // ═══════════════════════════════════════════════════════════════
+// SEND STRATEGY KEYBOARDS (Multi-Item Content)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Build keyboard for selecting send strategy when multiple items are detected
+ * Used for Instagram carousels, Facebook albums, Twitter multi-image posts, etc.
+ * 
+ * Callback patterns:
+ * - strategy:{visitorId}:group - Send all items as album (media group)
+ * - strategy:{visitorId}:single - Send items one by one
+ * - strategy:{visitorId}:links - Send only download links
+ * 
+ * @param visitorId - Unique identifier for this download session
+ * @param itemCount - Number of items detected in the content
+ * @returns InlineKeyboard with strategy options
+ * 
+ * @example
+ * // In url.ts when multiple images/videos detected:
+ * if (images.length > 1) {
+ *     const keyboard = buildSendStrategyKeyboard(visitorId, images.length);
+ *     await ctx.reply('Multiple items detected. How would you like to receive them?', {
+ *         reply_markup: keyboard
+ *     });
+ * }
+ */
+export function buildSendStrategyKeyboard(visitorId: string, itemCount: number): InlineKeyboard {
+    return new InlineKeyboard()
+        .text(`📦 Send as Album (${itemCount})`, `strategy:${visitorId}:group`)
+        .text('📤 One by One', `strategy:${visitorId}:single`)
+        .row()
+        .text('🔗 Links Only', `strategy:${visitorId}:links`);
+}
+
+/**
+ * Send strategy options for multi-item content
+ */
+export type SendStrategy = 'group' | 'single' | 'links';
+
+/**
+ * SEND_STRATEGY keyboard group for multi-item content
+ * 
+ * Integration points in url.ts:
+ * 1. sendPhotoAlbum() - Before sending, show strategy selection
+ * 2. sendMediaByType() case 'photo_album' - Intercept and show options
+ * 3. sendFacebookStories() - For multiple stories
+ * 
+ * Example integration in sendMediaByType():
+ * ```typescript
+ * case 'photo_album': {
+ *     const images = result.formats?.filter(f => f.type === 'image') || [];
+ *     if (images.length > 1) {
+ *         // Store pending multi-item download in session
+ *         ctx.session.pendingMultiItem = {
+ *             visitorId,
+ *             result,
+ *             originalUrl,
+ *             itemCount: images.length,
+ *             timestamp: Date.now(),
+ *         };
+ *         
+ *         // Show strategy selection
+ *         const keyboard = SEND_STRATEGY.select(visitorId, images.length);
+ *         await ctx.reply(t('select_send_strategy', lang, { count: images.length }), {
+ *             reply_markup: keyboard
+ *         });
+ *         return true;
+ *     }
+ *     // Single image - send directly
+ *     return await sendSinglePhoto(ctx, result, originalUrl);
+ * }
+ * ```
+ */
+export const SEND_STRATEGY = {
+    /** Strategy selection keyboard */
+    select: buildSendStrategyKeyboard,
+    
+    /** Keyboard shown after strategy is selected (with cancel option) */
+    processing: (strategy: SendStrategy) => {
+        const labels: Record<SendStrategy, string> = {
+            group: '📦 Sending as album...',
+            single: '📤 Sending one by one...',
+            links: '🔗 Preparing links...',
+        };
+        return new InlineKeyboard().text(labels[strategy], 'noop').text('❌ Cancel', 'cancel');
+    },
+};
+
+// ═══════════════════════════════════════════════════════════════
 // STATUS KEYBOARDS
 // ═══════════════════════════════════════════════════════════════
 
@@ -239,9 +327,11 @@ export {
     detectQualities,
     buildVideoKeyboard, 
     buildYouTubeKeyboard,
+    extractYouTubeQualities,
     type QualityInfo,
     type QualityOption,
     type DetailedQualityInfo,
+    type YouTubeQualityOptions,
 } from './legacy';
 
 // ═══════════════════════════════════════════════════════════════

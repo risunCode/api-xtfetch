@@ -10,7 +10,7 @@ import { cookiePoolMarkSuccess, cookiePoolMarkExpired } from '@/lib/cookies';
 import { platformMatches, platformGetApiEndpoint, sysConfigScraperTimeout } from '@/core/config';
 import { createError, ScraperErrorCode, parseJson, dedupeByQuality, type ScraperResult, type ScraperOptions } from '@/core/scrapers';
 import { logger } from '../shared/logger';
-import { TweetData, MediaDetail, parseMedia, detectIssue } from './extractor';
+import { TweetData, MediaDetail, parseMedia, detectIssue, parseTwitterDate, formatAuthor } from './extractor';
 
 type EngagementStats = { likes?: number; comments?: number; shares?: number; views?: number; bookmarks?: number; replies?: number };
 
@@ -127,7 +127,7 @@ export async function scrapeTwitter(url: string, options?: ScraperOptions): Prom
             const description = synData.text || undefined; // Full tweet text as description
             const engagement: EngagementStats | undefined = synData.engagement ? { views: synData.engagement.views, likes: synData.engagement.likes, comments: synData.engagement.replies, shares: synData.engagement.retweets, bookmarks: synData.engagement.bookmarks, replies: synData.engagement.replies } : undefined;
 
-            const result: ScraperResult = { success: true, data: { title, thumbnail, author: synData.user?.screen_name || username, authorName: synData.user?.name, description, postedAt: synData.created_at, engagement, formats: unique, url, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
+            const result: ScraperResult = { success: true, data: { title, thumbnail, author: formatAuthor(synData.user?.screen_name || username), authorName: synData.user?.name, description, postedAt: synData.created_at ? parseTwitterDate(synData.created_at) : undefined, engagement, formats: unique, url, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
             logger.media('twitter', { videos: unique.filter(f => f.type === 'video').length, images: unique.filter(f => f.type === 'image').length });
             return result;
         }
@@ -156,7 +156,7 @@ export async function scrapeTwitter(url: string, options?: ScraperOptions): Prom
                 const description = gqlData.text || undefined; // Full tweet text as description
                 const engagement: EngagementStats | undefined = gqlData.engagement ? { views: gqlData.engagement.views, likes: gqlData.engagement.likes, comments: gqlData.engagement.replies, shares: gqlData.engagement.retweets, bookmarks: gqlData.engagement.bookmarks, replies: gqlData.engagement.replies } : undefined;
 
-                const result: ScraperResult = { success: true, data: { title, thumbnail, author: gqlData.user?.screen_name || username, authorName: gqlData.user?.name, description, postedAt: gqlData.created_at, engagement, formats: unique, url, usedCookie: true, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
+                const result: ScraperResult = { success: true, data: { title, thumbnail, author: formatAuthor(gqlData.user?.screen_name || username), authorName: gqlData.user?.name, description, postedAt: gqlData.created_at ? parseTwitterDate(gqlData.created_at) : undefined, engagement, formats: unique, url, usedCookie: true, type: unique.some(f => f.type === 'video') ? 'video' : 'image' } };
                 // Mark cookie success
                 cookiePoolMarkSuccess().catch(() => { });
                 return result;

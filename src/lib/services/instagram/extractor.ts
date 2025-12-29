@@ -10,6 +10,7 @@
 
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat, utilDecodeUrl } from '@/lib/utils';
+import { cleanEngagementStats } from '../shared/engagement-parser';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -27,9 +28,21 @@ export interface GraphQLMedia {
     edge_sidecar_to_children?: { edges: Array<{ node: GraphQLMediaNode }> };
     display_resources?: Array<{ src: string; config_width: number }>;
     taken_at_timestamp?: number;
+    // Engagement fields - multiple possible field names
     edge_media_preview_like?: { count: number };
     edge_media_to_comment?: { count: number };
+    edge_media_to_parent_comment?: { count: number };
+    comment_count?: number;
     video_view_count?: number;
+    play_count?: number;
+    like_count?: number;
+    // Additional engagement
+    edge_liked_by?: { count: number };
+    video_play_count?: number;
+    clips_music_attribution_info?: { uses_original_audio: boolean };
+    // Saves (rarely available but worth trying)
+    save_count?: number;
+    has_viewer_saved?: boolean;
 }
 
 export interface GraphQLMediaNode {
@@ -52,6 +65,8 @@ export type EngagementStats = {
     comments?: number;
     shares?: number;
     views?: number;
+    plays?: number;
+    saves?: number;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -84,11 +99,16 @@ export function extractFromGraphQL(media: GraphQLMedia, shortcode: string): Grap
         ? new Date(media.taken_at_timestamp * 1000).toISOString()
         : undefined;
 
-    const engagement: EngagementStats = {
-        likes: media.edge_media_preview_like?.count || 0,
-        comments: media.edge_media_to_comment?.count || 0,
+    const rawEngagement: EngagementStats = {
+        likes: media.edge_media_preview_like?.count || media.edge_liked_by?.count || media.like_count || 0,
+        comments: media.edge_media_to_comment?.count || media.edge_media_to_parent_comment?.count || media.comment_count || 0,
         views: media.video_view_count || 0,
+        plays: media.play_count || media.video_play_count || 0,
+        saves: media.save_count || 0,
     };
+    
+    // Clean engagement stats - remove zero values
+    const engagement = cleanEngagementStats(rawEngagement);
 
     // Handle carousel (sidecar) posts
     if (media.edge_sidecar_to_children?.edges) {
@@ -141,7 +161,7 @@ export function extractFromGraphQL(media: GraphQLMedia, shortcode: string): Grap
             authorName,
             caption,
             postedAt,
-            engagement: (engagement.likes || engagement.comments || engagement.views) ? engagement : undefined,
+            engagement: Object.keys(engagement).length > 0 ? engagement : undefined,
         },
     };
 }

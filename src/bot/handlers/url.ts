@@ -669,6 +669,134 @@ async function sendSinglePhoto(
 }
 
 /**
+ * Send Facebook Stories with multi-select support
+ * - Single story: send directly
+ * - Multiple stories: send thumbnail with keyboard buttons for each story
+ */
+async function sendFacebookStories(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string,
+    processingMsgId?: number | null
+): Promise<boolean> {
+    const lang = detectLanguage(ctx.from?.language_code);
+    const formats = result.formats || [];
+    
+    // Group stories by storyIndex or itemId
+    const storyGroups = new Map<string, Array<typeof formats[0]>>();
+    
+    for (const format of formats) {
+        // Use storyIndex if available, otherwise itemId, otherwise treat as single story
+        const storyKey = format.storyIndex?.toString() || format.itemId || 'single';
+        if (!storyGroups.has(storyKey)) {
+            storyGroups.set(storyKey, []);
+        }
+        storyGroups.get(storyKey)!.push(format);
+    }
+    
+    const storyCount = storyGroups.size;
+    
+    // Single story - send directly using existing video/photo logic
+    if (storyCount <= 1) {
+        const videos = formats.filter(f => f.type === 'video');
+        if (videos.length > 0) {
+            return await sendVideoDirectly(ctx, result, originalUrl, '', processingMsgId);
+        } else {
+            const sent = await sendSinglePhoto(ctx, result, originalUrl);
+            if (sent && processingMsgId) await deleteMessage(ctx, processingMsgId);
+            return sent;
+        }
+    }
+    
+    // Multiple stories - send thumbnail with selection buttons
+    const caption = lang === 'id'
+        ? `📖 *Facebook Stories*\n\n` +
+          `${result.author ? escapeMarkdown(result.author) + '\n' : ''}` +
+          `📚 ${storyCount} stories tersedia\n\n` +
+          `Pilih story untuk didownload:`
+        : `📖 *Facebook Stories*\n\n` +
+          `${result.author ? escapeMarkdown(result.author) + '\n' : ''}` +
+          `📚 ${storyCount} stories available\n\n` +
+          `Select a story to download:`;
+    
+    // Build keyboard with buttons for each story
+    const keyboard = new InlineKeyboard();
+    let storyIdx = 0;
+    
+    for (const [storyKey, storyFormats] of storyGroups) {
+        storyIdx++;
+        // Get best quality format for this story (prefer HD video)
+        const bestFormat = storyFormats.find(f => f.type === 'video' && f.quality.includes('HD')) 
+            || storyFormats.find(f => f.type === 'video')
+            || storyFormats[0];
+        
+        if (bestFormat) {
+            const optimizedUrl = bestFormat.url.includes('fbcdn.net') 
+                ? optimizeCdnUrl(bestFormat.url) 
+                : bestFormat.url;
+            const isVideo = bestFormat.type === 'video';
+            const label = isVideo 
+                ? `${storyIdx}. 🎬 Story ${storyIdx}` 
+                : `${storyIdx}. 🖼️ Story ${storyIdx}`;
+            
+            keyboard.url(label, optimizedUrl);
+            
+            // 2 buttons per row
+            if (storyIdx % 2 === 0) {
+                keyboard.row();
+            }
+        }
+    }
+    
+    // Add original URL button on new row
+    keyboard.row().url('🔗 Original', originalUrl);
+    
+    // Delete processing message
+    if (processingMsgId) {
+        await deleteMessage(ctx, processingMsgId);
+    }
+    
+    // Try to send with thumbnail
+    const thumbUrl = result.thumbnail;
+    if (thumbUrl) {
+        try {
+            if (thumbUrl.includes('fbcdn.net') || thumbUrl.includes('cdninstagram.com')) {
+                const thumbResponse = await fetch(thumbUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.facebook.com/',
+                    },
+                });
+                if (thumbResponse.ok) {
+                    const thumbBuffer = Buffer.from(await thumbResponse.arrayBuffer());
+                    await ctx.replyWithPhoto(new InputFile(thumbBuffer, 'thumb.jpg'), {
+                        caption,
+                        parse_mode: 'Markdown',
+                        reply_markup: keyboard,
+                    });
+                    return true;
+                }
+            } else {
+                await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
+                    caption,
+                    parse_mode: 'Markdown',
+                    reply_markup: keyboard,
+                });
+                return true;
+            }
+        } catch { /* fall through to text message */ }
+    }
+    
+    // No thumbnail or thumbnail failed, send text message
+    await ctx.reply(caption, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard,
+        link_preview_options: { is_disabled: true },
+    });
+    return true;
+}
+
+/**
  * Deduplicate images - keep only highest quality per itemId
  * Twitter sends both 4K and large for same image, we only want 4K
  */
@@ -808,6 +936,16 @@ async function sendMediaByType(
     processingMsgId?: number | null
 ): Promise<boolean> {
     const contentType = detectContentType(result);
+    
+    // Check if this is a Facebook story with multiple stories
+    const isFacebookStory = result.platform === 'facebook' && (
+        originalUrl.includes('/stories/') || 
+        result.formats?.some(f => f.storyIndex !== undefined || f.itemId?.startsWith('story-'))
+    );
+    
+    if (isFacebookStory) {
+        return await sendFacebookStories(ctx, result, originalUrl, processingMsgId);
+    }
     
     switch (contentType) {
         case 'youtube':
@@ -1162,6 +1300,7 @@ export {
     sendYouTubePreview,
     sendSinglePhoto,
     sendPhotoAlbum,
+    sendFacebookStories,
     buildCaption,
     escapeMarkdown,
 };

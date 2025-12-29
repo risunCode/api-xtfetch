@@ -642,10 +642,10 @@ function extractStories(html: string): { formats: MediaFormat[]; storyCount: num
     }
 
     // Group by pairs (SD + HD for same story appear consecutively)
-    const MAX_STORIES = 5;
+    // No limit - show all available stories
     let storyIdx = 0;
 
-    for (let i = 0; i < storyVideos.length && storyIdx < MAX_STORIES; i += 2) {
+    for (let i = 0; i < storyVideos.length; i += 2) {
         storyIdx++;
         const sdVideo = storyVideos[i];
         const hdVideo = storyVideos[i + 1];

@@ -39,7 +39,10 @@ export interface YtDlpFormat {
 export interface YtDlpOutput {
     id: string;
     title: string;
-    uploader: string;
+    author?: string;        // From Python script (uploader || channel)
+    uploader?: string;      // Raw yt-dlp field
+    channel?: string;       // Raw yt-dlp field
+    uploader_id?: string;   // Raw yt-dlp field
     thumbnail: string;
     description?: string;
     upload_date?: string;
@@ -326,15 +329,18 @@ export function extractFormats(output: YtDlpOutput): MediaFormat[] {
  * Extracts metadata from yt-dlp output
  */
 export function extractMetadata(output: YtDlpOutput): ExtractedMetadata {
+    // Use fallback chain for author: author (from Python) -> uploader -> channel -> uploader_id -> 'Unknown'
+    const author = output.author || output.uploader || output.channel || output.uploader_id || 'Unknown';
+    
     return {
-        title: output.title,
-        author: output.uploader,
-        thumbnail: output.thumbnail,
-        description: output.description,
+        title: output.title || 'Untitled',
+        author,
+        thumbnail: output.thumbnail || '',
+        description: output.description || undefined,
         postedAt: output.upload_date ? formatUploadDate(output.upload_date) : undefined,
         engagement: {
-            views: output.view_count,
-            likes: output.like_count,
+            views: output.view_count ?? undefined,
+            likes: output.like_count ?? undefined,
         },
     };
 }

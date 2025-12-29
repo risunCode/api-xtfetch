@@ -51,6 +51,14 @@ export interface SessionData {
         userMsgId: number;
         timestamp: number;
     };
+    /** Store multi-item content for strategy selection (album/carousel) */
+    pendingMultiItem?: {
+        visitorId: string;
+        result: DownloadResult;
+        originalUrl: string;
+        itemCount: number;
+        timestamp: number;
+    };
 }
 
 // ============================================================================

@@ -6,6 +6,31 @@
 import { MediaFormat } from '@/lib/types';
 import { utilAddFormat } from '@/lib/utils';
 
+/**
+ * Parse Twitter date format to ISO 8601
+ * Twitter format: "Mon Dec 29 10:36:50 +0000 2025"
+ * ISO 8601 format: "2025-12-29T10:36:50.000Z"
+ */
+export function parseTwitterDate(twitterDate: string): string {
+    try {
+        const date = new Date(twitterDate);
+        if (isNaN(date.getTime())) {
+            return twitterDate; // Return original if parsing fails
+        }
+        return date.toISOString();
+    } catch {
+        return twitterDate; // Return original on error
+    }
+}
+
+/**
+ * Format author username with @ prefix
+ */
+export function formatAuthor(username: string): string {
+    if (!username) return '';
+    return username.startsWith('@') ? username : `@${username}`;
+}
+
 export interface TweetData {
     text?: string;
     user?: { screen_name?: string; name?: string };

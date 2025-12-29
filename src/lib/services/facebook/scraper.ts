@@ -9,7 +9,9 @@ import { logger } from '../shared/logger';
 import { getNextDesktopUA } from '@/lib/http/headers';
 import { cookiePoolMarkExpired, cookiePoolMarkError } from '@/lib/cookies';
 
-const TIMEOUT = { resolve: 2500, fetch: 4000 };
+const TIMEOUT = { resolve: 2500, fetch: 8000 };
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1500;
 const FB_DOMAINS = /facebook\.com|fb\.watch|fb\.com|fbwat\.ch/i;
 
 const MEDIA = ['"all_subattachments"', '"photo_image"', '"viewer_image"', '"full_image"', '"progressive_url"', '"playable_url"'];
@@ -137,8 +139,23 @@ async function fetchWithRetry(url: string, res: ResolveResult, opts: ScraperOpti
     
     logger.debug('facebook', `[Fetch] ${res.type.toUpperCase()}, strategy=${strategy}, cookie=${mustCookie ? 'yes' : 'try_without'}`);
     
-    const get = (useCookie: boolean, desktop = false) => {
+    const get = async (useCookie: boolean, desktop = false) => {
         const headers = desktop ? { ...DESKTOP_HEADERS, 'User-Agent': getNextDesktopUA() } : undefined;
+        
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const result = await httpGet(url, 'facebook', { cookie: useCookie ? cookie : undefined, timeout: TIMEOUT.fetch, headers });
+                return result;
+            } catch (e) {
+                logger.debug('facebook', `[Fetch] Attempt ${attempt}/${MAX_RETRIES} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+                if (attempt < MAX_RETRIES) {
+                    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                } else {
+                    throw e;
+                }
+            }
+        }
+        // This should never be reached due to throw in loop, but TypeScript needs it
         return httpGet(url, 'facebook', { cookie: useCookie ? cookie : undefined, timeout: TIMEOUT.fetch, headers });
     };
     
