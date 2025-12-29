@@ -1118,8 +1118,173 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         const isMultiUrl = urls.length > 1;
         let progressMsgId: number | null = null;
         
+        // ════════════════════════════════════════════════════════════════════
+        // VIP FEATURE: Multi-Link Gallery Mode
+        // When all URLs are from the same platform and contain images,
+        // merge them into a single gallery (max 10 items)
+        // ════════════════════════════════════════════════════════════════════
+        if (isMultiUrl && isVip) {
+            // Check if all URLs are from the same platform
+            const platforms = urls.map(u => platformDetect(u)).filter(Boolean);
+            const allSamePlatform = platforms.length === urls.length && 
+                platforms.every(p => p === platforms[0]);
+            
+            if (allSamePlatform) {
+                const sharedPlatform = platforms[0]!;
+                
+                // Show gallery processing message
+                const galleryMsg = lang === 'id'
+                    ? `🖼️ *Multi-Link Gallery* (VIP)\n\n⏳ Mengambil ${urls.length} link dari ${botUrlGetPlatformName(sharedPlatform)}...`
+                    : `🖼️ *Multi-Link Gallery* (VIP)\n\n⏳ Fetching ${urls.length} links from ${botUrlGetPlatformName(sharedPlatform)}...`;
+                
+                try {
+                    const msg = await ctx.reply(galleryMsg, {
+                        parse_mode: 'Markdown',
+                        reply_parameters: { message_id: ctx.message.message_id },
+                    });
+                    progressMsgId = msg.message_id;
+                } catch { /* ignore */ }
+                
+                // Scrape all URLs in parallel
+                const scrapePromises = urls.map(url => botUrlCallScraper(url, true));
+                const results = await Promise.all(scrapePromises);
+                
+                // Collect all images from successful results
+                const allImages: Array<{ url: string; quality: string; type: string; itemId?: string }> = [];
+                const authors: string[] = [];
+                const successUrls: string[] = [];
+                
+                for (let i = 0; i < results.length; i++) {
+                    const result = results[i];
+                    if (result.success && result.formats) {
+                        const images = result.formats.filter(f => f.type === 'image');
+                        if (images.length > 0) {
+                            // Deduplicate and add images
+                            const deduped = deduplicateImages(images);
+                            allImages.push(...deduped);
+                            successUrls.push(urls[i]);
+                            if (result.author && !authors.includes(result.author)) {
+                                authors.push(result.author);
+                            }
+                        }
+                    }
+                }
+                
+                // If we have images from multiple links, send as merged gallery
+                if (allImages.length > 1 && successUrls.length > 1) {
+                    try {
+                        // Update progress
+                        if (progressMsgId) {
+                            const updateMsg = lang === 'id'
+                                ? `🖼️ *Multi-Link Gallery*\n\n📤 Mengirim ${Math.min(allImages.length, 10)} gambar...`
+                                : `🖼️ *Multi-Link Gallery*\n\n📤 Sending ${Math.min(allImages.length, 10)} images...`;
+                            await ctx.api.editMessageText(ctx.chat!.id, progressMsgId, updateMsg, {
+                                parse_mode: 'Markdown',
+                            });
+                        }
+                        
+                        // Build caption with authors
+                        let caption = '';
+                        if (authors.length > 0) {
+                            const needsAt = ['twitter', 'instagram', 'tiktok'].includes(sharedPlatform);
+                            caption = authors.map(a => {
+                                const prefix = needsAt && !a.startsWith('@') ? '@' : '';
+                                return `${prefix}${escapeMarkdown(a)}`;
+                            }).join(' • ');
+                        }
+                        
+                        // Check if we need to download first (Facebook/Instagram CDN)
+                        const needsDownloadFirst = allImages.some(img => 
+                            img.url.includes('fbcdn.net') || img.url.includes('cdninstagram.com')
+                        );
+                        
+                        // Show upload action
+                        await ctx.replyWithChatAction('upload_photo');
+                        
+                        if (needsDownloadFirst) {
+                            // Download all images to buffers first
+                            const downloadPromises = allImages.slice(0, 10).map(async (img) => {
+                                const response = await fetch(img.url, {
+                                    headers: {
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                        'Referer': 'https://www.facebook.com/',
+                                    },
+                                });
+                                if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+                                return Buffer.from(await response.arrayBuffer());
+                            });
+                            
+                            const buffers = await Promise.all(downloadPromises);
+                            
+                            const mediaGroup: InputMediaPhoto[] = buffers.map((buffer, index) => ({
+                                type: 'photo' as const,
+                                media: new InputFile(buffer, `photo_${index}.jpg`),
+                                caption: index === 0 ? (caption || undefined) : undefined,
+                                parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
+                            }));
+                            
+                            await ctx.replyWithMediaGroup(mediaGroup);
+                        } else {
+                            // Use URLs directly
+                            const mediaGroup: InputMediaPhoto[] = allImages.slice(0, 10).map((img, index) => ({
+                                type: 'photo' as const,
+                                media: img.url,
+                                caption: index === 0 ? (caption || undefined) : undefined,
+                                parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
+                            }));
+                            
+                            await ctx.replyWithMediaGroup(mediaGroup);
+                        }
+                        
+                        // Send URLs as separate message (no keyboard buttons as per spec)
+                        const urlsText = lang === 'id'
+                            ? `🔗 *Original URLs:*\n${successUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+                            : `🔗 *Original URLs:*\n${successUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`;
+                        
+                        await ctx.reply(urlsText, {
+                            parse_mode: 'Markdown',
+                            link_preview_options: { is_disabled: true },
+                        });
+                        
+                        // Delete progress message
+                        if (progressMsgId) {
+                            await deleteMessage(ctx, progressMsgId);
+                        }
+                        
+                        // Delete user message
+                        await deleteMessage(ctx, ctx.message.message_id);
+                        
+                        // Record downloads
+                        for (let i = 0; i < successUrls.length; i++) {
+                            await botRateLimitRecordDownload(ctx);
+                        }
+                        
+                        console.log(`[Bot.Gallery] Sent merged gallery: ${allImages.length} images from ${successUrls.length} URLs`);
+                        return; // Exit early - gallery sent successfully
+                        
+                    } catch (galleryError) {
+                        console.error('[Bot.Gallery] Failed to send merged gallery:', galleryError);
+                        // Fall through to sequential processing
+                        if (progressMsgId) {
+                            const fallbackMsg = lang === 'id'
+                                ? `⚠️ Gallery gagal, memproses satu per satu...`
+                                : `⚠️ Gallery failed, processing one by one...`;
+                            try {
+                                await ctx.api.editMessageText(ctx.chat!.id, progressMsgId, fallbackMsg);
+                            } catch { /* ignore */ }
+                        }
+                    }
+                }
+                // If not enough images for gallery, fall through to sequential processing
+            }
+        }
+        
+        // ════════════════════════════════════════════════════════════════════
+        // Standard Multi-URL Processing (Sequential)
+        // ════════════════════════════════════════════════════════════════════
+        
         // Show progress message for multiple URLs (VIP feature)
-        if (isMultiUrl) {
+        if (isMultiUrl && !progressMsgId) {
             const progressMsg = lang === 'id'
                 ? `📥 *Multi-Download* (VIP)\n\n⏳ Memproses ${urls.length} link...`
                 : `📥 *Multi-Download* (VIP)\n\n⏳ Processing ${urls.length} links...`;
