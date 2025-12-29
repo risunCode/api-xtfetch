@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
                 show_on_history: body.show_on_history ?? false,
                 show_on_settings: body.show_on_settings ?? false,
                 show_on_docs: body.show_on_docs ?? false,
+                dismissable: body.dismissable ?? true,
                 start_date: body.start_date || new Date().toISOString(),
                 end_date: body.end_date,
                 enabled: body.enabled ?? true,

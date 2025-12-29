@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
         // Fetch active announcements for this page
         const { data: announcements, error: annError } = await supabaseAdmin
             .from('announcements')
-            .select('id, title, message, type, icon, link_url, link_text, priority')
+            .select('id, title, message, type, icon, link_url, link_text, dismissable, priority')
             .eq('enabled', true)
             .eq(pageColumn, true)
             .lte('start_date', now)
