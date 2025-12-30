@@ -32,7 +32,7 @@ export const API_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.RAIL
 // ============================================================================
 
 /** Download limit per reset period for free users */
-export const FREE_DOWNLOAD_LIMIT = 8;
+export const FREE_DOWNLOAD_LIMIT = 7;
 
 /** Reset period in hours for free users */
 export const FREE_RESET_HOURS = 12;
@@ -53,7 +53,7 @@ export const PREMIUM_COOLDOWN_SECONDS = 0;
 // Tier rate limits configuration
 export const TIER_LIMITS = {
   [UserTier.FREE]: {
-    dailyLimit: 8,
+    dailyLimit: 7,
     cooldownSeconds: 4,
     hasApiAccess: false,
     description: 'Free User',
@@ -62,7 +62,7 @@ export const TIER_LIMITS = {
   [UserTier.VIP]: {
     requestsPerWindow: 15,
     windowMinutes: 2,
-    cooldownSeconds: 8, // effective cooldown
+    cooldownSeconds: 0, // no cooldown for VIP
     hasApiAccess: false,
     description: 'Donator',
     icon: '⭐',
@@ -70,7 +70,7 @@ export const TIER_LIMITS = {
   [UserTier.VVIP]: {
     requestsPerWindow: 15,
     windowMinutes: 2,
-    cooldownSeconds: 8,
+    cooldownSeconds: 0, // no cooldown for VVIP
     hasApiAccess: true,
     description: 'Donator Premium',
     icon: '👑',

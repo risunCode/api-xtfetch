@@ -9,20 +9,67 @@ import dns from 'dns/promises';
 import { type PlatformId } from '@/core/config';
 import { httpGetHeaders } from '@/lib/http';
 
-// Allowed CDN domains for proxy (SSRF prevention)
-// Subdomains are automatically allowed (e.g., *.googlevideo.com)
-const ALLOWED_PROXY_DOMAINS = [
-    // Facebook/Instagram CDN
-    'fbcdn.net', 'cdninstagram.com',
-    // Twitter CDN
-    'twimg.com',
-    // TikTok CDN
-    'tiktokcdn.com', 'tiktokcdn-us.com', 'muscdn.com', 'byteoversea.com',
-    // Weibo CDN
-    'sinaimg.cn', 'weibocdn.com',
-    // YouTube CDN (covers all *.googlevideo.com including manifest, rr1---, etc.)
-    'googlevideo.com', 'ytimg.com', 'ggpht.com',
+// Allowed CDN domains for proxy (SSRF prevention + abuse prevention)
+// Using broad patterns to cover CDN subdomains without manual updates
+const ALLOWED_CDN_PATTERNS = [
+    // Facebook/Meta ecosystem
+    /\.fbcdn\.net$/,
+    /\.cdninstagram\.com$/,
+    /\.facebook\.com$/,
+    
+    // Twitter/X
+    /\.twimg\.com$/,
+    
+    // TikTok/ByteDance
+    /tiktokcdn/,
+    /\.muscdn\.com$/,
+    /\.byteoversea\.com$/,
+    /\.bytecdn\.cn$/,
+    /\.ibytedtos\.com$/,
+    
+    // Weibo/Sina
+    /\.sinaimg\.cn$/,
+    /\.weibocdn\.com$/,
+    
+    // YouTube/Google
+    /\.googlevideo\.com$/,
+    /\.ytimg\.com$/,
+    /\.ggpht\.com$/,
+    /\.googleusercontent\.com$/,
+    
+    // BiliBili
+    /\.bilivideo\.(com|cn)$/,
+    /\.hdslb\.com$/,
+    /\.biliimg\.com$/,
+    
+    // Reddit
+    /\.redd\.it$/,
+    /\.redditmedia\.com$/,
+    /\.redditstatic\.com$/,
+    
+    // SoundCloud
+    /\.sndcdn\.com$/,
+    /\.soundcloud\.com$/,
+    
+    // Pixiv
+    /\.pximg\.net$/,
+    /\.pixiv\.net$/,
+    
+    // Threads (uses Instagram CDN, already covered)
+    
+    // Erome
+    /\.erome\.com$/,
+    
+    // Generic CDN providers (covers many platforms)
+    /\.akamaized\.net$/,
+    /\.cloudfront\.net$/,
+    /\.fastly\.net$/,
+    /\.cdn\.cloudflare\.net$/,
 ];
+
+function isAllowedCDN(hostname: string): boolean {
+    return ALLOWED_CDN_PATTERNS.some(pattern => pattern.test(hostname));
+}
 
 // Comprehensive private IP detection
 function isPrivateIP(ip: string): boolean {
@@ -74,12 +121,17 @@ async function isAllowedProxyUrl(url: string): Promise<boolean> {
             return false;
         }
 
-        // 3. Resolve DNS to get actual IPs (prevents DNS rebinding)
+        // 3. Check against CDN whitelist first (fast path)
+        if (!isAllowedCDN(hostname)) {
+            return false;
+        }
+
+        // 4. Resolve DNS to get actual IPs (prevents DNS rebinding)
         let resolvedIPs: string[] = [];
 
         if (isIP(hostname)) {
-            // Direct IP address
-            resolvedIPs = [hostname];
+            // Direct IP address - not allowed (CDNs use hostnames)
+            return false;
         } else {
             // Resolve hostname to IPs
             try {
@@ -91,7 +143,7 @@ async function isAllowedProxyUrl(url: string): Promise<boolean> {
             }
         }
 
-        // 4. Check ALL resolved IPs - block if ANY is private
+        // 5. Check ALL resolved IPs - block if ANY is private
         if (resolvedIPs.length === 0) {
             return false;
         }
@@ -102,10 +154,7 @@ async function isAllowedProxyUrl(url: string): Promise<boolean> {
             }
         }
 
-        // 5. Check against allowed CDN domains whitelist
-        return ALLOWED_PROXY_DOMAINS.some(domain =>
-            hostname === domain || hostname.endsWith('.' + domain)
-        );
+        return true;
     } catch {
         return false;
     }
@@ -205,10 +254,10 @@ export async function GET(request: NextRequest) {
         if (!await isAllowedProxyUrl(url)) {
             return NextResponse.json({
                 success: false,
-                error: 'URL not allowed - only CDN domains are supported',
+                error: 'URL not allowed - only known CDN domains are supported',
                 meta: {
                     endpoint: '/api/v1/proxy',
-                    allowedDomains: ALLOWED_PROXY_DOMAINS
+                    hint: 'Contact admin to add new CDN domains'
                 }
             }, { status: 403 });
         }

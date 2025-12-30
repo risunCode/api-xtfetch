@@ -15,6 +15,8 @@ import { QUEUE_CONFIG } from './config';
 import type { DownloadJobData } from './index';
 import { sendMedia } from '../utils/media';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
+import { botDownloadCreate, botDownloadUpdateStatus } from '../services/downloadService';
+import { serviceConfigLoad, serviceConfigIsPlatformEnabled, serviceConfigIsMaintenanceMode, serviceConfigGetMaintenanceType } from '@/lib/config';
 import { log } from '../helpers';
 
 // ============================================================================
@@ -71,7 +73,7 @@ async function getRateLimitFunction() {
  * Process a download job
  */
 async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
-    const { chatId, userId, messageId, processingMsgId, url, isPremium } = job.data;
+    const { chatId, userId, messageId, processingMsgId, url, isPremium, platform, botUserId } = job.data;
     const startTime = Date.now();
 
     log.worker(`Processing job ${job.id} for user ${userId}`);
@@ -79,6 +81,37 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
     const api = await getBotApi();
     if (!api) {
         throw new Error('Bot API not available');
+    }
+
+    // Check maintenance mode and platform status before processing
+    await serviceConfigLoad(true);
+    const isMaintenanceMode = serviceConfigIsMaintenanceMode();
+    const maintenanceType = serviceConfigGetMaintenanceType();
+    
+    // Block if full maintenance
+    if (isMaintenanceMode && (maintenanceType === 'full' || maintenanceType === 'all')) {
+        await api.editMessageText(chatId, processingMsgId, '🔧 Service is under maintenance. Please try again later.').catch(() => {});
+        return;
+    }
+    
+    // Check if platform is enabled
+    if (platform && !serviceConfigIsPlatformEnabled(platform as any)) {
+        await api.editMessageText(chatId, processingMsgId, `🚫 ${platform} is currently unavailable. Please try again later.`).catch(() => {});
+        return;
+    }
+
+    // Create download record in database for history tracking
+    let downloadId: string | null = null;
+    if (botUserId && platform) {
+        const { data: downloadRecord } = await botDownloadCreate(
+            botUserId,
+            platform as any, // Platform type from job data
+            url,
+            null, // title will be updated after scraping
+            'processing',
+            isPremium
+        );
+        downloadId = downloadRecord?.id || null;
     }
 
     try {
@@ -89,6 +122,11 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
         const result = await botUrlCallScraper(url, isPremium);
 
         if (result.success && result.formats?.length) {
+            // Update download record with title
+            if (downloadId && result.title) {
+                await botDownloadUpdateStatus(downloadId, 'completed');
+            }
+
             // Use unified media sending utility
             const sendResult = await sendMedia({
                 api,
@@ -117,7 +155,10 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
 
                 log.worker(`Job ${job.id} completed in ${processingTime}ms`);
             } else {
-                // Failed to send media - edit processing message to error
+                // Failed to send media - update status to failed
+                if (downloadId) {
+                    await botDownloadUpdateStatus(downloadId, 'failed', sendResult.error || 'Failed to send media');
+                }
                 recordDownloadFailure();
                 
                 await api.editMessageText(
@@ -134,7 +175,10 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 ).catch(() => {});
             }
         } else {
-            // Scraper failed - edit processing message to show error
+            // Scraper failed - update status to failed
+            if (downloadId) {
+                await botDownloadUpdateStatus(downloadId, 'failed', result.error || 'Download failed');
+            }
             recordDownloadFailure();
             const errorMessage = result.error || 'Download failed';
             
@@ -155,6 +199,11 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
         }
     } catch (error) {
         log.error('Job error:', error);
+        
+        // Update download status to failed
+        if (downloadId) {
+            await botDownloadUpdateStatus(downloadId, 'failed', error instanceof Error ? error.message : 'Unknown error');
+        }
         recordDownloadFailure();
 
         // Try to notify user of failure

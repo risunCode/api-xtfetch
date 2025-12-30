@@ -147,17 +147,17 @@ export async function scrapeFacebook(
     }
     
     // Check error type - only fallback for specific errors
-    const errorCode = (primaryResult as any).errorCode || (primaryResult as any).error?.code || '';
-    const errorMsg = (primaryResult as any).error?.message || (primaryResult as any).message || '';
+    const errorCode = (primaryResult as any).errorCode || '';
+    const errorMsg = (primaryResult as any).error || '';
     
     const shouldTryFallback = FALLBACK_ERRORS.some(e => 
+        errorCode === e || 
         errorCode.includes(e) || 
         errorMsg.toUpperCase().includes(e)
     );
     
     if (!shouldTryFallback) {
-        // Error is definitive (NOT_FOUND, PRIVATE, etc) - don't fallback
-        logger.debug('facebook', `[Done] ${route.primaryEngine} failed (${errorCode || errorMsg}), no fallback`);
+        logger.debug('facebook', `[Done] ${route.primaryEngine} failed (${errorCode}), no fallback`);
         return primaryResult;
     }
     

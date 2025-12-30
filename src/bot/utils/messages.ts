@@ -385,9 +385,6 @@ export function apiKeyLinkPromptMessage(): string {
 
 Kirim API key kamu untuk mengaktifkan fitur VIP.
 
-API key kamu seharusnya seperti:
-\`dwa_live_xxxxxxxxxxxxxxxxxxxx\`
-
 Kirim sekarang atau tap Cancel untuk kembali.`;
 }
 

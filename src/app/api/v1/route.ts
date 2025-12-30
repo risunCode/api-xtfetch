@@ -19,6 +19,7 @@ import { platformDetect } from '@/core/config';
 import { cookiePoolGetRotating } from '@/lib/cookies';
 import { utilFetchFilesizes } from '@/lib/utils';
 import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
+import { serviceConfigLoad, serviceConfigIsPlatformEnabled, serviceConfigGetPlatformDisabledMessage, serviceConfigIsMaintenanceMode, serviceConfigGetMaintenanceType, serviceConfigGetMaintenanceMessage } from '@/lib/config';
 import {
     cacheGetQuick,
     cacheGet,
@@ -89,6 +90,49 @@ export async function GET(request: NextRequest) {
         // Log incoming request
         if (detectedPlatform) {
             logger.request(detectedPlatform, 'api');
+        }
+
+        // Step 1.5: Check maintenance mode and platform status (use short TTL for fast fail)
+        await serviceConfigLoad(); 
+        
+        // Check maintenance mode FIRST - fast fail if API is disabled
+        const maintenanceMode = serviceConfigIsMaintenanceMode();
+        const maintenanceType = serviceConfigGetMaintenanceType();
+        
+        if (maintenanceMode && (maintenanceType === 'api' || maintenanceType === 'full' || maintenanceType === 'all')) {
+            const maintenanceMessage = serviceConfigGetMaintenanceMessage() || 'Service is under maintenance. Please try again later.';
+            return NextResponse.json(
+                { 
+                    success: false, 
+                    error: maintenanceMessage,
+                    errorCode: 'MAINTENANCE',
+                    meta: {
+                        tier: 'premium',
+                        maintenanceType,
+                        endpoint: '/api/v1'
+                    }
+                },
+                { status: 503 }
+            );
+        }
+        
+        // Check if platform is enabled
+        if (detectedPlatform && !serviceConfigIsPlatformEnabled(detectedPlatform)) {
+            const disabledMessage = serviceConfigGetPlatformDisabledMessage(detectedPlatform) 
+                || `${detectedPlatform} is temporarily unavailable. Please try again later.`;
+            return NextResponse.json(
+                { 
+                    success: false, 
+                    error: disabledMessage,
+                    errorCode: 'PLATFORM_DISABLED',
+                    meta: {
+                        tier: 'premium',
+                        platform: detectedPlatform,
+                        endpoint: '/api/v1'
+                    }
+                },
+                { status: 503 }
+            );
         }
 
         // Step 2: Quick cache check BEFORE URL resolution (fastest path)

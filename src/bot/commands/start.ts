@@ -5,6 +5,7 @@
 import { Composer, InlineKeyboard } from 'grammy';
 import type { Context } from 'grammy';
 import { supabaseAdmin } from '@/lib/database/supabase';
+import { redis } from '@/lib/database';
 import { t, detectLanguage, type BotLanguage } from '../i18n';
 
 // ============================================================================
@@ -26,6 +27,11 @@ interface BotUser {
     updated_at: string;
 }
 
+interface PersistedRateLimit {
+    daily_downloads: number;
+    daily_reset_at: string;
+}
+
 const FREE_DAILY_LIMIT = 10;
 
 // ============================================================================
@@ -33,7 +39,47 @@ const FREE_DAILY_LIMIT = 10;
 // ============================================================================
 
 /**
+ * Get persisted rate limit data from Redis (survives /stop)
+ */
+async function getPersistedRateLimit(telegramId: number): Promise<PersistedRateLimit | null> {
+    if (!redis) return null;
+    
+    try {
+        const key = `bot:ratelimit:persist:${telegramId}`;
+        const data = await redis.get(key);
+        if (!data) return null;
+        
+        const parsed = JSON.parse(data as string) as PersistedRateLimit;
+        
+        // Check if reset time has passed
+        const resetTime = new Date(parsed.daily_reset_at);
+        if (Date.now() > resetTime.getTime()) {
+            // Rate limit has reset, delete the key
+            await redis.del(key);
+            return null;
+        }
+        
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Clear persisted rate limit after restoring to DB
+ */
+async function clearPersistedRateLimit(telegramId: number): Promise<void> {
+    if (!redis) return;
+    try {
+        await redis.del(`bot:ratelimit:persist:${telegramId}`);
+    } catch {
+        // Ignore
+    }
+}
+
+/**
  * Register or update bot user in database
+ * Restores rate limit data if user previously used /stop
  */
 async function botUserRegister(ctx: Context): Promise<BotUser | null> {
     const db = supabaseAdmin;
@@ -71,6 +117,9 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
             return updatedUser as BotUser;
         }
 
+        // New user - check for persisted rate limit (from previous /stop)
+        const persistedLimit = await getPersistedRateLimit(userId);
+        
         const { data: newUser, error } = await db
             .from('bot_users')
             .insert({
@@ -81,9 +130,10 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
                 is_banned: false,
                 is_admin: false,
                 api_key_id: null,
-                daily_downloads: 0,
+                // Restore rate limit if exists, otherwise start fresh
+                daily_downloads: persistedLimit?.daily_downloads || 0,
                 total_downloads: 0,
-                last_download_reset: new Date().toISOString()
+                last_download_reset: persistedLimit?.daily_reset_at || new Date().toISOString()
             })
             .select()
             .single();
@@ -92,6 +142,13 @@ async function botUserRegister(ctx: Context): Promise<BotUser | null> {
             console.error('[botUserRegister] Insert error:', error);
             return null;
         }
+        
+        // Clear persisted data after successful restore
+        if (persistedLimit) {
+            await clearPersistedRateLimit(userId);
+            console.log(`[botUserRegister] Restored rate limit for user ${userId}: ${persistedLimit.daily_downloads} downloads`);
+        }
+        
         return newUser as BotUser;
     } catch (error) {
         console.error('[botUserRegister] Error:', error);

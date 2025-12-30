@@ -9,7 +9,7 @@ import type { MediaFormat as BaseMediaFormat, EngagementStats } from '@/lib/type
 
 // Facebook-specific MediaFormat (extends base with storyIndex)
 export interface MediaFormat extends Omit<BaseMediaFormat, 'type'> {
-    type: 'video' | 'image';
+    type: 'video' | 'image' | 'audio';
     hasMuxedAudio?: boolean;
     storyIndex?: number;  // For grouping HD/SD variants of same story
     imageIndex?: number;  // For multi-image posts (0-based)

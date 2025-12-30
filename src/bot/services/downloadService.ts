@@ -46,8 +46,7 @@ export interface BotDownloadCreateInput {
  * Create a new download record
  */
 export async function botDownloadCreate(
-  userId: string,
-  telegramId: number,
+  userId: number,
   platform: PlatformId,
   url: string,
   title?: string | null,
@@ -63,7 +62,6 @@ export async function botDownloadCreate(
       .from('bot_downloads')
       .insert({
         user_id: userId,
-        telegram_id: telegramId,
         platform,
         url,
         title: title || null,

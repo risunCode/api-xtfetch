@@ -84,6 +84,7 @@ CREATE TABLE public.announcements (
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   created_by uuid,
+  dismissable boolean DEFAULT true,
   CONSTRAINT announcements_pkey PRIMARY KEY (id),
   CONSTRAINT announcements_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
 );
@@ -156,6 +157,7 @@ CREATE TABLE public.bot_users (
   updated_at timestamp with time zone DEFAULT now(),
   total_downloads integer DEFAULT 0,
   last_download_at timestamp with time zone,
+  is_vip boolean DEFAULT false,
   CONSTRAINT bot_users_pkey PRIMARY KEY (id),
   CONSTRAINT bot_users_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id)
 );

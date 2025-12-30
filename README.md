@@ -1,6 +1,6 @@
-# 🚀 DownAria Backend API
+# 🚀 XT-Fetch API
 
-> Backend API for DownAria social media video downloader.
+> High-performance social media scraper API with Telegram bot integration.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -8,50 +8,93 @@
 
 ## 🌐 Supported Platforms
 
-| Platform | Status |
-|----------|--------|
-| Facebook | ✅ Active |
-| Instagram | ✅ Active |
-| Twitter/X | ✅ Active |
-| TikTok | ✅ Active |
-| Weibo | ✅ Active |
-| YouTube | ✅ Active |
+| Platform | Video | Image | Stories | Carousel |
+|----------|-------|-------|---------|----------|
+| Facebook | ✅ | ✅ | ✅ | ✅ |
+| Instagram | ✅ | ✅ | ✅ | ✅ |
+| Twitter/X | ✅ | ✅ | - | ✅ |
+| TikTok | ✅ | ✅ | - | ✅ |
+| Weibo | ✅ | ✅ | - | - |
+| YouTube | ✅ | - | - | - |
 
-## 📡 Quick Test
+## 🔑 Features
 
+- **Multi-engine scrapers** - Fallback engines for reliability
+- **Smart caching** - Redis + in-memory LRU cache
+- **Rate limiting** - Per-IP and per-API-key limits
+- **Telegram Bot** - Download media directly via Telegram
+- **Cookie pool** - Rotating cookies for private content
+- **SSRF protection** - Secure proxy with domain whitelist
+
+## 📡 API Endpoints
+
+### Public Playground (Rate Limited)
 ```bash
-# Browser - just open:
-{BASE_URL}/api/v1/playground?url=https://www.facebook.com/share/v/1G8yBgJaPa/
-
-# cURL
-curl "{BASE_URL}/api/v1/playground?url=YOUR_VIDEO_URL"
+GET /api/v1/playground?url={VIDEO_URL}
 ```
 
-## 📚 Documentation
+### Premium API (Requires API Key)
+```bash
+GET /api/v1?key={API_KEY}&url={VIDEO_URL}
+```
 
-Full API documentation available at:
+### Media Proxy
+```bash
+GET /api/v1/proxy?url={CDN_URL}&platform={PLATFORM}
+```
 
-👉 **https://downaria.vercel.app/docs**
+### YouTube Merge (Video + Audio)
+```bash
+POST /api/v1/youtube/merge
+Body: { "url": "...", "quality": "1080p" }
+```
+
+## 🤖 Telegram Bot
+
+Built-in Telegram bot for direct media downloads:
+- Send any supported URL to download
+- Quality selection via inline buttons
+- Multi-language support (EN/ID)
+- Admin commands for management
 
 ## 🚀 Quick Start
 
 ```bash
-# Install
+# Install dependencies
 npm install
 
-# Development
+# Development (port 3002)
 npm run dev
 
-# Production
+# Production build
 npm run build && npm start
+```
+
+## ⚙️ Environment Variables
+
+```env
+# Required
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+
+# Optional - Telegram Bot
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+
+# Optional - Security
+ADMIN_SECRET_KEY=
+ENCRYPTION_KEY=
 ```
 
 ## 📊 Tech Stack
 
-- Next.js 16 + TypeScript
-- Supabase (PostgreSQL)
-- Upstash Redis (Caching)
-- Cheerio (HTML Parsing)
+- **Framework**: Next.js 15 + TypeScript
+- **Database**: Supabase (PostgreSQL)
+- **Cache**: Upstash Redis
+- **Bot**: grammY (Telegram)
+- **Scraping**: Cheerio, yt-dlp
 
 ## 📄 License
 

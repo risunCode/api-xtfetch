@@ -299,23 +299,21 @@ export async function botCallbackMenuCommand(ctx: BotContext, command: string): 
                 ? `💝 *Paket Donasi DownAria*\n\n` +
                   `Dengan berdonasi, kamu mendukung pengembangan bot!\n\n` +
                   `✨ *Keuntungan Donatur:*\n` +
-                  `• Download sesuai limit API key\n` +
+                  `• Limit sesuai API key\n` +
                   `• Tanpa cooldown\n` +
-                  `• Multi-URL (max 5/pesan)\n` +
-                  `• Prioritas support\n\n` +
+                  `• Multi-URL unlimited\n\n` +
                   `💰 *Harga:*\n` +
-                  `• Rp5.000 / 30 hari (PROMO!)\n\n` +
-                  `📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi`
+                  `• VIP: Rp5.000/bulan\n` +
+                  `• VVIP: Rp15.000/bulan (+ API Access)`
                 : `💝 *DownAria Donation Plan*\n\n` +
                   `By donating, you support bot development!\n\n` +
                   `✨ *Donator Benefits:*\n` +
-                  `• Downloads based on API key limit\n` +
+                  `• Limit based on API key\n` +
                   `• No cooldown\n` +
-                  `• Multi-URL (max 5/message)\n` +
-                  `• Priority support\n\n` +
+                  `• Unlimited multi-URL\n\n` +
                   `💰 *Price:*\n` +
-                  `• Rp5,000 / 30 days (PROMO!)\n\n` +
-                  `📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
+                  `• VIP: Rp5,000/month\n` +
+                  `• VVIP: Rp15,000/month (+ API Access)`;
             
             await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
             break;

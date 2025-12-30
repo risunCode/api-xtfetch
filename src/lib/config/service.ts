@@ -49,7 +49,7 @@ export interface ServiceConfigDB {
 // CONSTANTS - DEFAULT CONFIGS
 // ============================================================================
 
-const BOOTSTRAP_CACHE_TTL = 30000;
+const BOOTSTRAP_CACHE_TTL = 5000; // 5 seconds - short TTL for fast maintenance mode detection
 
 const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
     platforms: {
@@ -103,8 +103,8 @@ const getReadClient = () => supabaseAdmin || supabase; // Changed: use admin for
 
 /** Load service configuration from database */
 export async function serviceConfigLoad(forceRefresh = false): Promise<boolean> {
-    const systemConfig = sysConfigGet();
-    const cacheTTL = systemConfig.cacheTtlConfig || BOOTSTRAP_CACHE_TTL;
+    // Use short TTL for maintenance mode detection (5 seconds)
+    const cacheTTL = BOOTSTRAP_CACHE_TTL;
     if (!forceRefresh && Date.now() - serviceConfigLastFetch < cacheTTL) return true;
     
     const db = getReadClient();

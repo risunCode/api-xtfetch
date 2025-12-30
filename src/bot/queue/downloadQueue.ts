@@ -25,6 +25,10 @@ export interface DownloadJobData {
     isPremium: boolean;
     /** Job creation timestamp */
     timestamp: number;
+    /** Platform ID for history tracking */
+    platform?: string;
+    /** Bot user ID (Telegram ID) for history tracking */
+    botUserId?: number;
 }
 
 /**

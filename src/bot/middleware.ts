@@ -266,9 +266,10 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
     return next();
   }
 
-  // Skip rate limit for API key input (dwa_*, xtf_*)
+  // Skip rate limit for API key input (any text with underscore that looks like API key)
+  // API keys have format: prefix_randomstring (e.g., dwa_live_xxx, atmin_xxx, xtf_xxx)
   const messageText = ctx.message?.text?.trim() || '';
-  if (messageText.startsWith('dwa_') || messageText.startsWith('xtf_')) {
+  if (messageText.includes('_') && messageText.length >= 10 && !messageText.includes(' ') && !messageText.startsWith('http')) {
     return next();
   }
 
@@ -306,11 +307,11 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
       ? `❌ Batas harian tercapai (${user.daily_downloads}/${freeConfig.dailyLimit})\n\n` +
         `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
         `💝 Upgrade ke Paket Donasi mulai Rp5.000\n` +
-        `🌐 Atau akses via website tanpa batas!`
+        `🌐 Atau akses via website untuk lanjut download!`
       : `❌ Daily limit reached (${user.daily_downloads}/${freeConfig.dailyLimit})\n\n` +
         `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
         `💝 Upgrade to Donation Plan from Rp5,000\n` +
-        `🌐 Or access via website with no limits!`;
+        `🌐 Or access via website to continue!`;
     
     await ctx.reply(msg, {
       reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
@@ -374,6 +375,67 @@ export async function botRateLimitRecordDownloadById(userId: number, isPremium: 
 
   // Increment download count
   await botUserIncrementDownloads(userId);
+}
+
+// ============================================================================
+// MULTI-URL DAILY TRACKING (Free Users)
+// ============================================================================
+
+const FREE_MULTI_URL_DAILY_LIMIT = 10;
+
+/**
+ * Get remaining multi-URL uses for free user today
+ * Returns { used: number, remaining: number, resetAt: Date }
+ */
+export async function getMultiUrlUsage(userId: number): Promise<{ used: number; remaining: number; resetAt: Date }> {
+  const resetAt = botRateLimitGetResetTime();
+  
+  if (!redis) {
+    return { used: 0, remaining: FREE_MULTI_URL_DAILY_LIMIT, resetAt };
+  }
+  
+  try {
+    const key = `bot:multiurl:${userId}`;
+    const used = parseInt(await redis.get(key) || '0', 10);
+    return { 
+      used, 
+      remaining: Math.max(0, FREE_MULTI_URL_DAILY_LIMIT - used),
+      resetAt 
+    };
+  } catch {
+    return { used: 0, remaining: FREE_MULTI_URL_DAILY_LIMIT, resetAt };
+  }
+}
+
+/**
+ * Check if free user can use multi-URL feature
+ */
+export async function canUseMultiUrl(userId: number): Promise<boolean> {
+  const { remaining } = await getMultiUrlUsage(userId);
+  return remaining > 0;
+}
+
+/**
+ * Record multi-URL usage for free user
+ * Call this when free user sends multiple URLs in one message
+ */
+export async function recordMultiUrlUsage(userId: number): Promise<void> {
+  if (!redis) return;
+  
+  try {
+    const key = `bot:multiurl:${userId}`;
+    const resetAt = botRateLimitGetResetTime();
+    const ttlSeconds = Math.ceil((resetAt.getTime() - Date.now()) / 1000);
+    
+    // Increment counter with TTL until midnight WIB
+    const current = await redis.incr(key);
+    if (current === 1) {
+      // First use today, set expiry
+      await redis.expire(key, ttlSeconds);
+    }
+  } catch {
+    // Ignore errors
+  }
 }
 
 // ============================================================================
@@ -639,6 +701,9 @@ export {
   getCooldown as botRateLimitGetCooldown,
   setCooldown as botRateLimitSetCooldown,
   getTimeUntilReset,
+  getMultiUrlUsage,
+  canUseMultiUrl,
+  recordMultiUrlUsage,
 };
 
 // Legacy constants (from rateLimit.ts)

@@ -13,18 +13,20 @@ import { Bot, InputFile, InlineKeyboard } from 'grammy';
 import type { InputMediaPhoto } from 'grammy/types';
 
 import { platformDetect, type PlatformId } from '@/core/config';
+import { serviceConfigLoad, serviceConfigIsPlatformEnabled, serviceConfigGetPlatformDisabledMessage } from '@/lib/config';
 import { logger } from '@/lib/services/shared/logger';
 import { optimizeCdnUrl } from '@/lib/services/facebook/cdn';
 
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
-import { botRateLimitRecordDownload } from '../middleware';
+import { botRateLimitRecordDownload, getMultiUrlUsage, canUseMultiUrl, recordMultiUrlUsage } from '../middleware';
 import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware';
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
 import { downloadQueue, isQueueAvailable } from '../queue';
+import { botDownloadCreate, botDownloadUpdateStatus } from '../services/downloadService';
 import { log } from '../helpers';
 
 // ============================================================================
@@ -43,8 +45,17 @@ const SUPPORTED_DOMAINS = [
 ];
 
 // Multi-URL limits
-const MAX_URLS_FREE = 1;
-const MAX_URLS_DONATOR = 5;
+const MAX_URLS_FREE_PER_MSG = 10;     // Free users: max 10 URLs per message
+const MAX_URLS_DONATOR_PER_MSG = 10;  // VIP users: max 10 URLs per message
+const FREE_MULTI_URL_DAILY_LIMIT = 10; // Free users: max 10 multi-URL requests per day
+
+// Helper to format time until reset
+function getTimeUntilResetFormatted(resetAt: Date): { hours: number; minutes: number } {
+    const diffMs = resetAt.getTime() - Date.now();
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return { hours: Math.max(0, hours), minutes: Math.max(0, minutes) };
+}
 
 // Feature flag for queue-based processing
 const USE_QUEUE_PROCESSING = process.env.BOT_USE_QUEUE === 'true';
@@ -1055,14 +1066,37 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         
         // Determine URL limit based on user type (VIP = Donator)
         const isVip = ctx.isVip || false;
-        const maxUrls = isVip ? MAX_URLS_DONATOR : MAX_URLS_FREE;
-        const urls = extractSocialUrls(text, maxUrls);
+        const maxUrlsPerMsg = isVip ? MAX_URLS_DONATOR_PER_MSG : MAX_URLS_FREE_PER_MSG;
+        const urls = extractSocialUrls(text, maxUrlsPerMsg);
         
         if (urls.length === 0) {
             await ctx.reply(t('unknown_text', lang), {
                 reply_parameters: { message_id: ctx.message.message_id },
             });
             return;
+        }
+        
+        // Check multi-URL daily limit for free users
+        const isMultiUrlRequest = urls.length > 1;
+        if (isMultiUrlRequest && !isVip) {
+            const multiUrlUsage = await getMultiUrlUsage(ctx.from!.id);
+            if (multiUrlUsage.remaining <= 0) {
+                const { hours, minutes } = getTimeUntilResetFormatted(multiUrlUsage.resetAt);
+                const limitMsg = lang === 'id'
+                    ? `⚠️ *Batas Multi-Link Tercapai*\n\n` +
+                      `Kamu sudah menggunakan ${FREE_MULTI_URL_DAILY_LIMIT}x multi-link hari ini.\n\n` +
+                      `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
+                      `💡 Kirim 1 URL per pesan, atau upgrade ke VIP untuk unlimited multi-link!`
+                    : `⚠️ *Multi-Link Limit Reached*\n\n` +
+                      `You've used ${FREE_MULTI_URL_DAILY_LIMIT}x multi-link today.\n\n` +
+                      `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
+                      `💡 Send 1 URL per message, or upgrade to VIP for unlimited multi-link!`;
+                await ctx.reply(limitMsg, {
+                    parse_mode: 'Markdown',
+                    reply_parameters: { message_id: ctx.message.message_id },
+                });
+                return;
+            }
         }
         
         // Count total URLs in message for warning
@@ -1074,16 +1108,16 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             } catch { return false; }
         }).length;
         
-        // Warn if URLs were ignored (only for non-VIP users)
+        // Warn if URLs were ignored
         if (totalUrls > urls.length) {
             const ignored = totalUrls - urls.length;
             const warning = isVip
                 ? (lang === 'id' 
-                    ? `⚠️ ${ignored} URL diabaikan (max ${MAX_URLS_DONATOR}/pesan)`
-                    : `⚠️ ${ignored} URLs ignored (max ${MAX_URLS_DONATOR}/message)`)
+                    ? `⚠️ ${ignored} URL diabaikan (max ${MAX_URLS_DONATOR_PER_MSG}/pesan)`
+                    : `⚠️ ${ignored} URLs ignored (max ${MAX_URLS_DONATOR_PER_MSG}/message)`)
                 : (lang === 'id'
-                    ? `⚠️ ${ignored} URL diabaikan.\n\n💡 *Free user:* 1 URL/pesan\n💎 *VIP:* 5 URL/pesan\n\nGunakan /donate untuk info VIP!`
-                    : `⚠️ ${ignored} URLs ignored.\n\n💡 *Free users:* 1 URL/message\n💎 *VIP:* 5 URLs/message\n\nUse /donate for VIP info!`);
+                    ? `⚠️ ${ignored} URL diabaikan (max ${MAX_URLS_FREE_PER_MSG}/pesan)`
+                    : `⚠️ ${ignored} URLs ignored (max ${MAX_URLS_FREE_PER_MSG}/message)`);
             
             await ctx.reply(warning, {
                 parse_mode: 'Markdown',
@@ -1096,6 +1130,23 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         if (isGlobalMaintenance && !ctx.isAdmin) {
             const maintenanceMsg = await botGetMaintenanceMessage(ctx.from?.language_code);
             await ctx.reply(maintenanceMsg, {
+                parse_mode: 'Markdown',
+                reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
+            });
+            return;
+        }
+        
+        // Check if platform is enabled (load fresh config)
+        await serviceConfigLoad(true);
+        const firstUrl = urls[0];
+        const detectedPlatform = platformDetect(firstUrl);
+        if (detectedPlatform && !serviceConfigIsPlatformEnabled(detectedPlatform) && !ctx.isAdmin) {
+            const disabledMsg = serviceConfigGetPlatformDisabledMessage(detectedPlatform);
+            const platformName = botUrlGetPlatformName(detectedPlatform);
+            const msg = lang === 'id'
+                ? `🚫 *${platformName}* sedang tidak tersedia.\n\n${disabledMsg || 'Silakan coba lagi nanti.'}`
+                : `🚫 *${platformName}* is currently unavailable.\n\n${disabledMsg || 'Please try again later.'}`;
+            await ctx.reply(msg, {
                 parse_mode: 'Markdown',
                 reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
             });
@@ -1247,6 +1298,11 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                             await botRateLimitRecordDownload(ctx);
                         }
                         
+                        // Record multi-URL usage for free users
+                        if (!isVip) {
+                            await recordMultiUrlUsage(ctx.from!.id);
+                        }
+                        
                         log.debug(`Sent merged gallery: ${allImages.length} images from ${successUrls.length} URLs`);
                         return; // Exit early - gallery sent successfully
                         
@@ -1271,11 +1327,16 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         // Standard Multi-URL Processing (Sequential)
         // ════════════════════════════════════════════════════════════════════
         
-        // Show progress message for multiple URLs (VIP feature)
+        // Show progress message for multiple URLs
         if (isMultiUrl && !progressMsgId) {
+            let multiUrlLabel = '(VIP)';
+            if (!isVip) {
+                const usage = await getMultiUrlUsage(ctx.from!.id);
+                multiUrlLabel = `(${usage.used + 1}/${FREE_MULTI_URL_DAILY_LIMIT} hari ini)`;
+            }
             const progressMsg = lang === 'id'
-                ? `📥 *Multi-Download* (VIP)\n\n⏳ Memproses ${urls.length} link...`
-                : `📥 *Multi-Download* (VIP)\n\n⏳ Processing ${urls.length} links...`;
+                ? `📥 *Multi-Download* ${multiUrlLabel}\n\n⏳ Memproses ${urls.length} link...`
+                : `📥 *Multi-Download* ${isVip ? '(VIP)' : multiUrlLabel}\n\n⏳ Processing ${urls.length} links...`;
             
             try {
                 const msg = await ctx.reply(progressMsg, {
@@ -1335,6 +1396,8 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                         url,
                         isPremium: isVip,
                         timestamp: Date.now(),
+                        platform: platform, // For history tracking
+                        botUserId: ctx.botUser?.id, // Bot user UUID for history
                     }, {
                         priority: isVip ? 1 : 10, // VIP gets higher priority
                     });
@@ -1351,6 +1414,20 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
             // Synchronous processing (default)
             const result = await botUrlCallScraper(url, isVip);
             const processingEndTime = Date.now();
+
+            // Create download record for history tracking
+            let downloadId: string | null = null;
+            if (ctx.botUser?.id && platform) {
+                const { data: downloadRecord } = await botDownloadCreate(
+                    ctx.botUser.id,
+                    platform as PlatformId,
+                    url,
+                    result.title || null,
+                    result.success ? 'completed' : 'failed',
+                    isVip
+                );
+                downloadId = downloadRecord?.id || null;
+            }
 
             if (result.success) {
                 // Pass processingMsgId to sendMediaByType - it will handle status updates and deletion
@@ -1429,6 +1506,11 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                 await ctx.api.editMessageText(ctx.chat!.id, progressMsgId, summaryText, {
                     parse_mode: 'Markdown',
                 });
+                
+                // Record multi-URL usage for free users (sequential processing)
+                if (!isVip && successCount > 0) {
+                    await recordMultiUrlUsage(ctx.from!.id);
+                }
                 
                 // Delete summary after 5 seconds
                 setTimeout(async () => {

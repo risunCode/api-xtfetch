@@ -575,6 +575,7 @@ async function sendSinglePhotoMedia(options: SendMediaOptions): Promise<SendMedi
 
 /**
  * Send multiple photos as album (media group)
+ * Supports more than 10 images by splitting into multiple galleries
  */
 async function sendPhotoAlbumMedia(options: SendMediaOptions): Promise<SendMediaResult> {
   const { result, originalUrl, processingMsgId, lang = 'en' } = options;
@@ -588,39 +589,58 @@ async function sendPhotoAlbumMedia(options: SendMediaOptions): Promise<SendMedia
   const caption = buildSimpleCaption(result, originalUrl);
   const requiresDownload = bestImages.some(img => needsDownloadFirst(img.url));
   
+  const MAX_IMAGES_PER_GROUP = 10;
+  const totalImages = bestImages.length;
+  const totalGroups = Math.ceil(totalImages / MAX_IMAGES_PER_GROUP);
+  
   const buffers: Buffer[] = [];
 
   try {
     await sendChatAction(options, 'upload_photo');
     
-    if (requiresDownload) {
-      // Download all images to buffers first
-      const downloadPromises = bestImages.slice(0, 10).map(img => fetchWithRetry(img.url, MAX_RETRY_ATTEMPTS, result.platform));
-      const downloadedBuffers = await Promise.all(downloadPromises);
-      buffers.push(...downloadedBuffers);
+    // Split images into chunks of 10
+    for (let groupIndex = 0; groupIndex < totalGroups; groupIndex++) {
+      const startIdx = groupIndex * MAX_IMAGES_PER_GROUP;
+      const endIdx = Math.min(startIdx + MAX_IMAGES_PER_GROUP, totalImages);
+      const groupImages = bestImages.slice(startIdx, endIdx);
+      const isFirstGroup = groupIndex === 0;
+      const isLastGroup = groupIndex === totalGroups - 1;
       
-      const mediaGroup: InputMediaPhoto[] = buffers.map((buffer, index) => ({
-        type: 'photo' as const,
-        media: new InputFile(buffer, `photo_${index}.jpg`),
-        caption: index === 0 ? (caption || undefined) : undefined,
-        parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
-      }));
+      if (requiresDownload) {
+        // Download images for this group
+        const downloadPromises = groupImages.map(img => fetchWithRetry(img.url, MAX_RETRY_ATTEMPTS, result.platform));
+        const downloadedBuffers = await Promise.all(downloadPromises);
+        
+        const mediaGroup: InputMediaPhoto[] = downloadedBuffers.map((buffer, index) => ({
+          type: 'photo' as const,
+          media: new InputFile(buffer, `photo_${startIdx + index}.jpg`),
+          caption: isFirstGroup && index === 0 ? (caption || undefined) : undefined,
+          parse_mode: isFirstGroup && index === 0 && caption ? 'Markdown' as const : undefined,
+        }));
+        
+        await sendMediaGroup(options, mediaGroup);
+      } else {
+        // Use URLs directly
+        const mediaGroup: InputMediaPhoto[] = groupImages.map((img, index) => ({
+          type: 'photo' as const,
+          media: img.url,
+          caption: isFirstGroup && index === 0 ? (caption || undefined) : undefined,
+          parse_mode: isFirstGroup && index === 0 && caption ? 'Markdown' as const : undefined,
+        }));
+        
+        await sendMediaGroup(options, mediaGroup);
+      }
       
-      await sendMediaGroup(options, mediaGroup);
-    } else {
-      // Use URLs directly
-      const mediaGroup: InputMediaPhoto[] = bestImages.slice(0, 10).map((img, index) => ({
-        type: 'photo' as const,
-        media: img.url,
-        caption: index === 0 ? (caption || undefined) : undefined,
-        parse_mode: index === 0 && caption ? 'Markdown' as const : undefined,
-      }));
-      
-      await sendMediaGroup(options, mediaGroup);
+      // Small delay between groups to avoid rate limiting
+      if (!isLastGroup) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     }
     
     // Send completion message with keyboard
-    const completeMsg = lang === 'id' ? '✅ Download selesai!' : '✅ Download complete!';
+    const completeMsg = totalGroups > 1
+      ? (lang === 'id' ? `✅ Download selesai! (${totalImages} gambar)` : `✅ Download complete! (${totalImages} images)`)
+      : (lang === 'id' ? '✅ Download selesai!' : '✅ Download complete!');
     const keyboard = new InlineKeyboard().url('🔗 Origin URL', originalUrl);
     await sendMessage(options, completeMsg, keyboard);
     

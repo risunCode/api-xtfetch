@@ -178,21 +178,46 @@ async function runYtdlp(url: string, cookieFile?: string): Promise<YtdlpOutput> 
 
 /**
  * Map yt-dlp format to MediaFormat
+ * Returns null for formats we don't want (video-only DASH without audio)
  */
 function mapFormat(fmt: YtdlpFormat, thumbnail?: string): MediaFormat | null {
-    // Skip audio-only and DASH manifest
-    if (fmt.vcodec === 'none' && fmt.acodec !== 'none') return null;
+    // Skip DASH manifest URLs
     if (fmt.url.includes('dash_mpd')) return null;
     
+    const hasVideo = fmt.vcodec && fmt.vcodec !== 'none';
     const hasAudio = fmt.acodec && fmt.acodec !== 'none';
     
+    // Audio-only format (DASH audio) - return as audio type
+    if (!hasVideo && hasAudio) {
+        return {
+            quality: 'Audio',
+            type: 'audio',
+            url: fmt.url,
+            format: fmt.ext || 'm4a',
+            thumbnail,
+            filesize: fmt.filesize || fmt.filesize_approx,
+            hasMuxedAudio: true,
+        };
+    }
+    
+    // Video-only DASH format (no audio) - SKIP these
+    // These are useless for users because they have no sound
+    if (hasVideo && !hasAudio) {
+        // Exception: sd and hd format_ids are progressive (have muxed audio)
+        if (fmt.format_id !== 'sd' && fmt.format_id !== 'hd') {
+            return null; // Skip video-only DASH
+        }
+    }
+    
+    // Video with audio (muxed) - this is what we want
     // Determine quality label based on height
-    // Normalize to HD/SD only (like Risuncode extractor) for consistency
     let quality: string;
     const height = fmt.height || 0;
     
-    if (height >= 720) {
-        quality = 'HD'; // 720p+
+    if (height >= 1080) {
+        quality = 'FHD'; // 1080p+
+    } else if (height >= 720) {
+        quality = 'HD'; // 720p
     } else if (height > 0) {
         quality = 'SD'; // Below 720p
     } else if (fmt.format_id === 'hd') {
@@ -210,7 +235,7 @@ function mapFormat(fmt: YtdlpFormat, thumbnail?: string): MediaFormat | null {
         width: fmt.width,
         height: fmt.height,
         filesize: fmt.filesize || fmt.filesize_approx,
-        hasMuxedAudio: hasAudio || fmt.format_id === 'sd' || fmt.format_id === 'hd',
+        hasMuxedAudio: true, // Only return videos that have audio
     };
 }
 
@@ -295,10 +320,14 @@ export async function scrapeWithYtdlp(url: string, options: ScraperOptions = {})
             if (mapped) formats.push(mapped);
         }
         
-        // Sort: HD first, then by height desc
+        // Sort: HD first, then by height desc, audio last
         formats.sort((a, b) => {
-            // Priority order: HD > SD
-            const qualityOrder: Record<string, number> = { 'HD': 2, 'SD': 1 };
+            // Audio always at the end
+            if (a.type === 'audio' && b.type !== 'audio') return 1;
+            if (a.type !== 'audio' && b.type === 'audio') return -1;
+            
+            // Priority order: FHD > HD > SD
+            const qualityOrder: Record<string, number> = { 'FHD': 3, 'HD': 2, 'SD': 1, 'Audio': 0 };
             const aOrder = qualityOrder[a.quality] || 0;
             const bOrder = qualityOrder[b.quality] || 0;
             if (aOrder !== bOrder) return bOrder - aOrder;
@@ -306,8 +335,19 @@ export async function scrapeWithYtdlp(url: string, options: ScraperOptions = {})
         });
         
         // Dedupe by quality - keep best (largest filesize) per quality tier
+        // But always keep audio format if present
         const bestByQuality = new Map<string, MediaFormat>();
+        let audioFormat: MediaFormat | null = null;
+        
         for (const f of formats) {
+            if (f.type === 'audio') {
+                // Keep best audio (largest bitrate/filesize)
+                if (!audioFormat || (f.filesize || 0) > (audioFormat.filesize || 0)) {
+                    audioFormat = f;
+                }
+                continue;
+            }
+            
             const existing = bestByQuality.get(f.quality);
             if (!existing) {
                 bestByQuality.set(f.quality, f);
@@ -320,7 +360,12 @@ export async function scrapeWithYtdlp(url: string, options: ScraperOptions = {})
                 }
             }
         }
+        
+        // Combine video formats + audio format
         const deduped = Array.from(bestByQuality.values());
+        if (audioFormat) {
+            deduped.push(audioFormat);
+        }
         
         if (deduped.length === 0) {
             return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada media ditemukan');
@@ -364,6 +409,8 @@ function mapErrorToResult(errCode: string): ScraperResult {
         case 'NO_MEDIA':
             return createError(ScraperErrorCode.NO_MEDIA, 'Tidak ada video ditemukan');
         case 'PARSE_ERROR':
+            // Parse error - let fallback engine try
+            return createError(ScraperErrorCode.PARSE_ERROR, 'Gagal memproses data');
         case 'LOGIN_REQUIRED':
             return createError(ScraperErrorCode.COOKIE_REQUIRED, 'Konten memerlukan login');
         case 'PRIVATE':

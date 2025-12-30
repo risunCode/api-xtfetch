@@ -26,6 +26,9 @@ const stopComposer = new Composer<BotContext>();
 /**
  * Delete all user data from database
  * Returns true if successful, false otherwise
+ * 
+ * NOTE: Rate limit data is PRESERVED to prevent abuse via /stop + /start
+ * Only user profile, history, and session data are deleted
  */
 async function deleteUserData(telegramId: number): Promise<{ success: boolean; error?: string }> {
   if (!supabaseAdmin) {
@@ -33,7 +36,15 @@ async function deleteUserData(telegramId: number): Promise<{ success: boolean; e
   }
 
   try {
-    // 1. Delete from bot_users table
+    // 1. PRESERVE rate limit data before deletion
+    // Get current daily_downloads and daily_reset_at
+    const { data: userData } = await supabaseAdmin
+      .from('bot_users')
+      .select('daily_downloads, daily_reset_at')
+      .eq('id', telegramId)
+      .single();
+
+    // 2. Delete from bot_users table
     const { error: userError } = await supabaseAdmin
       .from('bot_users')
       .delete()
@@ -44,18 +55,43 @@ async function deleteUserData(telegramId: number): Promise<{ success: boolean; e
       return { success: false, error: userError.message };
     }
 
-    // 2. Clear Redis session data
+    // 3. Store rate limit data in Redis (persists across /stop + /start)
+    // This prevents abuse - limits are tied to telegram ID, not user record
+    if (redis && userData) {
+      try {
+        const rateLimitKey = `bot:ratelimit:persist:${telegramId}`;
+        const resetTime = userData.daily_reset_at || new Date().toISOString();
+        
+        // Store with TTL until next reset (max 24 hours)
+        const ttlSeconds = Math.max(
+          Math.ceil((new Date(resetTime).getTime() - Date.now()) / 1000),
+          60 // minimum 1 minute
+        );
+        
+        await redis.set(rateLimitKey, JSON.stringify({
+          daily_downloads: userData.daily_downloads,
+          daily_reset_at: resetTime
+        }), { ex: Math.min(ttlSeconds, 86400) }); // max 24h TTL
+        
+        logger.debug('telegram', `Preserved rate limit for deleted user ${telegramId}: ${userData.daily_downloads} downloads`);
+      } catch (redisError) {
+        // Log but don't fail
+        logger.debug('telegram', `Failed to preserve rate limit for user ${telegramId}`);
+      }
+    }
+
+    // 4. Clear session data (but NOT rate limit persistence key)
     if (redis) {
       try {
         await redis.del(`bot:session:${telegramId}`);
         await redis.del(`bot:cooldown:${telegramId}`);
-        // Clear any dedup keys (pattern match)
+        // Clear dedup keys
         const dedupKeys = await redis.keys(`bot:dedup:${telegramId}:*`);
         if (dedupKeys.length > 0) {
           await redis.del(...dedupKeys);
         }
+        // NOTE: bot:ratelimit:persist:${telegramId} is NOT deleted
       } catch (redisError) {
-        // Log but don't fail - Redis cleanup is best effort
         logger.debug('telegram', `Failed to clear Redis data for user ${telegramId}`);
       }
     }
@@ -106,7 +142,8 @@ Kamu yakin ingin menghapus semua data?
 ⚠️ *Peringatan:*
 • Tindakan ini TIDAK BISA dibatalkan
 • Kamu harus /start lagi untuk menggunakan bot
-• Limit harian akan reset dari awal
+
+_Note: Limit harian tetap berlaku sampai reset berikutnya._
 
 Ketik /start kapan saja untuk mendaftar ulang.`
     : `⚠️ *Delete My Data*
@@ -122,7 +159,8 @@ Are you sure you want to delete all your data?
 ⚠️ *Warning:*
 • This action CANNOT be undone
 • You'll need to /start again to use the bot
-• Daily limits will reset from scratch
+
+_Note: Daily limits remain until next reset._
 
 Type /start anytime to re-register.`;
 

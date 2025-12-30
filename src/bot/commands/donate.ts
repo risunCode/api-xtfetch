@@ -106,24 +106,20 @@ Dengan berdonasi, kamu mendukung pengembangan bot!
 ${freeConfig.icon} *FREE*
 • ${freeConfig.dailyLimit} download/hari
 • Cooldown ${freeConfig.cooldownSeconds} detik
-• Tanpa API access
+• Multi-URL (max 10/pesan, 10x/hari)
 
 ${vipConfig.icon} *VIP* (Rp5.000/bulan)
-• ${vipConfig.requestsPerWindow} req/${vipConfig.windowMinutes} menit
-• Cooldown ${vipConfig.cooldownSeconds} detik
-• Multi-URL (max 5/pesan)
-• Prioritas support
+• Limit sesuai API key
+• Tanpa cooldown
+• Multi-URL unlimited
 
 ${vvipConfig.icon} *VVIP* (Rp15.000/bulan)
-• ${vvipConfig.requestsPerWindow} req/${vvipConfig.windowMinutes} menit
-• Cooldown ${vvipConfig.cooldownSeconds} detik
-• Multi-URL (max 5/pesan)
+• Limit sesuai API key
+• Tanpa cooldown
+• Multi-URL unlimited
 • ✨ API Access
-• Prioritas support
 
-━━━━━━━━━━━━━━━━━━━━━━
-
-📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi`;
+━━━━━━━━━━━━━━━━━━━━━━`;
     }
     
     return `💝 *DownAria Donation Plans*
@@ -135,24 +131,20 @@ By donating, you support bot development!
 ${freeConfig.icon} *FREE*
 • ${freeConfig.dailyLimit} downloads/day
 • ${freeConfig.cooldownSeconds}s cooldown
-• No API access
+• Multi-URL (max 10/msg, 10x/day)
 
 ${vipConfig.icon} *VIP* (Rp5,000/month)
-• ${vipConfig.requestsPerWindow} req/${vipConfig.windowMinutes} min
-• ${vipConfig.cooldownSeconds}s cooldown
-• Multi-URL (max 5/message)
-• Priority support
+• Limit based on API key
+• No cooldown
+• Unlimited multi-URL
 
 ${vvipConfig.icon} *VVIP* (Rp15,000/month)
-• ${vvipConfig.requestsPerWindow} req/${vvipConfig.windowMinutes} min
-• ${vvipConfig.cooldownSeconds}s cooldown
-• Multi-URL (max 5/message)
+• Limit based on API key
+• No cooldown
+• Unlimited multi-URL
 • ✨ API Access
-• Priority support
 
-━━━━━━━━━━━━━━━━━━━━━━
-
-📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
+━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -388,14 +380,10 @@ donateComposer.callbackQuery('donate_enter_key', async (ctx) => {
 
 Kirim API key kamu di pesan berikutnya.
 
-_Format:_ \`dwa_live_xxxxx...\`
-
 ⚠️ Kadaluarsa dalam 5 menit.`
         : `🔑 *Enter Your API Key*
 
 Send your API key in the next message.
-
-_Format:_ \`dwa_live_xxxxx...\`
 
 ⚠️ Expires in 5 minutes.`;
 
@@ -642,14 +630,10 @@ donateComposer.callbackQuery('donate_link', async (ctx) => {
 
 Kirim API key kamu di pesan berikutnya.
 
-_Format:_ \`dwa_live_xxxxx...\`
-
 ⚠️ Kadaluarsa dalam 5 menit.`
         : `🔑 *Enter Your API Key*
 
 Send your API key in the next message.
-
-_Format:_ \`dwa_live_xxxxx...\`
 
 ⚠️ Expires in 5 minutes.`;
 

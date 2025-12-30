@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn, execSync } from 'child_process';
-import { existsSync, mkdirSync, createReadStream, rmSync, statSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, createReadStream, rmSync, statSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -144,6 +144,45 @@ function isYouTubeUrl(url: string): boolean {
 }
 
 // ============================================================================
+// FFmpeg Headers for CDN Access
+// ============================================================================
+
+function getFFmpegHeaders(url: string, platform?: string): string | null {
+    const headers: string[] = [];
+    
+    // Detect platform from URL if not provided
+    const urlLower = url.toLowerCase();
+    let detectedPlatform = platform?.toLowerCase() || '';
+    
+    if (!detectedPlatform) {
+        if (urlLower.includes('fbcdn') || urlLower.includes('facebook')) detectedPlatform = 'facebook';
+        else if (urlLower.includes('cdninstagram') || urlLower.includes('instagram')) detectedPlatform = 'instagram';
+        else if (urlLower.includes('twimg')) detectedPlatform = 'twitter';
+        else if (urlLower.includes('tiktok')) detectedPlatform = 'tiktok';
+        else if (urlLower.includes('sinaimg') || urlLower.includes('weibo')) detectedPlatform = 'weibo';
+    }
+    
+    // Platform-specific referer
+    const referers: Record<string, string> = {
+        facebook: 'https://www.facebook.com/',
+        instagram: 'https://www.instagram.com/',
+        twitter: 'https://twitter.com/',
+        tiktok: 'https://www.tiktok.com/',
+        weibo: 'https://weibo.com/',
+    };
+    
+    if (detectedPlatform && referers[detectedPlatform]) {
+        headers.push(`Referer: ${referers[detectedPlatform]}`);
+    }
+    
+    // Common headers
+    headers.push('Accept: */*');
+    headers.push('Accept-Language: en-US,en;q=0.9');
+    
+    return headers.length > 0 ? headers.join('\r\n') : null;
+}
+
+// ============================================================================
 // FFmpeg Conversion
 // ============================================================================
 
@@ -157,16 +196,34 @@ async function convertMedia(
     inputUrl: string,
     outputDir: string,
     outputFormat: 'mp4' | 'mp3' | 'm4a',
-    filename: string
+    filename: string,
+    platform?: string
 ): Promise<ConvertResult> {
     return new Promise((resolve) => {
         const ffmpegPath = findFFmpegPath();
         const outputFile = path.join(outputDir, `${filename}.${outputFormat}`);
         
+        // Ensure filename is safe for Windows paths
+        if (!filename || filename.length === 0) {
+            resolve({ success: false, error: 'Invalid filename' });
+            return;
+        }
+        
+        // Build FFmpeg args with proper headers for CDN access
         const args: string[] = [
             '-y', // Overwrite output
-            '-i', inputUrl,
         ];
+        
+        // Add headers based on platform/URL for CDN access
+        const headers = getFFmpegHeaders(inputUrl, platform);
+        if (headers) {
+            args.push('-headers', headers);
+        }
+        
+        // Add user agent
+        args.push('-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        args.push('-i', inputUrl);
         
         // Format-specific encoding
         if (outputFormat === 'mp3') {
@@ -178,12 +235,11 @@ async function convertMedia(
         } else {
             // Video - copy streams if possible, otherwise re-encode
             args.push('-c', 'copy');
-            // Fallback: if copy fails, ffmpeg will error and we can retry with re-encode
         }
         
         args.push(outputFile);
         
-        console.log(`[merge] Starting ffmpeg: ${outputFormat}`);
+        console.log(`[merge] Starting ffmpeg: ${outputFormat}, file: ${filename}, platform: ${platform || 'unknown'}`);
         
         const proc = spawn(ffmpegPath, args, {
             timeout: TIMEOUT_MS,
@@ -210,15 +266,28 @@ async function convertMedia(
                     console.log(`[merge] Success: ${(stats.size / 1024 / 1024).toFixed(1)}MB`);
                     resolve({ success: true, outputPath: outputFile });
                 } else {
-                    resolve({ success: false, error: 'Output file too small' });
+                    resolve({ success: false, error: 'Output file too small - conversion may have failed' });
                 }
             } else {
-                // Check if it's a codec copy error - retry with re-encode
-                if (stderr.includes('codec copy') || stderr.includes('Invalid data')) {
+                // Check for common errors and provide better messages
+                if (stderr.includes('does not contain any stream') || stderr.includes('Output file is empty')) {
+                    // This usually means FFmpeg couldn't access/download the URL
+                    resolve({ success: false, error: 'Gagal mengakses video. URL mungkin expired atau butuh autentikasi.' });
+                } else if (stderr.includes('Server returned 403') || stderr.includes('403 Forbidden')) {
+                    resolve({ success: false, error: 'Akses ditolak (403). Coba refresh halaman dan download ulang.' });
+                } else if (stderr.includes('Server returned 404') || stderr.includes('404 Not Found')) {
+                    resolve({ success: false, error: 'Video tidak ditemukan (404). URL mungkin sudah expired.' });
+                } else if (stderr.includes('Invalid argument') || stderr.includes('Invalid data')) {
+                    // Filename or path issue - retry with simpler name
+                    console.log(`[merge] Retrying with simple filename...`);
+                    retryWithReencode(inputUrl, outputDir, outputFormat, 'output', resolve, platform);
+                } else if (stderr.includes('codec copy')) {
                     console.log(`[merge] Retrying with re-encode...`);
-                    retryWithReencode(inputUrl, outputDir, outputFormat, filename, resolve);
+                    retryWithReencode(inputUrl, outputDir, outputFormat, filename, resolve, platform);
+                } else if (stderr.includes('Connection refused') || stderr.includes('Connection timed out')) {
+                    resolve({ success: false, error: 'Koneksi ke server gagal. Coba lagi nanti.' });
                 } else {
-                    const errMsg = stderr.slice(-200) || 'Conversion failed';
+                    const errMsg = stderr.slice(-300) || 'Conversion failed';
                     console.error(`[merge] Failed: ${errMsg}`);
                     resolve({ success: false, error: errMsg });
                 }
@@ -237,15 +306,22 @@ function retryWithReencode(
     outputDir: string,
     outputFormat: 'mp4' | 'mp3' | 'm4a',
     filename: string,
-    resolve: (result: ConvertResult) => void
+    resolve: (result: ConvertResult) => void,
+    platform?: string
 ): void {
     const ffmpegPath = findFFmpegPath();
     const outputFile = path.join(outputDir, `${filename}.${outputFormat}`);
     
-    const args: string[] = [
-        '-y',
-        '-i', inputUrl,
-    ];
+    const args: string[] = ['-y'];
+    
+    // Add headers
+    const headers = getFFmpegHeaders(inputUrl, platform);
+    if (headers) {
+        args.push('-headers', headers);
+    }
+    args.push('-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    args.push('-i', inputUrl);
     
     if (outputFormat === 'mp4') {
         // Re-encode video to H.264
@@ -272,7 +348,7 @@ function retryWithReencode(
                 resolve({ success: false, error: 'Output file too small after re-encode' });
             }
         } else {
-            resolve({ success: false, error: stderr.slice(-200) || 'Re-encode failed' });
+            resolve({ success: false, error: stderr.slice(-300) || 'Re-encode failed' });
         }
     });
     
@@ -350,7 +426,7 @@ export async function POST(req: NextRequest) {
         }
         
         const body = await req.json();
-        const { url, format = 'mp4', filename = 'download' } = body;
+        const { url, format = 'mp4', filename = 'download', platform = '' } = body;
         
         // Validate URL
         if (!url) {
@@ -374,10 +450,15 @@ export async function POST(req: NextRequest) {
         const outputFormat = VALID_FORMATS.includes(format) ? format : 'mp4';
         const isAudio = outputFormat === 'mp3' || outputFormat === 'm4a';
         
-        // Sanitize filename
+        // Sanitize filename - remove ALL non-ASCII and problematic characters
         const safeFilename = filename
-            .replace(/[<>:"/\\|?*]/g, '_')
-            .replace(/\s+/g, '_')
+            .normalize('NFD')                    // Decompose unicode
+            .replace(/[\u0300-\u036f]/g, '')     // Remove diacritics
+            .replace(/[^\x00-\x7F]/g, '')        // Remove non-ASCII (emoji, CJK, etc)
+            .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') // Remove Windows forbidden chars
+            .replace(/\s+/g, '_')                // Spaces to underscore
+            .replace(/_+/g, '_')                 // Collapse multiple underscores
+            .replace(/^_|_$/g, '')               // Trim leading/trailing underscores
             .slice(0, 100) || 'download';
         
         // Acquire queue slot
@@ -402,7 +483,7 @@ export async function POST(req: NextRequest) {
         temp = getTempFolder(id);
         
         // Convert
-        const result = await convertMedia(url, temp, outputFormat as 'mp4' | 'mp3' | 'm4a', safeFilename);
+        const result = await convertMedia(url, temp, outputFormat as 'mp4' | 'mp3' | 'm4a', safeFilename, platform);
         
         if (!result.success || !result.outputPath) {
             if (temp) cleanupFolder(temp);
