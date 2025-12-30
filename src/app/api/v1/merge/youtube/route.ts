@@ -434,9 +434,16 @@ async function downloadAndMergeWithYtdlp(
     outputDir: string,
     ffmpegPath: string,
     audioOnly: boolean = false,
-    audioFormat: 'mp3' | 'm4a' = 'mp3'
+    audioFormat: 'mp3' | 'm4a' = 'mp3',
+    abortSignal?: AbortSignal
 ): Promise<YtdlpResult> {
     return new Promise((resolve) => {
+        // Check if already aborted
+        if (abortSignal?.aborted) {
+            resolve({ success: false, error: 'Download cancelled by user' });
+            return;
+        }
+
         const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
         const outputTemplate = path.join(outputDir, '%(title).100B.%(ext)s');
 
@@ -488,6 +495,26 @@ async function downloadAndMergeWithYtdlp(
 
         let stdout = '';
         let stderr = '';
+        let killed = false;
+
+        // Handle abort signal - kill the process
+        const abortHandler = () => {
+            if (!killed) {
+                killed = true;
+                console.log(`[merge] Aborting yt-dlp process (user cancelled)`);
+                proc.kill('SIGTERM');
+                // Force kill after 2 seconds if still running
+                setTimeout(() => {
+                    if (!proc.killed) {
+                        proc.kill('SIGKILL');
+                    }
+                }, 2000);
+            }
+        };
+
+        if (abortSignal) {
+            abortSignal.addEventListener('abort', abortHandler);
+        }
 
         proc.stdout?.on('data', (d) => {
             stdout += d.toString();
@@ -502,7 +529,18 @@ async function downloadAndMergeWithYtdlp(
             }
         });
 
-        proc.on('close', (code) => {
+        proc.on('close', (code, signal) => {
+            // Remove abort listener
+            if (abortSignal) {
+                abortSignal.removeEventListener('abort', abortHandler);
+            }
+
+            // Check if killed by abort
+            if (killed || signal === 'SIGTERM' || signal === 'SIGKILL') {
+                resolve({ success: false, error: 'Download cancelled by user' });
+                return;
+            }
+
             if (code === 0) {
                 const outputPath = stdout.trim().split('\n').pop()?.trim();
 
@@ -565,6 +603,10 @@ async function downloadAndMergeWithYtdlp(
         });
 
         proc.on('error', (e) => {
+            // Remove abort listener
+            if (abortSignal) {
+                abortSignal.removeEventListener('abort', abortHandler);
+            }
             console.error(`[merge] yt-dlp spawn error:`, e);
             resolve({
                 success: false,
@@ -583,6 +625,9 @@ export async function POST(req: NextRequest) {
     let temp: string | null = null;
     let slotAcquired = false;
 
+    // Get abort signal from request (triggered when client disconnects/cancels)
+    const abortSignal = req.signal;
+
     // Get client IP
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
         || req.headers.get('x-real-ip')
@@ -591,6 +636,12 @@ export async function POST(req: NextRequest) {
     console.log(`[merge] Request ${id} from ${ip}`);
 
     try {
+        // Check if already aborted
+        if (abortSignal.aborted) {
+            console.log(`[merge] Request ${id} already aborted`);
+            return NextResponse.json({ success: false, error: 'Request cancelled' }, { status: 499 });
+        }
+
         // ========================================
         // Memory check FIRST (before any processing)
         // ========================================
@@ -727,8 +778,17 @@ export async function POST(req: NextRequest) {
             temp,
             ffmpegPath,
             isAudioOnly,
-            audioOutputFormat as 'mp3' | 'm4a'
+            audioOutputFormat as 'mp3' | 'm4a',
+            abortSignal
         );
+
+        // Check if aborted after download
+        if (abortSignal.aborted) {
+            console.log(`[merge] Request ${id} cancelled during download`);
+            if (temp) cleanupFull(temp);
+            mergeQueueRelease(id);
+            return NextResponse.json({ success: false, error: 'Download cancelled' }, { status: 499 });
+        }
 
         if (!result.success && !isAudioOnly) {
             // Clean up any partial files from first attempt
@@ -741,7 +801,8 @@ export async function POST(req: NextRequest) {
                 temp,
                 ffmpegPath,
                 false,
-                'mp3'
+                'mp3',
+                abortSignal
             );
         }
 

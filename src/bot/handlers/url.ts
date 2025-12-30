@@ -709,19 +709,55 @@ async function sendGenericVideoPreview(
     
     try {
         if (result.thumbnail) {
+            // Try to send thumbnail - some platforms need download first
+            const thumbUrl = result.thumbnail;
+            const needsDownload = thumbUrl.includes('rule34video.com') || 
+                                  thumbUrl.includes('eporner.com') ||
+                                  thumbUrl.includes('pornhub.com') ||
+                                  thumbUrl.includes('fbcdn.net') ||
+                                  thumbUrl.includes('cdninstagram.com');
+            
             try {
-                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
-                    caption: caption.trim(),
-                    parse_mode: 'Markdown',
-                    reply_markup: keyboard,
-                });
-                return true;
-            } catch {
-                // Thumbnail failed, try text message
+                if (needsDownload) {
+                    // Download thumbnail to buffer first (Telegram can't fetch some domains)
+                    logger.debug('telegram', `Downloading thumbnail for ${result.platform}: ${thumbUrl.substring(0, 60)}...`);
+                    const thumbResponse = await fetch(thumbUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'image/*',
+                            'Referer': originalUrl,
+                        },
+                    });
+                    
+                    if (thumbResponse.ok) {
+                        const thumbBuffer = Buffer.from(await thumbResponse.arrayBuffer());
+                        logger.debug('telegram', `Thumbnail downloaded: ${(thumbBuffer.length / 1024).toFixed(1)}KB`);
+                        
+                        await ctx.replyWithPhoto(new InputFile(thumbBuffer, 'preview.jpg'), {
+                            caption: caption.trim(),
+                            parse_mode: 'Markdown',
+                            reply_markup: keyboard,
+                        });
+                        return true;
+                    } else {
+                        logger.debug('telegram', `Thumbnail download failed: HTTP ${thumbResponse.status}`);
+                    }
+                } else {
+                    // Direct URL for other platforms
+                    await ctx.replyWithPhoto(new InputFile({ url: thumbUrl }), {
+                        caption: caption.trim(),
+                        parse_mode: 'Markdown',
+                        reply_markup: keyboard,
+                    });
+                    return true;
+                }
+            } catch (thumbError) {
+                // Thumbnail failed, log and fall through to text message
+                logger.debug('telegram', `Thumbnail failed for ${result.platform}: ${thumbError instanceof Error ? thumbError.message : 'unknown'}`);
             }
         }
         
-        // No thumbnail or failed, send text
+        // No thumbnail or thumbnail failed, send text with keyboard
         await ctx.reply(caption.trim(), {
             parse_mode: 'Markdown',
             reply_markup: keyboard,
@@ -730,7 +766,19 @@ async function sendGenericVideoPreview(
         return true;
     } catch (error) {
         logger.error('telegram', error, 'SEND_GENERIC_PREVIEW');
-        return false;
+        
+        // Last resort: try sending without markdown (in case markdown parsing fails)
+        try {
+            const plainCaption = `${platformName}\n\nPilih kualitas untuk download:`;
+            await ctx.reply(plainCaption, {
+                reply_markup: keyboard,
+                link_preview_options: { is_disabled: true },
+            });
+            return true;
+        } catch (lastError) {
+            logger.error('telegram', lastError, 'SEND_GENERIC_PREVIEW_FALLBACK');
+            return false;
+        }
     }
 }
 
