@@ -36,12 +36,23 @@ import { log } from '../helpers';
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
 
 const SUPPORTED_DOMAINS = [
+    // Core platforms
     'youtube.com', 'youtu.be',
     'instagram.com', 'instagr.am',
     'tiktok.com',
     'twitter.com', 'x.com', 't.co',
     'facebook.com', 'fb.com', 'fb.watch',
     'weibo.com', 'weibo.cn',
+    // New platforms (yt-dlp/gallery-dl)
+    'bilibili.com', 'b23.tv',
+    'reddit.com', 'redd.it', 'v.redd.it',
+    'soundcloud.com',
+    'threads.net',
+    'pixiv.net',
+    'erome.com',
+    'eporner.com',
+    'pornhub.com',
+    'rule34video.com',
 ];
 
 // Multi-URL limits
