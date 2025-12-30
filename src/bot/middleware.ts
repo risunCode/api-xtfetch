@@ -701,9 +701,6 @@ export {
   getCooldown as botRateLimitGetCooldown,
   setCooldown as botRateLimitSetCooldown,
   getTimeUntilReset,
-  getMultiUrlUsage,
-  canUseMultiUrl,
-  recordMultiUrlUsage,
 };
 
 // Legacy constants (from rateLimit.ts)
