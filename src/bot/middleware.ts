@@ -653,13 +653,18 @@ function formatEstimatedTime(isoTime: string, lang: 'en' | 'id'): string | null 
 
 /**
  * Check if bot should be in maintenance mode (async - fetches from DB)
+ * Bot uses internal API, so it should be blocked for:
+ * - 'api' maintenance (API disabled)
+ * - 'full' maintenance (everything down)
+ * - 'all' maintenance (everything down)
  */
 export async function botIsInMaintenance(): Promise<boolean> {
   await serviceConfigLoad(true);
   const config = serviceConfigGet();
   const isMaintenanceMode = config.maintenanceMode === true;
   const maintenanceType = config.maintenanceType;
-  return isMaintenanceMode && (maintenanceType === 'full' || maintenanceType === 'all');
+  // Bot uses API internally, so block for api/full/all maintenance types
+  return isMaintenanceMode && (maintenanceType === 'api' || maintenanceType === 'full' || maintenanceType === 'all');
 }
 
 /**
