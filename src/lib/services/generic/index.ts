@@ -381,13 +381,55 @@ async function runGalleryDl(url: string): Promise<GalleryDlOutput[]> {
                 return;
             }
             try {
-                // gallery-dl outputs one JSON per line
-                const results = stdout.trim().split('\n')
-                    .filter(line => line.startsWith('[') || line.startsWith('{'))
-                    .map(line => JSON.parse(line))
-                    .flat();
+                // gallery-dl outputs a single JSON array containing sub-arrays
+                // Format: [[type, url/metadata, metadata?], ...]
+                // type 2 = directory info: [2, metadata]
+                // type 3 = file: [3, url, metadata]
+                const results: GalleryDlOutput[] = [];
+                const parsed = JSON.parse(stdout.trim());
+                
+                if (!Array.isArray(parsed)) {
+                    reject(new Error('INVALID_JSON'));
+                    return;
+                }
+                
+                let albumTitle: string | undefined;
+                let albumUser: string | undefined;
+                
+                for (const item of parsed) {
+                    if (!Array.isArray(item)) continue;
+                    
+                    const [type, second, third] = item;
+                    
+                    // Type 2 = directory info: [2, metadata]
+                    if (type === 2 && typeof second === 'object') {
+                        albumTitle = second.title;
+                        albumUser = second.user;
+                    }
+                    // Type 3 = file entry: [3, url, metadata]
+                    else if (type === 3 && typeof second === 'string') {
+                        const metadata = third || {};
+                        results.push({
+                            url: second,
+                            category: metadata.category || '',
+                            filename: metadata.filename || '',
+                            extension: metadata.extension || second.split('.').pop()?.split('?')[0] || '',
+                            width: metadata.width,
+                            height: metadata.height,
+                            filesize: metadata.filesize,
+                            user: metadata.user || albumUser,
+                            title: metadata.title || albumTitle,
+                            date: metadata.date,
+                        });
+                    }
+                }
+                
+                logger.debug('gallery-dl', `Parsed ${results.length} items from gallery-dl`);
                 resolve(results);
-            } catch { reject(new Error('INVALID_JSON')); }
+            } catch (e) { 
+                logger.debug('gallery-dl', `Parse error: ${e}`);
+                reject(new Error('INVALID_JSON')); 
+            }
         });
         
         proc.on('error', (err) => { clearTimeout(timeout); reject(err); });

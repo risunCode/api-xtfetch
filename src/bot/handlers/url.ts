@@ -714,6 +714,7 @@ async function sendGenericVideoPreview(
             const needsDownload = thumbUrl.includes('rule34video.com') || 
                                   thumbUrl.includes('eporner.com') ||
                                   thumbUrl.includes('pornhub.com') ||
+                                  thumbUrl.includes('erome.com') ||
                                   thumbUrl.includes('fbcdn.net') ||
                                   thumbUrl.includes('cdninstagram.com');
             
