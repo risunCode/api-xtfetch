@@ -628,6 +628,10 @@ async function sendYouTubePreview(
 /**
  * Send generic video preview with thumbnail and quality selection
  * Used for new platforms (bilibili, reddit, soundcloud, eporner, pornhub, rule34video, etc.)
+ * 
+ * Flow:
+ * 1. Show thumbnail + quality buttons (callback-based)
+ * 2. User clicks quality → callback handler downloads and sends video
  */
 async function sendGenericVideoPreview(
     ctx: BotContext,
@@ -639,13 +643,23 @@ async function sendGenericVideoPreview(
     const lang = detectLanguage(ctx.from?.language_code);
     const platformName = botUrlGetPlatformName(result.platform!);
     
+    // Store result in session for callback handler
+    ctx.session.pendingDownload = {
+        url: originalUrl,
+        visitorId,
+        platform: result.platform!,
+        result,
+        userMsgId: ctx.message?.message_id || 0,
+        timestamp: Date.now(),
+    };
+    
     // Build caption
     let caption = `*${platformName}*\n\n`;
     if (result.title) {
         const cleanTitle = sanitizeTitle(result.title, 200);
         if (cleanTitle) caption += `${escapeMarkdown(cleanTitle)}\n`;
     }
-    if (result.author) {
+    if (result.author && result.author !== 'Unknown') {
         caption += `👤 ${escapeMarkdown(result.author)}\n`;
     }
     
@@ -655,18 +669,15 @@ async function sendGenericVideoPreview(
     
     // Build quality info
     if (videos.length > 0) {
-        caption += '\n📹 *Available Qualities:*\n';
-        for (const v of videos.slice(0, 5)) { // Max 5 qualities shown
+        caption += '\n📹 *Pilih kualitas:*\n';
+        for (const v of videos.slice(0, 4)) {
             const size = v.filesize ? ` (${formatFilesize(v.filesize, lang)})` : '';
             caption += `• ${v.quality}${size}\n`;
         }
     }
     
-    if (audios.length > 0) {
-        caption += '\n🎵 *Audio:* Available\n';
-    }
-    
-    // Build keyboard with download buttons
+    // Build keyboard with callback buttons (not URL buttons)
+    // Callback format: gv:{visitorId}:{qualityIndex}
     const keyboard = new InlineKeyboard();
     
     // Add video quality buttons (max 4, 2 per row)
@@ -675,7 +686,8 @@ async function sendGenericVideoPreview(
         const v = videoButtons[i];
         const size = v.filesize ? ` ${(v.filesize / 1024 / 1024).toFixed(0)}MB` : '';
         const label = `🎬 ${v.quality}${size}`;
-        keyboard.url(label, v.url);
+        // Callback: gv:{visitorId}:{index} - generic video download
+        keyboard.text(label, `gv:${visitorId}:${i}`);
         if (i % 2 === 1) keyboard.row();
     }
     
@@ -684,10 +696,10 @@ async function sendGenericVideoPreview(
         keyboard.row();
         const audio = audios[0];
         const size = audio.filesize ? ` ${(audio.filesize / 1024 / 1024).toFixed(0)}MB` : '';
-        keyboard.url(`🎵 Audio${size}`, audio.url);
+        keyboard.text(`🎵 Audio${size}`, `gv:${visitorId}:audio`);
     }
     
-    // Add original URL
+    // Add original URL button
     keyboard.row().url('🔗 Original', originalUrl);
     
     // Delete processing message

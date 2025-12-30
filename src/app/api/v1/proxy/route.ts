@@ -60,6 +60,21 @@ const ALLOWED_CDN_PATTERNS = [
     // Erome
     /\.erome\.com$/,
     
+    // Rule34Video
+    /\.rule34video\.com$/,
+    /^rule34video\.com$/,
+    
+    // Eporner (includes CDN subdomains like vid-s5-n50-fr-cdn.eporner.com)
+    /eporner\.com$/,
+    
+    // PornHub (uses their own CDN)
+    /\.phncdn\.com$/,
+    /\.pornhub\.com$/,
+    
+    // Boomio CDN (used by rule34video, etc.)
+    /\.boomio-cdn\.com$/,
+    /boomio-cdn\.com$/,
+    
     // Generic CDN providers (covers many platforms)
     /\.akamaized\.net$/,
     /\.cloudfront\.net$/,

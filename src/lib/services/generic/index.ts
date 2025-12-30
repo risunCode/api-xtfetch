@@ -161,9 +161,40 @@ const PLATFORMS: Record<GenericPlatform, PlatformConfig> = {
 
 const TIMEOUT_MS = 45000;
 
+// Platforms that need URL resolution (redirect to final CDN)
+const PLATFORMS_NEED_RESOLVE: GenericPlatform[] = ['rule34video', 'eporner', 'pornhub'];
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Resolve URL redirects to get final CDN URL
+ * Some platforms (rule34video, etc.) return temporary URLs that redirect to CDN
+ */
+async function resolveUrlRedirect(url: string): Promise<string> {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        const response = await fetch(url, {
+            method: 'HEAD',
+            redirect: 'follow',
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+        });
+        
+        clearTimeout(timeoutId);
+        
+        // Return final URL after redirects
+        return response.url || url;
+    } catch {
+        // On error, return original URL
+        return url;
+    }
+}
 
 export function detectPlatform(url: string): GenericPlatform | null {
     for (const [platform, config] of Object.entries(PLATFORMS)) {
@@ -415,10 +446,24 @@ export async function scrapeGeneric(url: string, platform: GenericPlatform, _opt
     try {
         if (config.backend === 'ytdlp') {
             const data = await runYtdlp(url);
-            const formats = mapYtdlpFormats(data);
+            let formats = mapYtdlpFormats(data);
             
             if (formats.length === 0) {
                 return createError(ScraperErrorCode.NO_MEDIA, 'No media found');
+            }
+            
+            // Resolve URL redirects for platforms that need it (rule34video, eporner, pornhub)
+            // These platforms return temporary URLs that redirect to CDN
+            if (PLATFORMS_NEED_RESOLVE.includes(platform)) {
+                logger.debug(platform, `Resolving ${formats.length} URLs...`);
+                const resolvedFormats = await Promise.all(
+                    formats.map(async (fmt) => {
+                        const resolvedUrl = await resolveUrlRedirect(fmt.url);
+                        return { ...fmt, url: resolvedUrl };
+                    })
+                );
+                formats = resolvedFormats;
+                logger.debug(platform, `URLs resolved`);
             }
             
             const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

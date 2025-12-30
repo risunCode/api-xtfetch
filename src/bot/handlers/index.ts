@@ -63,6 +63,13 @@ export {
     callMergeApi,
 } from './callback-youtube';
 
+// Generic Video Callbacks (rule34video, pornhub, eporner, etc.)
+export {
+    registerGenericCallbacks,
+    botCallbackGenericVideo,
+    buildGenericCaption,
+} from './callback-generic';
+
 /**
  * Register all callback handlers
  * 
@@ -81,10 +88,12 @@ export function registerAllCallbacks(bot: Bot<BotContext>): void {
     const { registerAdminCallbacks } = require('./callback-admin');
     const { registerStoriesCallbacks } = require('./callback-stories');
     const { registerYouTubeCallbacks } = require('./callback-youtube');
+    const { registerGenericCallbacks } = require('./callback-generic');
     
     registerMenuCallbacks(bot);
     registerDownloadCallbacks(bot);
     registerAdminCallbacks(bot);
     registerStoriesCallbacks(bot);
     registerYouTubeCallbacks(bot);
+    registerGenericCallbacks(bot);
 }
