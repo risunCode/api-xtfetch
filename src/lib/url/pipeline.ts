@@ -163,7 +163,7 @@ const SHORT_URL_PATTERNS: Readonly<Record<string, RegExp>> = Object.freeze({
   weibo: /t\.cn\//i,
 });
 
-const CONTENT_ID_EXTRACTORS: Record<PlatformId, (url: string) => string | null> = {
+const CONTENT_ID_EXTRACTORS: Partial<Record<PlatformId, (url: string) => string | null>> = {
   twitter: (url) => url.match(/status(?:es)?\/(\d+)/)?.[1] || null,
   instagram: (url) => {
     const shortcode = url.match(/\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);
@@ -222,7 +222,7 @@ const CONTENT_ID_EXTRACTORS: Record<PlatformId, (url: string) => string | null> 
   },
 };
 
-const CONTENT_TYPE_DETECTORS: Record<PlatformId, (url: string) => ContentType> = {
+const CONTENT_TYPE_DETECTORS: Partial<Record<PlatformId, (url: string) => ContentType>> = {
   twitter: () => 'post',
   instagram: (url) => /\/stories\//.test(url) ? 'story' : /\/reel/.test(url) ? 'reel' : /\/tv\//.test(url) ? 'video' : 'post',
   facebook: (url) => /\/stories\//.test(url) ? 'story' : /\/reel/.test(url) ? 'reel' : /\/videos\/|\/watch\//.test(url) ? 'video' : /\/photos\//.test(url) ? 'image' : 'post',
@@ -231,7 +231,7 @@ const CONTENT_TYPE_DETECTORS: Record<PlatformId, (url: string) => ContentType> =
   youtube: (url) => /\/shorts\//.test(url) ? 'reel' : 'video',
 };
 
-const COOKIE_REQUIRED_PATTERNS: Record<PlatformId, RegExp | null> = {
+const COOKIE_REQUIRED_PATTERNS: Partial<Record<PlatformId, RegExp | null>> = {
   twitter: null,
   instagram: /\/stories\//i,
   facebook: /\/stories\/|\/groups\//i,

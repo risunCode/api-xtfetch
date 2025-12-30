@@ -1,10 +1,10 @@
 # XTFetch API Backend
-# Node.js + Python (yt-dlp) for YouTube support
+# Node.js + Python (yt-dlp, gallery-dl) + FFmpeg
 
 FROM node:20-slim
 
 # Cache bust - change this value to force rebuild
-ARG CACHE_BUST=20251226_v2
+ARG CACHE_BUST=20251230_v3
 
 WORKDIR /app
 
@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp globally
-RUN pip3 install --break-system-packages yt-dlp
+# Install yt-dlp and gallery-dl globally
+RUN pip3 install --break-system-packages yt-dlp gallery-dl
 
 # Copy package files
 COPY package*.json ./

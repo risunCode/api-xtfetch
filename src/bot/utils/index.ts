@@ -47,8 +47,7 @@ export type {
 // Format utilities
 export {
   sanitizeTitle,
-  escapeMarkdownV1,
-  escapeMarkdownV2,
+  escapeMarkdown as escapeMarkdownFormat,
 } from './format';
 
 // Media sending utilities

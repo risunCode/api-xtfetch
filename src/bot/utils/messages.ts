@@ -5,6 +5,7 @@
 
 import { PlatformId } from '@/lib/types';
 import { FREE_DOWNLOAD_LIMIT, ADMIN_CONTACT_USERNAME, BOT_USERNAME } from '../config';
+import { escapeMarkdown } from '../helpers';
 
 // ============================================================================
 // Types
@@ -47,6 +48,16 @@ const PLATFORM_NAMES: Record<PlatformId, string> = {
   tiktok: 'TikTok',
   weibo: 'Weibo',
   youtube: 'YouTube',
+  // New platforms
+  bilibili: 'BiliBili',
+  reddit: 'Reddit',
+  soundcloud: 'SoundCloud',
+  eporner: 'Eporner',
+  pornhub: 'PornHub',
+  rule34video: 'Rule34Video',
+  threads: 'Threads',
+  erome: 'Erome',
+  pixiv: 'Pixiv',
 };
 
 const PLATFORM_ICONS: Record<PlatformId, string> = {
@@ -56,6 +67,16 @@ const PLATFORM_ICONS: Record<PlatformId, string> = {
   tiktok: '🎵',
   weibo: '🔴',
   youtube: '▶️',
+  // New platforms
+  bilibili: '📺',
+  reddit: '🤖',
+  soundcloud: '🎧',
+  eporner: '🔞',
+  pornhub: '🔞',
+  rule34video: '🔞',
+  threads: '🧵',
+  erome: '🔞',
+  pixiv: '🎨',
 };
 
 // ============================================================================
@@ -76,12 +97,10 @@ Hey ${name}! 👋
 Send me a video link and I'll download it for you!
 
 *Supported platforms:*
-• 📘 Facebook
-• 📸 Instagram
-• 𝕏 Twitter/X
-• 🎵 TikTok
-• ▶️ YouTube
-• 🔴 Weibo`;
+• 📘 Facebook • 📸 Instagram • 𝕏 Twitter/X
+• 🎵 TikTok • ▶️ YouTube • 🔴 Weibo
+• 📺 BiliBili • 🤖 Reddit • 🎧 SoundCloud
+• 🧵 Threads • 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34`;
 
   if (stats) {
     const remaining = user.isPremium ? '∞' : stats.remaining.toString();
@@ -261,12 +280,10 @@ export function unsupportedPlatformMessage(url: string): string {
 The link you sent is not from a supported platform.
 
 *Supported platforms:*
-• 📘 Facebook
-• 📸 Instagram
-• 𝕏 Twitter/X
-• 🎵 TikTok
-• ▶️ YouTube
-• 🔴 Weibo
+• 📘 Facebook • 📸 Instagram • 𝕏 Twitter/X
+• 🎵 TikTok • ▶️ YouTube • 🔴 Weibo
+• 📺 BiliBili • 🤖 Reddit • 🎧 SoundCloud
+• 🧵 Threads • 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34
 
 Your link: \`${truncateUrl(url)}\``;
 }
@@ -471,12 +488,8 @@ export function detailedStatsMessage(
 // Utility Functions
 // ============================================================================
 
-/**
- * Escape special Markdown characters
- */
-export function escapeMarkdown(text: string): string {
-  return text.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-}
+// escapeMarkdown is now in helpers/caption.ts
+export { escapeMarkdown } from '../helpers';
 
 /**
  * Truncate URL for display

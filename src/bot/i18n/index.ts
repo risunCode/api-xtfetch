@@ -22,8 +22,10 @@ Your personal social media downloader.
 Just paste any video link and I'll download it for you.
 
 *Supported platforms:*
-• YouTube • Instagram • TikTok
-• Twitter/X • Facebook • Weibo
+• YouTube • Instagram • TikTok • Twitter/X
+• Facebook • Weibo • BiliBili • Reddit
+• SoundCloud • Threads • Pixiv
+• Erome • Eporner • PornHub • Rule34Video
 
 *Features:*
 • HD & SD quality options
@@ -53,6 +55,9 @@ Send a video link from:
 • *Twitter/X* - Video tweets
 • *Facebook* - Videos & Reels
 • *Weibo* - Videos
+• *BiliBili, Reddit, SoundCloud*
+• *Threads, Pixiv*
+• *Erome, Eporner, PornHub, Rule34Video*
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
 
@@ -101,7 +106,9 @@ Website: https://downaria.vercel.app`,
 *Step 4:* Download complete!
 
 *Supported platforms:*
-YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo
+YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo,
+BiliBili, Reddit, SoundCloud, Threads,
+Pixiv, Erome, Eporner, PornHub, Rule34Video
 
 *Commands:*
 /start - Start bot
@@ -396,12 +403,8 @@ export function formatFilesize(bytes?: number, lang: BotLanguage = 'en'): string
     return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
-/**
- * Escape MarkdownV2 special characters
- */
-export function escapeMarkdownV2(text: string): string {
-    return text.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
-}
+// escapeMarkdown is now in helpers/caption.ts
+export { escapeMarkdown as escapeMarkdownV2 } from '../helpers';
 
 export { translations };
 export type { TranslationKey };

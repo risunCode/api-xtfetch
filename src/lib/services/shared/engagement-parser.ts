@@ -22,7 +22,7 @@ export interface EngagementMapping {
 /**
  * Platform-specific regex patterns for extracting engagement from HTML/JSON strings
  */
-const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp[]>> = {
+const PLATFORM_PATTERNS: Partial<Record<PlatformId, Record<keyof EngagementStats, RegExp[]>>> = {
     facebook: {
         likes: [
             /"reaction_count":\{"count":(\d+)/,
@@ -170,7 +170,7 @@ const PLATFORM_PATTERNS: Record<PlatformId, Record<keyof EngagementStats, RegExp
 /**
  * Platform-specific JSON field mappings for structured data
  */
-const PLATFORM_JSON_MAPPINGS: Record<PlatformId, EngagementMapping> = {
+const PLATFORM_JSON_MAPPINGS: Partial<Record<PlatformId, EngagementMapping>> = {
     facebook: {
         likes: 'reaction_count',
         comments: 'comment_count',

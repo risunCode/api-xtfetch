@@ -3,21 +3,45 @@
  * GET /api/bot/setup - Setup webhook with Telegram
  * 
  * Call this endpoint once to register the webhook URL with Telegram.
- * Requires ADMIN_SECRET_KEY for authorization.
+ * Requires ADMIN_SECRET_KEY for authorization via Authorization header.
+ * 
+ * Security:
+ * - Rate limited: 5 attempts per 15 minutes (handled by middleware)
+ * - Timing-safe comparison to prevent timing attacks
+ * - Secret must be in Authorization header (not query params)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, botConfigIsValid } from '@/bot';
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET_KEY || '';
 
-export async function GET(request: NextRequest) {
-    // Check authorization
-    const authHeader = request.headers.get('authorization');
-    const providedSecret = authHeader?.replace('Bearer ', '') || 
-                          request.nextUrl.searchParams.get('secret');
+// Timing-safe string comparison to prevent timing attacks
+function timingSafeCompare(a: string, b: string): boolean {
+    if (!a || !b) return false;
     
-    if (!ADMIN_SECRET || providedSecret !== ADMIN_SECRET) {
+    // Ensure both strings are the same length for timing-safe comparison
+    const aBuffer = Buffer.from(a);
+    const bBuffer = Buffer.from(b);
+    
+    if (aBuffer.length !== bBuffer.length) {
+        // Still do a comparison to maintain constant time
+        crypto.timingSafeEqual(aBuffer, aBuffer);
+        return false;
+    }
+    
+    return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+export async function GET(request: NextRequest) {
+    // Check authorization - ONLY from Authorization header (not query params for security)
+    const authHeader = request.headers.get('authorization');
+    const providedSecret = authHeader?.replace('Bearer ', '').trim() || '';
+    
+    // Use timing-safe comparison to prevent timing attacks
+    if (!ADMIN_SECRET || !timingSafeCompare(providedSecret, ADMIN_SECRET)) {
+        // Generic error message - don't reveal if secret exists or not
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -78,12 +102,13 @@ export async function GET(request: NextRequest) {
  * DELETE /api/bot/setup - Remove webhook
  */
 export async function DELETE(request: NextRequest) {
-    // Check authorization
+    // Check authorization - ONLY from Authorization header (not query params for security)
     const authHeader = request.headers.get('authorization');
-    const providedSecret = authHeader?.replace('Bearer ', '') || 
-                          request.nextUrl.searchParams.get('secret');
+    const providedSecret = authHeader?.replace('Bearer ', '').trim() || '';
     
-    if (!ADMIN_SECRET || providedSecret !== ADMIN_SECRET) {
+    // Use timing-safe comparison to prevent timing attacks
+    if (!ADMIN_SECRET || !timingSafeCompare(providedSecret, ADMIN_SECRET)) {
+        // Generic error message - don't reveal if secret exists or not
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

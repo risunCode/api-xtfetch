@@ -18,13 +18,14 @@ import { optimizeCdnUrl } from '@/lib/services/facebook/cdn';
 
 import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
-import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware/maintenance';
+import { botRateLimitRecordDownload } from '../middleware';
+import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware';
 import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
 import { downloadQueue, isQueueAvailable } from '../queue';
+import { log } from '../helpers';
 
 // ============================================================================
 // URL DETECTION
@@ -106,6 +107,16 @@ function botUrlGetPlatformName(platform: PlatformId): string {
         twitter: 'X/Twitter',
         facebook: 'Facebook',
         weibo: 'Weibo',
+        // New platforms
+        bilibili: 'BiliBili',
+        reddit: 'Reddit',
+        soundcloud: 'SoundCloud',
+        eporner: 'Eporner',
+        pornhub: 'PornHub',
+        rule34video: 'Rule34Video',
+        threads: 'Threads',
+        erome: 'Erome',
+        pixiv: 'Pixiv',
     };
     return names[platform] || platform;
 }
@@ -133,7 +144,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
         // Call internal API (bypass origin check by using internal URL)
         const apiUrl = `${API_BASE_URL}/api/v1/publicservices`;
         
-        console.log(`[Bot.API] Calling ${apiUrl} for ${url.substring(0, 50)}...`);
+        log.debug(`API call: ${url.substring(0, 50)}...`);
         
         const response = await fetch(apiUrl, {
             method: 'POST',
@@ -158,7 +169,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
             const resolvedPlatform = data.meta?.platform || platform;
             logger.complete(resolvedPlatform, responseTime);
             
-            console.log(`[Bot.API] Success! Platform: ${resolvedPlatform}, Formats: ${data.data.formats?.length || 0}`);
+            log.debug(`Success: ${resolvedPlatform}, ${data.data.formats?.length || 0} formats`);
             
             return {
                 success: true,
@@ -172,7 +183,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
         }
 
         const resolvedPlatform = data.meta?.platform || platform;
-        console.log(`[Bot.API] Failed: ${data.error} (${data.errorCode})`);
+        log.debug(`Failed: ${data.error} (${data.errorCode})`);
         logger.scrapeError(resolvedPlatform || 'unknown', data.errorCode || 'UNKNOWN', data.error);
         
         return {
@@ -183,7 +194,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
         };
 
     } catch (error) {
-        console.error('[Bot.API] Error:', error);
+        log.error('API call error', error);
         logger.error('telegram', error, 'API_CALL');
         return {
             success: false,
@@ -197,12 +208,7 @@ async function botUrlCallScraper(url: string, isPremium: boolean = false): Promi
 // CAPTION BUILDER
 // ============================================================================
 
-/**
- * Escape Markdown special characters
- */
-function escapeMarkdown(text: string): string {
-    return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
-}
+import { escapeMarkdown, buildSimpleCaptionFromResult as buildSimpleCaption } from '../helpers';
 
 /**
  * Get VIP expiry days from context
@@ -260,23 +266,6 @@ function buildCaption(result: DownloadResult, lang: BotLanguage = 'en', vipExpir
     return caption.trim();
 }
 
-/**
- * Build simple caption - just username/author
- * Used for non-YouTube platforms (cleaner embed)
- */
-function buildSimpleCaption(result: DownloadResult, originalUrl: string): string {
-    const platform = result.platform;
-    
-    // Just author/username
-    if (result.author) {
-        // Add @ for Twitter/Instagram/TikTok if not already present
-        const needsAt = ['twitter', 'instagram', 'tiktok'].includes(platform || '');
-        const authorPrefix = needsAt && !result.author.startsWith('@') ? '@' : '';
-        return `${authorPrefix}${escapeMarkdown(result.author)}`;
-    }
-    
-    return '';
-}
 
 
 // ============================================================================
@@ -328,7 +317,7 @@ async function sendVideoDirectly(
     const allExceedLimit = (hdExceedsLimit && (!sdVideo || sdExceedsLimit)) || onlyVideoExceedsLimit;
     
     if (allExceedLimit) {
-        console.log(`[Bot.Video] All formats exceed 40MB limit, sending direct link only`);
+        log.debug('All formats exceed 40MB limit, sending direct link only');
         
         // Delete processing message - we'll send a new message with direct link
         if (processingMsgId) {
@@ -425,7 +414,7 @@ async function sendVideoDirectly(
     const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                console.log(`[Bot.Video] Attempt ${attempt}/${maxRetries}`);
+                log.debug(`Download attempt ${attempt}/${maxRetries}`);
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s per attempt
                 
@@ -445,16 +434,16 @@ async function sendVideoDirectly(
                 }
                 
                 const buffer = Buffer.from(await response.arrayBuffer());
-                console.log(`[Bot.Video] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+                log.debug(`Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
                 return buffer;
             } catch (e) {
                 const msg = e instanceof Error ? e.message : 'Unknown error';
-                console.log(`[Bot.Video] Attempt ${attempt} failed: ${msg}`);
+                log.debug(`Attempt ${attempt} failed: ${msg}`);
                 
                 if (attempt < maxRetries) {
                     // Exponential backoff: 2s, 4s
                     const delay = 2000 * attempt;
-                    console.log(`[Bot.Video] Retrying in ${delay}ms...`);
+                    log.debug(`Retrying in ${delay}ms...`);
                     await new Promise(r => setTimeout(r, delay));
                 } else {
                     throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
@@ -471,14 +460,13 @@ async function sendVideoDirectly(
             
             // Log filesize info before download (full URL for debugging)
             const expectedSize = videoToSend.filesize ? (videoToSend.filesize / 1024 / 1024).toFixed(1) : '?';
-            console.log(`[Bot.Video] Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN:`);
-            console.log(`[Bot.Video] URL: ${optimizedUrl}`);
+            log.debug(`Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN`);
             
             // Show "uploading video" status under bot name
             await ctx.replyWithChatAction('upload_video');
             
             const buffer = await fetchWithRetry(optimizedUrl);
-            console.log(`[Bot.Video] Uploading to Telegram...`);
+            log.debug('Uploading to Telegram...');
             
             // Refresh chat action for upload phase
             await ctx.replyWithChatAction('upload_video');
@@ -1054,7 +1042,7 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
         
         // Skip known commands
         if (text.startsWith('/')) {
-            const knownCommands = ['/start', '/help', '/mystatus', '/history', '/donate', '/menu', '/privacy', '/status', '/stats', '/broadcast', '/ban', '/unban', '/givevip', '/revokevip', '/maintenance'];
+            const knownCommands = ['/start', '/help', '/mystatus', '/history', '/donate', '/menu', '/privacy', '/status', '/stats', '/broadcast', '/ban', '/unban', '/givevip', '/revokevip', '/maintenance', '/stop', '/unsubscribe', '/forget'];
             const cmd = text.split(' ')[0].toLowerCase();
             
             if (!knownCommands.includes(cmd)) {
@@ -1259,11 +1247,11 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                             await botRateLimitRecordDownload(ctx);
                         }
                         
-                        console.log(`[Bot.Gallery] Sent merged gallery: ${allImages.length} images from ${successUrls.length} URLs`);
+                        log.debug(`Sent merged gallery: ${allImages.length} images from ${successUrls.length} URLs`);
                         return; // Exit early - gallery sent successfully
                         
                     } catch (galleryError) {
-                        console.error('[Bot.Gallery] Failed to send merged gallery:', galleryError);
+                        log.error('Failed to send merged gallery', galleryError);
                         // Fall through to sequential processing
                         if (progressMsgId) {
                             const fallbackMsg = lang === 'id'
@@ -1351,11 +1339,11 @@ export function registerUrlHandler(bot: Bot<BotContext>): void {
                         priority: isVip ? 1 : 10, // VIP gets higher priority
                     });
                     
-                    console.log(`[Bot.Queue] Job added for user ${ctx.from!.id}: ${url.substring(0, 50)}...`);
+                    log.debug(`Job added for user ${ctx.from!.id}`);
                     // Return immediately - worker will handle the rest
                     return;
                 } catch (queueError) {
-                    console.error('[Bot.Queue] Failed to add job, falling back to sync:', queueError);
+                    log.error('Failed to add job, falling back to sync', queueError);
                     // Fall through to synchronous processing
                 }
             }

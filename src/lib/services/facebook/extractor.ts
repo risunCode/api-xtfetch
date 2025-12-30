@@ -69,6 +69,8 @@ const BLOCK_KEYS: Record<FbContentType, string[]> = {
     post: ['"all_subattachments"', '"photo_image"', '"full_image"', '"large_share"', '"viewer_image"'],
     group: ['"group_feed"', '"all_subattachments"', '"full_image"', '"viewer_image"'],
     photo: ['"photo_image"', '"full_image"', '"viewer_image"'],
+    watch: ['"progressive_urls"', '"progressive_url":', '"playable_url":', '"browser_native'],
+    unknown: ['"all_subattachments"', '"photo_image"', '"full_image"', '"progressive_url":'],
 };
 
 function findBlock(html: string, type: FbContentType): string {
@@ -718,6 +720,75 @@ function extractMeta(html: string, type?: FbContentType): FbMetadata {
     let groupName: string | undefined;
 
     // ═══════════════════════════════════════════════════════════════
+    // AUTHOR EXTRACTION - Prioritize owning_profile (most reliable)
+    // owning_profile appears multiple times for the actual post owner
+    // while actors/actor can be from suggested content
+    // ═══════════════════════════════════════════════════════════════
+    
+    // Pattern 1: owning_profile - MOST RELIABLE for posts
+    // This is the actual post owner, appears early in HTML before suggested content
+    const owningMatch = html.match(/"owning_profile":\{"__typename":"(?:User|Page)"[^}]*"name":"([^"]+)"/);
+    if (owningMatch) {
+        author = owningMatch[1];
+    }
+    
+    // Pattern 2: owning_profile without typename (fallback)
+    if (!author) {
+        const owningSimpleMatch = html.match(/"owning_profile":\{[^}]*"name":"([^"]+)"/);
+        if (owningSimpleMatch) author = owningSimpleMatch[1];
+    }
+    
+    // Pattern 3: owner with User/Page typename (for videos)
+    if (!author) {
+        const ownerTypeMatch = html.match(/"owner":\{"__typename":"(?:User|Page)"[^}]*"name":"([^"]+)"/);
+        if (ownerTypeMatch) author = ownerTypeMatch[1];
+    }
+    
+    // Pattern 4: creation_story > actors (for some post types)
+    if (!author) {
+        const creationStoryMatch = html.match(/"creation_story"[^]*?"actors":\[\{"__typename":"(?:User|Page)","id":"[^"]+","name":"([^"]+)"/);
+        if (creationStoryMatch) author = creationStoryMatch[1];
+    }
+    
+    // Pattern 5: Find post_id and extract author from BEFORE it
+    // The actual post author appears before the post_id in the HTML structure
+    if (!author) {
+        const postIdMatch = html.match(/"post_id":"(\d+)"/);
+        if (postIdMatch) {
+            const postIdPos = html.indexOf(postIdMatch[0]);
+            // Look BEFORE post_id for the author (actual post context)
+            const beforeBlock = html.substring(Math.max(0, postIdPos - 8000), postIdPos);
+            
+            // Find owning_profile in block before post_id
+            const owningInBlock = beforeBlock.match(/"owning_profile":\{[^}]*"name":"([^"]+)"/);
+            if (owningInBlock) {
+                author = owningInBlock[1];
+            }
+            
+            // Find the LAST actor/owner in the block before post_id (closest to the post)
+            if (!author) {
+                const actorMatches = [...beforeBlock.matchAll(/"actor":\{[^}]*"name":"([^"]+)"/g)];
+                if (actorMatches.length > 0) {
+                    author = actorMatches[actorMatches.length - 1][1];
+                }
+            }
+        }
+    }
+    
+    // Pattern 6: og:title meta tag often contains author name for posts
+    if (!author) {
+        const ogTitleMatch = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i);
+        if (ogTitleMatch) {
+            // Format: "Author Name - post text..." or "Author Name posted..."
+            const ogTitle = ogTitleMatch[1];
+            const dashMatch = ogTitle.match(/^([^-]+)\s*-/);
+            const postedMatch = ogTitle.match(/^(.+?)\s+(?:posted|shared|added)/i);
+            if (dashMatch) author = dashMatch[1].trim();
+            else if (postedMatch) author = postedMatch[1].trim();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // GROUP NAME EXTRACTION - For posts from Facebook Groups
     // ═══════════════════════════════════════════════════════════════
     // Pattern 1: group object with name (most reliable)
@@ -750,7 +821,7 @@ function extractMeta(html: string, type?: FbContentType): FbMetadata {
     }
 
     // For stories, use story-specific patterns first
-    if (type === 'story') {
+    if (type === 'story' && !author) {
         const storyOwnerMatch = html.match(/"story_bucket_owner":\{[^}]*"name":"([^"]+)"/);
         if (storyOwnerMatch) author = storyOwnerMatch[1];
         if (!author) {
@@ -763,7 +834,7 @@ function extractMeta(html: string, type?: FbContentType): FbMetadata {
         }
     }
 
-    // Fallback to general patterns for author
+    // Last fallback to general patterns (less reliable)
     if (!author) {
         author = html.match(P.meta.author)?.[1] || html.match(P.meta.authorAlt)?.[1];
     }
@@ -974,14 +1045,38 @@ export function extractContent(html: string, type: FbContentType, url?: string):
         }
     }
 
-    // Dedupe by URL path
-    const seen = new Set<string>();
-    const deduped = formats.filter(f => {
-        const key = f.url.split('?')[0];
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+    // Dedupe by quality - keep best (highest priority or largest filesize) per quality tier
+    const bestByQuality = new Map<string, MediaFormat>();
+    for (const f of formats) {
+        // For images, use URL-based dedup (each image is unique)
+        if (f.type === 'image') {
+            const key = f.url.split('?')[0];
+            if (!bestByQuality.has(key)) {
+                bestByQuality.set(key, f);
+            }
+            continue;
+        }
+        
+        // For videos, dedupe by quality tier
+        const existing = bestByQuality.get(f.quality);
+        if (!existing) {
+            bestByQuality.set(f.quality, f);
+        } else {
+            // Keep the one with higher priority or larger filesize
+            const existingPriority = (existing as MediaFormat & { _priority?: number })._priority || 0;
+            const newPriority = (f as MediaFormat & { _priority?: number })._priority || 0;
+            if (newPriority > existingPriority) {
+                bestByQuality.set(f.quality, f);
+            } else if (newPriority === existingPriority) {
+                const existingSize = existing.filesize || 0;
+                const newSize = f.filesize || 0;
+                if (newSize > existingSize) {
+                    bestByQuality.set(f.quality, f);
+                }
+            }
+        }
+    }
+    const deduped = Array.from(bestByQuality.values());
 
     return {
         formats: deduped,

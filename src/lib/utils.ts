@@ -157,16 +157,52 @@ function getDerivedKey(salt: Buffer): Buffer {
 
 // --- Private Helpers ---
 
+/**
+ * Checks if a string has sufficient entropy (randomness)
+ * Uses Shannon entropy calculation
+ * @param str - String to check
+ * @returns True if entropy is sufficient (>3.5 bits per character)
+ */
+function hasEnoughEntropy(str: string): boolean {
+    if (!str || str.length < 32) return false;
+    
+    // Calculate character frequency
+    const freq: Record<string, number> = {};
+    for (const char of str) {
+        freq[char] = (freq[char] || 0) + 1;
+    }
+    
+    // Calculate Shannon entropy
+    let entropy = 0;
+    const len = str.length;
+    for (const count of Object.values(freq)) {
+        const p = count / len;
+        entropy -= p * Math.log2(p);
+    }
+    
+    // Require at least 3.5 bits of entropy per character
+    // A truly random 32-char string should have ~5-6 bits
+    return entropy >= 3.5;
+}
+
 function getEncryptionKey(): string {
     const key = process.env.ENCRYPTION_KEY;
-    if (process.env.NODE_ENV === 'production') {
-        if (!key) throw new Error('ENCRYPTION_KEY environment variable is required in production');
-        if (key.length < 32) throw new Error('ENCRYPTION_KEY must be at least 32 characters');
-    }
+    
+    // SECURITY: Always require ENCRYPTION_KEY in all environments
     if (!key) {
-        logger.warn('security', 'Using default encryption key - NOT FOR PRODUCTION');
-        return 'dev-only-key-do-not-use-in-prod!!';
+        throw new Error('ENCRYPTION_KEY environment variable is required');
     }
+    
+    // Validate key length
+    if (key.length < 32) {
+        throw new Error('ENCRYPTION_KEY must be at least 32 characters');
+    }
+    
+    // Validate key entropy to prevent weak keys
+    if (!hasEnoughEntropy(key)) {
+        throw new Error('ENCRYPTION_KEY has insufficient entropy - use a cryptographically random key');
+    }
+    
     return key;
 }
 

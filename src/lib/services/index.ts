@@ -15,5 +15,9 @@ export { scrapeTwitter } from './twitter';
 export { scrapeWeibo } from './weibo';
 export { scrapeYouTube, isYouTubeUrl, extractYouTubeId } from './youtube';
 
+// Generic scraper (yt-dlp/gallery-dl based)
+export { scrapeGeneric, detectPlatform, getPlatformConfig } from './generic';
+export type { GenericPlatform } from './generic';
+
 // Shared utilities (for internal use by scrapers)
 export * from './shared';

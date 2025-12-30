@@ -1,14 +1,6 @@
 /**
- * Telegram Bot Callback Handler
- * Handles inline button callbacks
- * 
- * Callback actions:
- * - how_to_use: Show usage instructions
- * - contact_admin: Show admin contact info
- * - have_api_key: Show API key linking instructions
- * - retry_download: Retry last failed download
- * - cancel: Cancel current operation
- * - back_to_menu: Return to main menu
+ * Download Callback Handlers
+ * Handles: dl:*, strategy:*, retry:* callbacks
  * 
  * Download quality callbacks:
  * - dl:hd:{visitorId} - Download HD quality
@@ -16,136 +8,107 @@
  * - dl:audio:{visitorId} - Download audio only
  * - dl:cancel:{visitorId} - Cancel and delete preview message
  * 
- * Menu command callbacks:
- * - cmd:mystatus - Trigger /mystatus
- * - cmd:history - Trigger /history
- * - cmd:donate - Trigger /donate
- * - cmd:privacy - Trigger /privacy
- * - cmd:help - Trigger /help
- * - cmd:menu - Trigger /menu
+ * Send strategy callbacks (multi-item content):
+ * - strategy:{visitorId}:group - Send all items as album
+ * - strategy:{visitorId}:single - Send items one by one
+ * - strategy:{visitorId}:links - Send only download links
+ * 
+ * Retry callbacks:
+ * - retry:{url} - Retry failed download
+ * - retry_download - Retry from session
  */
 
 import { Bot, InputFile, InlineKeyboard } from 'grammy';
 
 import { logger } from '@/lib/services/shared/logger';
 
-import type { BotContext, CallbackAction, DownloadResult } from '../types';
+import type { BotContext, DownloadResult } from '../types';
 import { botUrlCallScraper, botUrlGetPlatformName } from './url';
-import { botRateLimitRecordDownload } from '../middleware/rateLimit';
-import { 
-    startKeyboard, 
-    DONATE,
-    backKeyboard,
-    errorKeyboard,
-} from '../keyboards';
-import { ADMIN_CONTACT_USERNAME } from '../config';
+import { botRateLimitRecordDownload } from '../middleware';
+import { errorKeyboard } from '../keyboards';
 
 // ============================================================================
-// CALLBACK DATA PARSING
+// HELPER FUNCTIONS
 // ============================================================================
 
 /**
- * Parse callback data string into action and payload
- * Format: "action" or "action:payload"
+ * Find format by quality preference
  */
-function botCallbackParse(data: string): { action: string; payload?: string } {
-    const [action, ...payloadParts] = data.split(':');
-    const payload = payloadParts.length > 0 ? payloadParts.join(':') : undefined;
-    return { action, payload };
+export function findFormatByQuality(
+    formats: DownloadResult['formats'],
+    quality: 'hd' | 'sd' | 'audio'
+): { quality: string; type: 'video' | 'audio' | 'image'; url: string; filesize?: number } | undefined {
+    if (!formats || formats.length === 0) return undefined;
+
+    if (quality === 'audio') {
+        return formats.find(f => f.type === 'audio') || formats[0];
+    }
+
+    if (quality === 'hd') {
+        return formats.find(f => 
+            f.type === 'video' && (
+                f.quality.includes('1080') || 
+                f.quality.includes('720') || 
+                f.quality.toLowerCase().includes('hd')
+            )
+        ) || formats.find(f => f.type === 'video');
+    }
+
+    // SD quality
+    return formats.find(f => 
+        f.type === 'video' && (
+            f.quality.includes('480') || 
+            f.quality.includes('360') || 
+            f.quality.toLowerCase().includes('sd')
+        )
+    ) || formats.find(f => f.type === 'video');
+}
+
+/**
+ * Fetch with retry for CDN URLs (Facebook, Instagram)
+ */
+async function fetchWithRetry(url: string, maxRetries = 3): Promise<Buffer> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            // Debug logging handled by log helper
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 25000);
+            
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://www.facebook.com/',
+                },
+                signal: controller.signal,
+            });
+            
+            clearTimeout(timeoutId);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return buffer;
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Unknown error';
+            
+            if (attempt < maxRetries) {
+                const delay = 2000 * attempt;
+                await new Promise(r => setTimeout(r, delay));
+            } else {
+                throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
+            }
+        }
+    }
+    throw new Error('Retry logic error');
 }
 
 // ============================================================================
-// CALLBACK HANDLERS
+// RETRY DOWNLOAD CALLBACK
 // ============================================================================
-
-/**
- * Handle "how_to_use" callback
- */
-async function botCallbackHowToUse(ctx: BotContext): Promise<void> {
-    const message = `📖 *How to Use DownAria Bot*
-
-1️⃣ *Send a Link*
-Just paste any social media link and I'll download it automatically.
-
-2️⃣ *Supported Platforms*
-• YouTube - Videos & Shorts
-• Instagram - Posts, Reels, Stories
-• TikTok - Videos
-• Twitter/X - Videos & Images
-• Facebook - Videos
-• Weibo - Videos & Images
-
-3️⃣ *Tips*
-• Send one link at a time
-• Wait for download to complete before sending another
-• Use /start to see this menu again
-
-4️⃣ *Limits*
-• Free: 10 downloads/day, 30s cooldown
-• Premium: Unlimited downloads, no cooldown
-
-Need help? Contact @${ADMIN_CONTACT_USERNAME}`;
-
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: backKeyboard('back_to_menu'),
-    });
-}
-
-/**
- * Handle "contact_admin" callback
- */
-async function botCallbackContactAdmin(ctx: BotContext): Promise<void> {
-    const message = `📞 *Contact Support*
-
-For help or issues, contact us:
-
-• Telegram: @${ADMIN_CONTACT_USERNAME}
-
-Please include:
-• The URL you tried to download
-• Any error message you received
-• Your Telegram username`;
-
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: backKeyboard('back_to_menu'),
-    });
-}
-
-/**
- * Handle "have_api_key" callback
- */
-async function botCallbackHaveApiKey(ctx: BotContext): Promise<void> {
-    const message = `🔑 *Link Your API Key*
-
-To get unlimited downloads:
-
-1️⃣ Get an API key from @${ADMIN_CONTACT_USERNAME}
-2️⃣ Send your key using this command:
-   \`/apikey YOUR_API_KEY_HERE\`
-
-*Benefits of VIP:*
-• ✅ Unlimited downloads
-• ✅ No cooldown between downloads
-• ✅ Priority support
-• ✅ Higher quality options
-
-Don't have a key? Contact @${ADMIN_CONTACT_USERNAME}`;
-
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: DONATE.info(),
-    });
-}
 
 /**
  * Handle "retry_download" callback
  */
-async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Promise<void> {
+export async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Promise<void> {
     // Get URL from payload or session
     const url = payload || ctx.session.pendingRetryUrl;
     
@@ -197,43 +160,6 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
         const thumbUrl = result.thumbnail;
         const needsDownloadFirst = mediaUrl.includes('fbcdn.net') || mediaUrl.includes('cdninstagram.com');
         
-        // Helper: fetch with retry for CDN URLs
-        const fetchWithRetry = async (url: string, maxRetries = 3): Promise<Buffer> => {
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    console.log(`[Bot.Callback] Attempt ${attempt}/${maxRetries}`);
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 25000);
-                    
-                    const response = await fetch(url, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Referer': 'https://www.facebook.com/',
-                        },
-                        signal: controller.signal,
-                    });
-                    
-                    clearTimeout(timeoutId);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    
-                    const buffer = Buffer.from(await response.arrayBuffer());
-                    console.log(`[Bot.Callback] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-                    return buffer;
-                } catch (e) {
-                    const msg = e instanceof Error ? e.message : 'Unknown error';
-                    console.log(`[Bot.Callback] Attempt ${attempt} failed: ${msg}`);
-                    
-                    if (attempt < maxRetries) {
-                        const delay = 2000 * attempt;
-                        await new Promise(r => setTimeout(r, delay));
-                    } else {
-                        throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
-                    }
-                }
-            }
-            throw new Error('Retry logic error');
-        };
-        
         try {
             if (needsDownloadFirst) {
                 // Download to buffer first for Facebook/Instagram with retry
@@ -256,7 +182,7 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
             await botRateLimitRecordDownload(ctx);
         } catch (error) {
             logger.error('telegram', error, 'RETRY_SEND_MEDIA');
-            
+
             // Fallback: Send thumbnail with download buttons instead of raw link
             const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
             const fallbackCaption = lang === 'id'
@@ -330,73 +256,9 @@ async function botCallbackRetryDownload(ctx: BotContext, payload?: string): Prom
     }
 }
 
-/**
- * Handle "cancel" callback
- */
-async function botCallbackCancel(ctx: BotContext): Promise<void> {
-    await ctx.answerCallbackQuery({ text: 'Cancelled' });
-    try {
-        await ctx.deleteMessage();
-    } catch {
-        // Ignore deletion errors
-    }
-}
-
-/**
- * Handle "back_to_menu" callback
- */
-async function botCallbackBackToMenu(ctx: BotContext): Promise<void> {
-    const message = `👋 *Welcome to DownAria Bot!*
-
-Send me any social media link and I'll download it for you.
-
-*Supported Platforms:*
-• YouTube • Instagram • TikTok
-• Twitter/X • Facebook • Weibo`;
-
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: startKeyboard(),
-    });
-}
-
 // ============================================================================
 // DOWNLOAD QUALITY CALLBACKS
 // ============================================================================
-
-/**
- * Find format by quality preference
- */
-function findFormatByQuality(
-    formats: DownloadResult['formats'],
-    quality: 'hd' | 'sd' | 'audio'
-): { quality: string; type: 'video' | 'audio' | 'image'; url: string; filesize?: number } | undefined {
-    if (!formats || formats.length === 0) return undefined;
-
-    if (quality === 'audio') {
-        return formats.find(f => f.type === 'audio') || formats[0];
-    }
-
-    if (quality === 'hd') {
-        return formats.find(f => 
-            f.type === 'video' && (
-                f.quality.includes('1080') || 
-                f.quality.includes('720') || 
-                f.quality.toLowerCase().includes('hd')
-            )
-        ) || formats.find(f => f.type === 'video');
-    }
-
-    // SD quality
-    return formats.find(f => 
-        f.type === 'video' && (
-            f.quality.includes('480') || 
-            f.quality.includes('360') || 
-            f.quality.toLowerCase().includes('sd')
-        )
-    ) || formats.find(f => f.type === 'video');
-}
 
 /**
  * Handle download quality callback
@@ -405,7 +267,7 @@ function findFormatByQuality(
  * For YouTube: calls merge API to combine video+audio streams
  * For other platforms: sends URL directly
  */
-async function botCallbackDownloadQuality(
+export async function botCallbackDownloadQuality(
     ctx: BotContext,
     quality: 'hd' | 'sd' | 'audio' | 'cancel',
     visitorId: string
@@ -611,7 +473,7 @@ async function botCallbackDownloadQuality(
                 const filename = `${safeTitle}${ext}`;
                 
                 logger.debug('telegram', `YouTube merge complete: ${mergedBuffer.length} bytes, sending as ${filename}`);
-                
+
                 // Delete preview message
                 try { await ctx.deleteMessage(); } catch {}
                 
@@ -722,7 +584,7 @@ async function botCallbackDownloadQuality(
  * Integration: This handler requires pendingMultiItem to be set in session.
  * See SEND_STRATEGY keyboard documentation in keyboards/index.ts for integration points.
  */
-async function botCallbackSendStrategy(
+export async function botCallbackSendStrategy(
     ctx: BotContext,
     visitorId: string,
     strategy: 'group' | 'single' | 'links'
@@ -763,7 +625,7 @@ async function botCallbackSendStrategy(
     const images = result.formats?.filter(f => f.type === 'image') || [];
     const videos = result.formats?.filter(f => f.type === 'video') || [];
     const allMedia = [...images, ...videos];
-    
+
     try {
         switch (strategy) {
             case 'group': {
@@ -859,245 +721,19 @@ async function botCallbackSendStrategy(
 }
 
 // ============================================================================
-// MENU COMMAND CALLBACKS
-// ============================================================================
-
-/**
- * Handle menu command callback
- * Pattern: cmd:(mystatus|history|premium|privacy|help|menu)
- * 
- * Directly executes the command content instead of telling user to type it
- */
-async function botCallbackMenuCommand(ctx: BotContext, command: string): Promise<void> {
-    await ctx.answerCallbackQuery();
-    
-    const lang = ctx.from?.language_code?.startsWith('id') ? 'id' : 'en';
-
-    switch (command) {
-        case 'mystatus': {
-            // Import and execute mystatus logic
-            const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('../commands/mystatus');
-            const userId = ctx.from?.id;
-            if (!userId) {
-                await ctx.reply('❌ User not found');
-                return;
-            }
-            
-            const [statusResult, totalDownloads] = await Promise.all([
-                botUserGetPremiumStatus(userId),
-                botUserGetTotalDownloads(userId),
-            ]);
-            
-            const user = statusResult?.user;
-            const apiKey = statusResult?.apiKey;
-            const isVip = !!apiKey;
-            
-            if (!isVip) {
-                // Free user
-                const dailyUsed = user?.daily_downloads || 0;
-                const dailyLimit = 10;
-                const memberSince = user?.created_at 
-                    ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                    : 'Unknown';
-                
-                const message = lang === 'id'
-                    ? `📊 *Status Anda*\n\n` +
-                      `*Akun:* Free Tier\n` +
-                      `*Username:* ${user?.username ? '@' + user.username : 'Tidak diset'}\n` +
-                      `*Member sejak:* ${memberSince}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `*Download:*\n` +
-                      `• Hari ini: ${dailyUsed} / ${dailyLimit}\n` +
-                      `• Total: ${totalDownloads}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `💡 Upgrade ke VIP untuk download tanpa batas!`
-                    : `📊 *Your Status*\n\n` +
-                      `*Account:* Free Tier\n` +
-                      `*Username:* ${user?.username ? '@' + user.username : 'Not set'}\n` +
-                      `*Member since:* ${memberSince}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `*Downloads:*\n` +
-                      `• Today: ${dailyUsed} / ${dailyLimit}\n` +
-                      `• Total: ${totalDownloads}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `💡 Upgrade to Premium for unlimited downloads!`;
-                
-                await ctx.reply(message, { parse_mode: 'Markdown' });
-            } else {
-                // Premium user - show full details
-                let expiryText = '♾️ Never';
-                let statusEmoji = '✅';
-                
-                if (apiKey.expires_at) {
-                    const expiryDate = new Date(apiKey.expires_at);
-                    const daysLeft = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-                    
-                    if (daysLeft <= 0) {
-                        expiryText = lang === 'id' ? '❌ Kadaluarsa' : '❌ Expired';
-                        statusEmoji = '❌';
-                    } else if (daysLeft <= 7) {
-                        const dateStr = expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                        expiryText = lang === 'id' 
-                            ? `⚠️ ${dateStr} (${daysLeft} hari lagi)`
-                            : `⚠️ ${dateStr} (${daysLeft} days left)`;
-                        statusEmoji = '⚠️';
-                    } else {
-                        const dateStr = expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                        expiryText = lang === 'id'
-                            ? `${dateStr} (${daysLeft} hari lagi)`
-                            : `${dateStr} (${daysLeft} days left)`;
-                    }
-                }
-                
-                const keyStatus = apiKey.enabled 
-                    ? `${statusEmoji} ${lang === 'id' ? 'Aktif' : 'Active'}`
-                    : `❌ ${lang === 'id' ? 'Nonaktif' : 'Disabled'}`;
-                
-                const successRate = apiKey.total_requests > 0 
-                    ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) 
-                    : 100;
-                
-                const message = lang === 'id'
-                    ? `👑 *Status Premium*\n\n` +
-                      `*API Key:* \`${apiKey.key_preview}\`\n` +
-                      `*Terdaftar:* ${apiKey.name || 'N/A'}\n` +
-                      `*Status:* ${keyStatus}\n` +
-                      `*Masa Aktif:* ${expiryText}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `*Download:*\n` +
-                      `• Hari ini: ${user?.daily_downloads || 0} (Unlimited)\n` +
-                      `• Total: ${totalDownloads}\n` +
-                      `• API Requests: ${apiKey.total_requests}\n\n` +
-                      `*Success Rate:* ${successRate}%`
-                    : `👑 *Premium Status*\n\n` +
-                      `*API Key:* \`${apiKey.key_preview}\`\n` +
-                      `*Registered to:* ${apiKey.name || 'N/A'}\n` +
-                      `*Status:* ${keyStatus}\n` +
-                      `*Expires:* ${expiryText}\n\n` +
-                      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                      `*Downloads:*\n` +
-                      `• Today: ${user?.daily_downloads || 0} (Unlimited)\n` +
-                      `• Total: ${totalDownloads}\n` +
-                      `• API Requests: ${apiKey.total_requests}\n\n` +
-                      `*Success Rate:* ${successRate}%`;
-                
-                await ctx.reply(message, { parse_mode: 'Markdown' });
-            }
-            break;
-        }
-        
-        case 'history': {
-            // History feature disabled - too complex for Telegram
-            const msg = lang === 'id' 
-                ? '📜 Fitur riwayat belum tersedia di Telegram.\n\nGunakan website untuk melihat riwayat download.'
-                : '📜 History feature not yet available on Telegram.\n\nUse the website to view download history.';
-            await ctx.reply(msg);
-            break;
-        }
-        
-        case 'donate': {
-            // Show donation info with action keyboard
-            const keyboard = new InlineKeyboard()
-                .text('🛒 Donasi Sekarang', 'donate_contact')
-                .row()
-                .text('🔑 Saya Punya API Key', 'donate_enter_key');
-            
-            const message = lang === 'id'
-                ? `💝 *Paket Donasi DownAria*\n\n` +
-                  `Dengan berdonasi, kamu mendukung pengembangan bot!\n\n` +
-                  `✨ *Keuntungan Donatur:*\n` +
-                  `• Download sesuai limit API key\n` +
-                  `• Tanpa cooldown\n` +
-                  `• Multi-URL (max 5/pesan)\n` +
-                  `• Prioritas support\n\n` +
-                  `💰 *Harga:*\n` +
-                  `• Rp5.000 / 30 hari (PROMO!)\n\n` +
-                  `📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi`
-                : `💝 *DownAria Donation Plan*\n\n` +
-                  `By donating, you support bot development!\n\n` +
-                  `✨ *Donator Benefits:*\n` +
-                  `• Downloads based on API key limit\n` +
-                  `• No cooldown\n` +
-                  `• Multi-URL (max 5/message)\n` +
-                  `• Priority support\n\n` +
-                  `💰 *Price:*\n` +
-                  `• Rp5,000 / 30 days (PROMO!)\n\n` +
-                  `📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
-            
-            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
-            break;
-        }
-        
-        case 'privacy': {
-            const { t, detectLanguage } = await import('../i18n');
-            const detectedLang = detectLanguage(ctx.from?.language_code);
-            await ctx.reply(t('privacy_title', detectedLang), { parse_mode: 'Markdown' });
-            break;
-        }
-        
-        case 'help': {
-            const { t, detectLanguage } = await import('../i18n');
-            const detectedLang = detectLanguage(ctx.from?.language_code);
-            await ctx.reply(t('help_title', detectedLang), { parse_mode: 'Markdown' });
-            break;
-        }
-        
-        case 'menu': {
-            const { detectLanguage } = await import('../i18n');
-            const detectedLang = detectLanguage(ctx.from?.language_code);
-            const { menuKeyboard } = await import('../keyboards');
-            
-            // Get greeting based on time (UTC+7 for Indonesia)
-            const getGreeting = (lang: 'en' | 'id'): string => {
-                const now = new Date();
-                const hour = (now.getUTCHours() + 7) % 24;
-                
-                if (lang === 'id') {
-                    if (hour >= 5 && hour < 11) return 'Selamat pagi';
-                    if (hour >= 11 && hour < 15) return 'Selamat siang';
-                    if (hour >= 15 && hour < 18) return 'Selamat sore';
-                    return 'Selamat malam';
-                } else {
-                    if (hour >= 5 && hour < 12) return 'Good morning';
-                    if (hour >= 12 && hour < 17) return 'Good afternoon';
-                    if (hour >= 17 && hour < 21) return 'Good evening';
-                    return 'Good night';
-                }
-            };
-            
-            const username = ctx.from?.first_name || ctx.from?.username || 'User';
-            const greeting = getGreeting(detectedLang);
-            
-            const menuText = detectedLang === 'id'
-                ? `📋 *Menu DownAria Bot*\n\n${greeting}, ${username}! 👋\n\n────────────────────\n\nKirim link video dari:\n• YouTube • Instagram • TikTok\n• Twitter/X • Facebook • Weibo\n\n────────────────────`
-                : `📋 *DownAria Bot Menu*\n\n${greeting}, ${username}! 👋\n\n────────────────────\n\nSend a video link from:\n• YouTube • Instagram • TikTok\n• Twitter/X • Facebook • Weibo\n\n────────────────────`;
-            
-            await ctx.reply(menuText, { 
-                parse_mode: 'Markdown',
-                reply_markup: menuKeyboard(),
-            });
-            break;
-        }
-        
-        default:
-            await ctx.reply(`❓ Unknown command: ${command}`);
-    }
-}
-
-// ============================================================================
 // MAIN HANDLER REGISTRATION
 // ============================================================================
 
 /**
- * Register callback query handler
+ * Register download callback handlers
  * 
  * Usage:
  * ```typescript
- * import { registerCallbackHandler } from '@/bot/handlers/callback';
- * registerCallbackHandler(bot);
+ * import { registerDownloadCallbacks } from '@/bot/handlers/callback-download';
+ * registerDownloadCallbacks(bot);
  * ```
  */
-export function registerCallbackHandler(bot: Bot<BotContext>): void {
+export function registerDownloadCallbacks(bot: Bot<BotContext>): void {
     // Download quality callbacks: dl:(hd|sd|audio|cancel):{visitorId}
     bot.callbackQuery(/^dl:(hd|sd|audio|cancel):(.+)$/, async (ctx) => {
         const match = ctx.match;
@@ -1135,122 +771,28 @@ export function registerCallbackHandler(bot: Bot<BotContext>): void {
         }
     });
 
-    // Report cookie issue to admin: report_cookie:{platform}
-    bot.callbackQuery(/^report_cookie:(.+)$/, async (ctx) => {
-        const platform = ctx.match?.[1];
-        if (!platform) return;
+    // Retry callbacks: retry:{url}
+    bot.callbackQuery(/^retry:(.+)$/, async (ctx) => {
+        const url = ctx.match?.[1];
+        if (!url) return;
 
-        await ctx.answerCallbackQuery({ text: '📢 Reporting to admin...' });
-
-        try {
-            // Get admin IDs from config
-            const { TELEGRAM_ADMIN_IDS } = await import('../config');
-            const userId = ctx.from?.id;
-            const username = ctx.from?.username;
-            
-            const reportMessage = `🚨 *Cookie Issue Report*
-
-*Platform:* ${platform.toUpperCase()}
-*Reported by:* ${username ? `@${username}` : `User ${userId}`}
-*User ID:* \`${userId}\`
-*Time:* ${new Date().toISOString()}
-
-A user reported that ${platform} downloads are failing due to cookie issues.`;
-
-            // Send to all admins
-            for (const adminId of TELEGRAM_ADMIN_IDS) {
-                try {
-                    await ctx.api.sendMessage(adminId, reportMessage, { parse_mode: 'Markdown' });
-                } catch {
-                    // Admin might have blocked the bot
-                }
-            }
-
-            await ctx.reply('✅ Report sent to admin. Thank you for reporting!');
-        } catch (error) {
-            logger.error('telegram', error, 'REPORT_COOKIE');
-            await ctx.reply('❌ Failed to send report. Please try again later.');
-        }
-    });
-
-    // Menu command callbacks: cmd:(mystatus|history|premium|privacy|help|menu)
-    bot.callbackQuery(/^cmd:(.+)$/, async (ctx) => {
-        const command = ctx.match?.[1];
-        if (!command) return;
-
-        logger.debug('telegram', `Menu command callback: ${command}`);
+        logger.debug('telegram', `Retry callback for: ${url}`);
 
         try {
-            await botCallbackMenuCommand(ctx, command);
+            await botCallbackRetryDownload(ctx, url);
         } catch (error) {
-            logger.error('telegram', error, 'MENU_COMMAND_CALLBACK');
+            logger.error('telegram', error, 'RETRY_CALLBACK');
             await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
         }
     });
 
-    // General callback handler for other actions
-    bot.on('callback_query:data', async (ctx) => {
-        const { action, payload } = botCallbackParse(ctx.callbackQuery.data);
-
-        // Skip if already handled by specific handlers above
-        if (ctx.callbackQuery.data.startsWith('dl:') || ctx.callbackQuery.data.startsWith('cmd:')) {
-            return;
-        }
-
-        logger.debug('telegram', `Callback: ${action}${payload ? ` (${payload})` : ''}`);
-
+    // retry_download callback (from session)
+    bot.callbackQuery('retry_download', async (ctx) => {
         try {
-            switch (action as CallbackAction | 'retry') {
-                case 'how_to_use':
-                    await botCallbackHowToUse(ctx);
-                    break;
-
-                case 'contact_admin':
-                    await botCallbackContactAdmin(ctx);
-                    break;
-
-                case 'have_api_key':
-                    await botCallbackHaveApiKey(ctx);
-                    break;
-
-                case 'retry_download':
-                case 'retry':
-                    await botCallbackRetryDownload(ctx, payload);
-                    break;
-
-                case 'cancel':
-                    await botCallbackCancel(ctx);
-                    break;
-
-                case 'back_to_menu':
-                    await botCallbackBackToMenu(ctx);
-                    break;
-
-                default:
-                    logger.warn('telegram', `Unknown callback action: ${action}`);
-                    await ctx.answerCallbackQuery({ text: '❌ Unknown action' });
-            }
+            await botCallbackRetryDownload(ctx);
         } catch (error) {
-            logger.error('telegram', error, 'CALLBACK_HANDLER');
+            logger.error('telegram', error, 'RETRY_DOWNLOAD_CALLBACK');
             await ctx.answerCallbackQuery({ text: '❌ An error occurred' });
         }
     });
 }
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
-
-export {
-    botCallbackParse,
-    botCallbackHowToUse,
-    botCallbackContactAdmin,
-    botCallbackHaveApiKey,
-    botCallbackRetryDownload,
-    botCallbackCancel,
-    botCallbackBackToMenu,
-    botCallbackDownloadQuality,
-    botCallbackMenuCommand,
-    botCallbackSendStrategy,
-    findFormatByQuality,
-};

@@ -15,6 +15,7 @@ import { QUEUE_CONFIG } from './config';
 import type { DownloadJobData } from './index';
 import { sendMedia } from '../utils/media';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';
+import { log } from '../helpers';
 
 // ============================================================================
 // BOT INSTANCE ACCESS (Dependency Injection)
@@ -58,8 +59,8 @@ async function getScraperFunction() {
  * Get rate limit record function dynamically
  */
 async function getRateLimitFunction() {
-    const { botRateLimitSetCooldown, botRateLimitIncrementDownloads } = await import('../middleware/rateLimit');
-    return { botRateLimitSetCooldown, botRateLimitIncrementDownloads };
+    const { botRateLimitSetCooldown, botRateLimitRecordDownloadById } = await import('../middleware');
+    return { botRateLimitSetCooldown, botRateLimitRecordDownloadById };
 }
 
 // ============================================================================
@@ -73,7 +74,7 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
     const { chatId, userId, messageId, processingMsgId, url, isPremium } = job.data;
     const startTime = Date.now();
 
-    console.log(`[Bot.Worker] Processing job ${job.id} for user ${userId}`);
+    log.worker(`Processing job ${job.id} for user ${userId}`);
 
     const api = await getBotApi();
     if (!api) {
@@ -105,22 +106,16 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 });
 
                 // Record download for rate limiting
-                const { botRateLimitSetCooldown, botRateLimitIncrementDownloads } = await getRateLimitFunction();
+                const { botRateLimitRecordDownloadById } = await getRateLimitFunction();
                 
-                // Set cooldown for non-premium users
-                if (!isPremium) {
-                    const { RATE_LIMITS } = await import('../types');
-                    await botRateLimitSetCooldown(userId, RATE_LIMITS.FREE_COOLDOWN_SECONDS);
-                }
-                
-                // Increment download count
-                await botRateLimitIncrementDownloads(userId);
+                // Record download (sets cooldown and increments count)
+                await botRateLimitRecordDownloadById(userId, isPremium);
 
                 // Record metrics
                 const processingTime = Date.now() - startTime;
                 recordDownloadSuccess(processingTime);
 
-                console.log(`[Bot.Worker] Job ${job.id} completed in ${processingTime}ms`);
+                log.worker(`Job ${job.id} completed in ${processingTime}ms`);
             } else {
                 // Failed to send media - edit processing message to error
                 recordDownloadFailure();
@@ -156,10 +151,10 @@ async function processDownloadJob(job: Job<DownloadJobData>): Promise<void> {
                 }
             ).catch(() => {});
 
-            console.log(`[Bot.Worker] Job ${job.id} failed: ${errorMessage}`);
+            log.error(`Job ${job.id} failed: ${errorMessage}`);
         }
     } catch (error) {
-        console.error('[Bot.Worker] Job error:', error);
+        log.error('Job error:', error);
         recordDownloadFailure();
 
         // Try to notify user of failure
@@ -192,18 +187,18 @@ let downloadWorker: Worker<DownloadJobData> | null = null;
  */
 export async function initWorker(): Promise<boolean> {
     if (downloadWorker) {
-        console.log('[Bot.Worker] Worker already initialized');
+        log.worker('Worker already initialized');
         return true;
     }
 
-    console.log('[Bot.Worker] Initializing worker...');
+    log.info('Initializing worker...');
     
     // Worker needs its own Redis connection (BullMQ requirement)
     const { getWorkerConnection } = await import('./downloadQueue');
     const connection = getWorkerConnection();
     
     if (!connection) {
-        console.log('[Bot.Worker] Redis not configured - worker disabled');
+        log.info('Redis not configured - worker disabled');
         return false;
     }
 
@@ -220,7 +215,7 @@ export async function initWorker(): Promise<boolean> {
             
             connection.once('ready', () => {
                 clearTimeout(timeout);
-                console.log('[Bot.Worker] Redis connection ready');
+                log.worker('Redis connection ready');
                 resolve();
             });
             
@@ -230,7 +225,7 @@ export async function initWorker(): Promise<boolean> {
             });
         });
     } catch (error) {
-        console.error('[Bot.Worker] Redis connection failed:', error);
+        log.error('Redis connection failed:', error);
         return false;
     }
 
@@ -250,29 +245,29 @@ export async function initWorker(): Promise<boolean> {
 
         // Worker event handlers
         downloadWorker.on('completed', (job) => {
-            console.log(`[Bot.Worker] ✅ Job ${job.id} completed`);
+            log.worker(`✅ Job ${job.id} completed`);
         });
 
         downloadWorker.on('failed', (job, err) => {
-            console.log(`[Bot.Worker] ❌ Job ${job?.id} failed: ${err.message}`);
+            log.worker(`❌ Job ${job?.id} failed: ${err.message}`);
         });
 
         downloadWorker.on('error', (err) => {
-            console.log(`[Bot.Worker] Error: ${err.message}`);
+            log.error(`Worker error: ${err.message}`);
         });
         
         downloadWorker.on('active', (job) => {
-            console.log(`[Bot.Worker] 🔄 Processing job ${job.id} for user ${job.data.userId}...`);
+            log.worker(`🔄 Processing job ${job.id} for user ${job.data.userId}...`);
         });
         
         downloadWorker.on('ready', () => {
-            console.log('[Bot.Worker] ✅ Worker is ready and listening for jobs');
+            log.info('Worker is ready and listening for jobs');
         });
 
-        console.log(`[Bot.Worker] Worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
+        log.info(`Worker initialized with concurrency ${QUEUE_CONFIG.CONCURRENCY}`);
         return true;
     } catch (error) {
-        console.error('[Bot.Worker] Init failed:', error);
+        log.error('Worker init failed:', error);
         return false;
     }
 }
@@ -284,7 +279,7 @@ export async function closeWorker(): Promise<void> {
     if (downloadWorker) {
         await downloadWorker.close();
         downloadWorker = null;
-        console.log('[Bot.Worker] Worker closed');
+        log.info('Worker closed');
     }
 }
 
@@ -293,7 +288,7 @@ export async function closeWorker(): Promise<void> {
  * Pauses worker, waits for active jobs, then closes
  */
 export async function gracefulShutdown(): Promise<void> {
-    console.log('[Bot.Worker] Graceful shutdown initiated...');
+    log.info('Graceful shutdown initiated...');
     
     if (downloadWorker) {
         // Stop accepting new jobs
@@ -301,7 +296,7 @@ export async function gracefulShutdown(): Promise<void> {
         
         // Wait for active jobs (max 30s)
         const timeout = setTimeout(() => {
-            console.log('[Bot.Worker] Shutdown timeout, forcing close');
+            log.info('Shutdown timeout, forcing close');
         }, 30000);
         
         await downloadWorker.close();
@@ -310,7 +305,7 @@ export async function gracefulShutdown(): Promise<void> {
         downloadWorker = null;
     }
     
-    console.log('[Bot.Worker] Worker shutdown complete');
+    log.info('Worker shutdown complete');
 }
 
 // ============================================================================

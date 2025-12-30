@@ -36,79 +36,99 @@ export interface CacheStats {
 
 // ============================================================================
 // CONSTANTS - SMART TTL BY CONTENT TYPE
+// Optimized for Upstash 500K commands/month limit
+// 
+// TTL Strategy:
+// - YouTube: 2 min (URLs expire in ~6h, need fresh data)
+// - Stories: 15-30 min (ephemeral content)
+// - Other content: 1 hour (balance freshness vs commands)
+// - Alias (short URLs): 7 days (mapping rarely changes)
 // ============================================================================
 
-// MAX TTL: 2 hours for all platforms (CDN URLs can expire)
-const MAX_TTL = 2 * 3600; // 2 hours
+// MAX TTL: 1 hour for all platforms (reduced from 2 hours)
+const MAX_TTL = 1 * 3600; // 1 hour
 
-const SMART_TTL: Record<PlatformId, Record<ContentType, number>> = {
-    twitter: {
-        post: 2 * 3600,           // 2 hours (max)
-        video: 2 * 3600,
-        reel: 2 * 3600,
-        story: 1 * 3600,          // 1 hour (fleets - deprecated but just in case)
-        image: 2 * 3600,
-        slideshow: 2 * 3600,
-        mixed: 2 * 3600,
-        unknown: 2 * 3600,
-    },
-    instagram: {
-        post: 2 * 3600,           // 2 hours (max)
-        video: 2 * 3600,
-        reel: 2 * 3600,
-        story: 30 * 60,           // 30 minutes (stories expire in 24h, URLs may change)
-        image: 2 * 3600,
-        slideshow: 2 * 3600,
-        mixed: 2 * 3600,
-        unknown: 2 * 3600,
-    },
-    tiktok: {
-        post: 2 * 3600,           // 2 hours (max)
-        video: 2 * 3600,
-        reel: 2 * 3600,
-        story: 1 * 3600,
-        image: 2 * 3600,
-        slideshow: 2 * 3600,      // TikTok slideshows
-        mixed: 2 * 3600,
-        unknown: 2 * 3600,
-    },
-    youtube: {
-        post: 5 * 60,             // 5 minutes - YouTube URLs expire quickly (~6h)
-        video: 5 * 60,            // 5 minutes
-        reel: 5 * 60,             // Shorts - 5 minutes
-        story: 5 * 60,
-        image: 5 * 60,
-        slideshow: 5 * 60,
-        mixed: 5 * 60,
-        unknown: 5 * 60,
-    },
-    facebook: {
-        post: 2 * 3600,           // 2 hours (max)
-        video: 2 * 3600,
-        reel: 2 * 3600,
-        story: 30 * 60,           // 30 minutes (stories expire)
-        image: 2 * 3600,
-        slideshow: 2 * 3600,
-        mixed: 2 * 3600,
-        unknown: 2 * 3600,
-    },
-    weibo: {
-        post: 2 * 3600,           // 2 hours (max)
-        video: 2 * 3600,
-        reel: 2 * 3600,
-        story: 1 * 3600,
-        image: 2 * 3600,
-        slideshow: 2 * 3600,
-        mixed: 2 * 3600,
-        unknown: 2 * 3600,
-    },
+// Default TTL config for new platforms
+const DEFAULT_PLATFORM_TTL: Record<ContentType, number> = {
+    post: 1 * 3600,
+    video: 1 * 3600,
+    reel: 1 * 3600,
+    story: 30 * 60,
+    image: 1 * 3600,
+    slideshow: 1 * 3600,
+    mixed: 1 * 3600,
+    unknown: 1 * 3600,
 };
 
-// Default TTL fallback (2 hours max)
-const DEFAULT_TTL = 2 * 3600;
+const SMART_TTL: Partial<Record<PlatformId, Record<ContentType, number>>> = {
+    twitter: {
+        post: 1 * 3600,           // 1 hour (reduced from 2)
+        video: 1 * 3600,
+        reel: 1 * 3600,
+        story: 30 * 60,           // 30 minutes
+        image: 1 * 3600,
+        slideshow: 1 * 3600,
+        mixed: 1 * 3600,
+        unknown: 1 * 3600,
+    },
+    instagram: {
+        post: 1 * 3600,           // 1 hour (reduced from 2)
+        video: 1 * 3600,
+        reel: 1 * 3600,
+        story: 15 * 60,           // 15 minutes (reduced from 30)
+        image: 1 * 3600,
+        slideshow: 1 * 3600,
+        mixed: 1 * 3600,
+        unknown: 1 * 3600,
+    },
+    tiktok: {
+        post: 1 * 3600,           // 1 hour (reduced from 2)
+        video: 1 * 3600,
+        reel: 1 * 3600,
+        story: 30 * 60,
+        image: 1 * 3600,
+        slideshow: 1 * 3600,
+        mixed: 1 * 3600,
+        unknown: 1 * 3600,
+    },
+    youtube: {
+        post: 2 * 60,             // 2 minutes (reduced from 5) - URLs expire quickly
+        video: 2 * 60,            // 2 minutes
+        reel: 2 * 60,             // Shorts - 2 minutes
+        story: 2 * 60,
+        image: 2 * 60,
+        slideshow: 2 * 60,
+        mixed: 2 * 60,
+        unknown: 2 * 60,
+    },
+    facebook: {
+        post: 1 * 3600,           // 1 hour (reduced from 2)
+        video: 1 * 3600,
+        reel: 1 * 3600,
+        story: 15 * 60,           // 15 minutes (reduced from 30)
+        image: 1 * 3600,
+        slideshow: 1 * 3600,
+        mixed: 1 * 3600,
+        unknown: 1 * 3600,
+    },
+    weibo: {
+        post: 1 * 3600,           // 1 hour (reduced from 2)
+        video: 1 * 3600,
+        reel: 1 * 3600,
+        story: 30 * 60,
+        image: 1 * 3600,
+        slideshow: 1 * 3600,
+        mixed: 1 * 3600,
+        unknown: 1 * 3600,
+    },
+    // New platforms use default TTL
+};
 
-// Alias TTL (30 days - short URL mappings)
-const ALIAS_TTL = 30 * 24 * 3600;
+// Default TTL fallback (1 hour)
+const DEFAULT_TTL = 1 * 3600;
+
+// Alias TTL (7 days - reduced from 30 days)
+const ALIAS_TTL = 7 * 24 * 3600;
 
 // ============================================================================
 // CONTENT ID EXTRACTORS
@@ -118,7 +138,7 @@ const ALIAS_TTL = 30 * 24 * 3600;
  * Content ID extraction patterns for each platform
  * These extract the unique identifier from URLs without HTTP requests
  */
-const CONTENT_ID_EXTRACTORS: Record<PlatformId, (url: string) => string | null> = {
+const CONTENT_ID_EXTRACTORS: Partial<Record<PlatformId, (url: string) => string | null>> = {
     twitter: (url) => {
         const match = url.match(/status(?:es)?\/(\d+)/i);
         return match ? match[1] : null;
@@ -522,10 +542,13 @@ async function cacheTrackHit(platform: PlatformId): Promise<void> {
     if (!isRedisAvailable() || !redis) return;
     
     try {
-        await Promise.all([
-            redis.incr('stats:cache:hits'),
-            redis.incr(`stats:cache:platform:${platform}:hits`),
-        ]);
+        const STATS_TTL = 24 * 3600; // 24 hours
+        const pipeline = redis.pipeline();
+        pipeline.incr('stats:cache:hits');
+        pipeline.expire('stats:cache:hits', STATS_TTL);
+        pipeline.incr(`stats:cache:platform:${platform}:hits`);
+        pipeline.expire(`stats:cache:platform:${platform}:hits`, STATS_TTL);
+        await pipeline.exec();
     } catch {
         // Stats tracking failed, not critical
     }
@@ -535,10 +558,13 @@ async function cacheTrackMiss(platform: PlatformId): Promise<void> {
     if (!isRedisAvailable() || !redis) return;
     
     try {
-        await Promise.all([
-            redis.incr('stats:cache:misses'),
-            redis.incr(`stats:cache:platform:${platform}:misses`),
-        ]);
+        const STATS_TTL = 24 * 3600; // 24 hours
+        const pipeline = redis.pipeline();
+        pipeline.incr('stats:cache:misses');
+        pipeline.expire('stats:cache:misses', STATS_TTL);
+        pipeline.incr(`stats:cache:platform:${platform}:misses`);
+        pipeline.expire(`stats:cache:platform:${platform}:misses`, STATS_TTL);
+        await pipeline.exec();
     } catch {
         // Stats tracking failed, not critical
     }

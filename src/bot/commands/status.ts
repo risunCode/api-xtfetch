@@ -1,295 +1,168 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * BOT COMMAND - /status
- * ═══════════════════════════════════════════════════════════════════════════════
- * 
- * Checks API health and shows platform availability.
- * 
- * @module bot/commands/status
+ * /status command - Shows user status with tier info
+ * Merged from /mystatus
  */
 
 import { Composer, InlineKeyboard } from 'grammy';
-import type { Context } from 'grammy';
+import type { BotContext, BotUser } from '../types';
+import { UserTier, getUserTier } from '../types';
+import { TIER_LIMITS, formatTierDisplay } from '../config';
+import { supabaseAdmin } from '@/lib/database/supabase';
+import { getUserLanguage } from '../helpers';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
+const statusComposer = new Composer<BotContext>();
 
-interface PlatformStatus {
-    id: string;
-    name: string;
-    status: 'operational' | 'degraded' | 'down';
-    icon: string;
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+async function getApiKeyInfo(apiKeyId: string) {
+  const db = supabaseAdmin;
+  if (!db) return null;
+  
+  const { data } = await db
+    .from('api_keys')
+    .select('key_preview, total_requests, rate_limit, expires_at, enabled, success_count, name')
+    .eq('id', apiKeyId)
+    .single();
+  
+  return data;
 }
 
-interface HealthResponse {
-    status: string;
-    timestamp: string;
-    platforms?: PlatformStatus[];
+export async function botUserGetPremiumStatus(telegramId: number): Promise<{
+  user: BotUser | null;
+  apiKey: {
+    key_preview: string;
+    total_requests: number;
+    rate_limit: number;
+    expires_at: string | null;
+    enabled: boolean;
+    success_count: number;
+    name: string | null;
+  } | null;
+}> {
+  const db = supabaseAdmin;
+  if (!db) return { user: null, apiKey: null };
+  
+  const { data: user } = await db
+    .from('bot_users')
+    .select('*')
+    .eq('id', telegramId)
+    .single();
+  
+  if (!user || !user.api_key_id) {
+    return { user: user as BotUser | null, apiKey: null };
+  }
+  
+  const apiKey = await getApiKeyInfo(user.api_key_id);
+  return { user: user as BotUser, apiKey };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const PLATFORM_ICONS: Record<string, string> = {
-    youtube: '▶️',
-    instagram: '📸',
-    tiktok: '🎵',
-    twitter: '𝕏',
-    facebook: '📘',
-    weibo: '🔴',
-};
-
-const STATUS_ICONS: Record<string, string> = {
-    operational: '✅',
-    degraded: '⚠️',
-    down: '❌',
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+export async function botUserGetTotalDownloads(telegramId: number): Promise<number> {
+  const db = supabaseAdmin;
+  if (!db) return 0;
+  
+  const { data } = await db
+    .from('bot_users')
+    .select('total_downloads')
+    .eq('id', telegramId)
+    .single();
+  
+  return data?.total_downloads || 0;
+}
 
 /**
- * Fetch health status from API
+ * Build status message - single source of truth
  */
-async function fetchHealthStatus(): Promise<HealthResponse | null> {
-    try {
-        const apiUrl = process.env.API_BASE_URL || 'http://localhost:3002';
-        const response = await fetch(`${apiUrl}/api/health`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(10000) // 10s timeout
-        });
+async function buildStatusMessage(user: BotUser, lang: 'id' | 'en'): Promise<string> {
+  const tier = getUserTier(user);
+  const tierConfig = TIER_LIMITS[tier];
 
-        if (!response.ok) {
-            return null;
-        }
+  let msg = lang === 'id'
+    ? `📊 *Status Kamu*\n\n👤 ${user.username ? '@' + user.username : user.first_name || 'User'}\n📅 Member sejak: ${new Date(user.created_at).toLocaleDateString()}\n\n`
+    : `📊 *Your Status*\n\n👤 ${user.username ? '@' + user.username : user.first_name || 'User'}\n📅 Member since: ${new Date(user.created_at).toLocaleDateString()}\n\n`;
 
-        return await response.json() as HealthResponse;
-    } catch (error) {
-        console.error('[fetchHealthStatus] Error:', error);
-        return null;
+  msg += `── Tier ──\n${formatTierDisplay(tier)}\n`;
+
+  if (tier === UserTier.FREE) {
+    const cfg = tierConfig as typeof TIER_LIMITS[UserTier.FREE];
+    msg += lang === 'id'
+      ? `📥 Hari ini: ${user.daily_downloads}/${cfg.dailyLimit}\n⏳ Cooldown: ${cfg.cooldownSeconds}s\n`
+      : `📥 Today: ${user.daily_downloads}/${cfg.dailyLimit}\n⏳ Cooldown: ${cfg.cooldownSeconds}s\n`;
+  } else {
+    const cfg = tierConfig as typeof TIER_LIMITS[UserTier.VIP];
+    msg += lang === 'id'
+      ? `📥 Rate: ${cfg.requestsPerWindow} req/${cfg.windowMinutes} menit\n`
+      : `📥 Rate: ${cfg.requestsPerWindow} req/${cfg.windowMinutes} min\n`;
+  }
+
+  if (tier === UserTier.VVIP && user.api_key_id) {
+    const apiKey = await getApiKeyInfo(user.api_key_id);
+    if (apiKey) {
+      msg += `\n── API Key ──\n`;
+      msg += `🔑 \`${apiKey.key_preview}\`\n`;
+      msg += `📊 ${apiKey.total_requests} requests\n`;
+      if (apiKey.expires_at) {
+        msg += `📅 ${new Date(apiKey.expires_at).toLocaleDateString()}\n`;
+      }
+      msg += `${apiKey.enabled ? '🟢' : '🔴'} ${apiKey.enabled ? 'Active' : 'Disabled'}\n`;
     }
+  }
+
+  msg += `\n── ${lang === 'id' ? 'Total' : 'Total'} ──\n`;
+  msg += `📥 ${user.total_downloads} downloads\n`;
+
+  return msg;
 }
 
-/**
- * Format platform status for display
- */
-function formatPlatformStatus(platforms: PlatformStatus[]): string {
-    return platforms
-        .map(p => {
-            const platformIcon = PLATFORM_ICONS[p.id] || '📦';
-            const statusIcon = STATUS_ICONS[p.status] || '❓';
-            const statusText = p.status.charAt(0).toUpperCase() + p.status.slice(1);
-            return `${platformIcon} *${p.name}*: ${statusIcon} ${statusText}`;
-        })
-        .join('\n');
+function buildStatusKeyboard(tier: UserTier): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  kb.text('📜 History', 'history');
+  
+  if (tier === UserTier.FREE) {
+    kb.text('⭐ Upgrade', 'cmd:donate');
+  } else if (tier === UserTier.VIP) {
+    kb.text('👑 Upgrade', 'cmd:donate');
+  }
+  
+  return kb.row().text('« Menu', 'cmd:menu');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// COMMAND HANDLER
-// ═══════════════════════════════════════════════════════════════════════════════
+// ============================================================================
+// HANDLERS
+// ============================================================================
 
-const statusComposer = new Composer<Context>();
+statusComposer.command('status', async (ctx) => {
+  if (!ctx.botUser) {
+    await ctx.reply('❌ /start first');
+    return;
+  }
 
-statusComposer.command('status', async (ctx: Context) => {
-    // Send loading message
-    const loadingMsg = await ctx.reply('⏳ Checking service status...');
+  const lang = getUserLanguage(ctx);
+  const message = await buildStatusMessage(ctx.botUser, lang);
+  const keyboard = buildStatusKeyboard(getUserTier(ctx.botUser));
 
-    try {
-        const health = await fetchHealthStatus();
-
-        if (!health) {
-            // API unreachable
-            const keyboard = new InlineKeyboard()
-                .text('🔄 Retry', 'status_refresh');
-
-            await ctx.api.editMessageText(
-                ctx.chat!.id,
-                loadingMsg.message_id,
-                `❌ *Service Status*
-
-Unable to reach the API server.
-Please try again later.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Checked: ${new Date().toLocaleString()}`,
-                { parse_mode: 'Markdown', reply_markup: keyboard }
-            );
-            return;
-        }
-
-        // Build status message
-        const overallStatus = health.status === 'ok' ? '✅ Operational' : '⚠️ Issues Detected';
-        
-        // Default platforms if not provided by API
-        const defaultPlatforms: PlatformStatus[] = [
-            { id: 'youtube', name: 'YouTube', status: 'operational', icon: '▶️' },
-            { id: 'instagram', name: 'Instagram', status: 'operational', icon: '📸' },
-            { id: 'tiktok', name: 'TikTok', status: 'operational', icon: '🎵' },
-            { id: 'twitter', name: 'Twitter/X', status: 'operational', icon: '𝕏' },
-            { id: 'facebook', name: 'Facebook', status: 'operational', icon: '📘' },
-            { id: 'weibo', name: 'Weibo', status: 'operational', icon: '🔴' },
-        ];
-
-        const platforms = health.platforms || defaultPlatforms;
-        const platformsStatus = formatPlatformStatus(platforms);
-
-        const keyboard = new InlineKeyboard()
-            .text('🔄 Refresh', 'status_refresh');
-
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            loadingMsg.message_id,
-            `📊 *Service Status*
-
-*Overall:* ${overallStatus}
-
-*Platform Availability:*
-${platformsStatus}
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Last checked: ${new Date().toLocaleString()}`,
-            { parse_mode: 'Markdown', reply_markup: keyboard }
-        );
-    } catch (error) {
-        console.error('[status command] Error:', error);
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            loadingMsg.message_id,
-            '❌ Error checking status. Please try again later.'
-        );
-    }
+  await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
 });
 
-// Handle inline button callback for status
-statusComposer.callbackQuery('status', async (ctx: Context) => {
-    await ctx.answerCallbackQuery();
-    
-    const loadingMsg = await ctx.reply('⏳ Checking service status...');
-    
-    try {
-        const health = await fetchHealthStatus();
+// Callbacks - all use same logic
+const handleStatusCallback = async (ctx: BotContext) => {
+  await ctx.answerCallbackQuery();
+  
+  if (!ctx.botUser) {
+    await ctx.reply('❌ /start first');
+    return;
+  }
 
-        if (!health) {
-            const keyboard = new InlineKeyboard()
-                .text('🔄 Retry', 'status_refresh');
+  const lang = getUserLanguage(ctx);
+  const message = await buildStatusMessage(ctx.botUser, lang);
+  const keyboard = buildStatusKeyboard(getUserTier(ctx.botUser));
 
-            await ctx.api.editMessageText(
-                ctx.chat!.id,
-                loadingMsg.message_id,
-                `❌ *Service Status*
+  await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+};
 
-Unable to reach the API server.
-Please try again later.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Checked: ${new Date().toLocaleString()}`,
-                { parse_mode: 'Markdown', reply_markup: keyboard }
-            );
-            return;
-        }
-
-        const overallStatus = health.status === 'ok' ? '✅ Operational' : '⚠️ Issues Detected';
-        
-        const defaultPlatforms: PlatformStatus[] = [
-            { id: 'youtube', name: 'YouTube', status: 'operational', icon: '▶️' },
-            { id: 'instagram', name: 'Instagram', status: 'operational', icon: '📸' },
-            { id: 'tiktok', name: 'TikTok', status: 'operational', icon: '🎵' },
-            { id: 'twitter', name: 'Twitter/X', status: 'operational', icon: '𝕏' },
-            { id: 'facebook', name: 'Facebook', status: 'operational', icon: '📘' },
-            { id: 'weibo', name: 'Weibo', status: 'operational', icon: '🔴' },
-        ];
-
-        const platforms = health.platforms || defaultPlatforms;
-        const platformsStatus = formatPlatformStatus(platforms);
-
-        const keyboard = new InlineKeyboard()
-            .text('🔄 Refresh', 'status_refresh');
-
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            loadingMsg.message_id,
-            `📊 *Service Status*
-
-*Overall:* ${overallStatus}
-
-*Platform Availability:*
-${platformsStatus}
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Last checked: ${new Date().toLocaleString()}`,
-            { parse_mode: 'Markdown', reply_markup: keyboard }
-        );
-    } catch (error) {
-        console.error('[status callback] Error:', error);
-        await ctx.api.editMessageText(
-            ctx.chat!.id,
-            loadingMsg.message_id,
-            '❌ Error checking status. Please try again later.'
-        );
-    }
-});
-
-// Handle refresh button
-statusComposer.callbackQuery('status_refresh', async (ctx: Context) => {
-    await ctx.answerCallbackQuery('Refreshing...');
-    
-    try {
-        const health = await fetchHealthStatus();
-
-        if (!health) {
-            const keyboard = new InlineKeyboard()
-                .text('🔄 Retry', 'status_refresh');
-
-            await ctx.editMessageText(
-                `❌ *Service Status*
-
-Unable to reach the API server.
-Please try again later.
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Checked: ${new Date().toLocaleString()}`,
-                { parse_mode: 'Markdown', reply_markup: keyboard }
-            );
-            return;
-        }
-
-        const overallStatus = health.status === 'ok' ? '✅ Operational' : '⚠️ Issues Detected';
-        
-        const defaultPlatforms: PlatformStatus[] = [
-            { id: 'youtube', name: 'YouTube', status: 'operational', icon: '▶️' },
-            { id: 'instagram', name: 'Instagram', status: 'operational', icon: '📸' },
-            { id: 'tiktok', name: 'TikTok', status: 'operational', icon: '🎵' },
-            { id: 'twitter', name: 'Twitter/X', status: 'operational', icon: '𝕏' },
-            { id: 'facebook', name: 'Facebook', status: 'operational', icon: '📘' },
-            { id: 'weibo', name: 'Weibo', status: 'operational', icon: '🔴' },
-        ];
-
-        const platforms = health.platforms || defaultPlatforms;
-        const platformsStatus = formatPlatformStatus(platforms);
-
-        const keyboard = new InlineKeyboard()
-            .text('🔄 Refresh', 'status_refresh');
-
-        await ctx.editMessageText(
-            `📊 *Service Status*
-
-*Overall:* ${overallStatus}
-
-*Platform Availability:*
-${platformsStatus}
-
-━━━━━━━━━━━━━━━━━━━━━━
-🕐 Last checked: ${new Date().toLocaleString()}`,
-            { parse_mode: 'Markdown', reply_markup: keyboard }
-        );
-    } catch (error) {
-        console.error('[status_refresh callback] Error:', error);
-        await ctx.answerCallbackQuery('Error refreshing status');
-    }
-});
+statusComposer.callbackQuery('status', handleStatusCallback);
+statusComposer.callbackQuery('cmd:status', handleStatusCallback);
+statusComposer.callbackQuery('cmd:mystatus', handleStatusCallback);
 
 export { statusComposer };

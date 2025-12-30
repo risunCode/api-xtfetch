@@ -13,7 +13,10 @@
 // ============================================================================
 
 /** Supported platform identifiers */
-export type PlatformId = 'tiktok' | 'instagram' | 'facebook' | 'twitter' | 'weibo' | 'youtube';
+export type PlatformId = 
+    | 'tiktok' | 'instagram' | 'facebook' | 'twitter' | 'weibo' | 'youtube'
+    | 'bilibili' | 'reddit' | 'soundcloud'
+    | 'eporner' | 'pornhub' | 'rule34video' | 'threads' | 'erome' | 'pixiv';
 
 /** Platform domain configuration */
 export interface PlatformDomainConfig {
@@ -59,6 +62,54 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformDomainConfig> = {
         name: 'YouTube',
         domain: 'youtube.com',
         aliases: ['youtube.com', 'youtu.be', 'm.youtube.com', 'www.youtube.com', 'music.youtube.com'],
+    },
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NEW PLATFORMS (yt-dlp/gallery-dl based)
+    // ═══════════════════════════════════════════════════════════════════════════
+    bilibili: {
+        name: 'BiliBili',
+        domain: 'bilibili.com',
+        aliases: ['bilibili.com', 'b23.tv', 'www.bilibili.com', 'm.bilibili.com'],
+    },
+    reddit: {
+        name: 'Reddit',
+        domain: 'reddit.com',
+        aliases: ['reddit.com', 'redd.it', 'v.redd.it', 'www.reddit.com', 'old.reddit.com'],
+    },
+    soundcloud: {
+        name: 'SoundCloud',
+        domain: 'soundcloud.com',
+        aliases: ['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com'],
+    },
+    eporner: {
+        name: 'Eporner',
+        domain: 'eporner.com',
+        aliases: ['eporner.com', 'www.eporner.com'],
+    },
+    pornhub: {
+        name: 'PornHub',
+        domain: 'pornhub.com',
+        aliases: ['pornhub.com', 'www.pornhub.com', 'pornhubpremium.com'],
+    },
+    rule34video: {
+        name: 'Rule34Video',
+        domain: 'rule34video.com',
+        aliases: ['rule34video.com', 'www.rule34video.com'],
+    },
+    threads: {
+        name: 'Threads',
+        domain: 'threads.net',
+        aliases: ['threads.net', 'www.threads.net'],
+    },
+    erome: {
+        name: 'Erome',
+        domain: 'erome.com',
+        aliases: ['erome.com', 'www.erome.com'],
+    },
+    pixiv: {
+        name: 'Pixiv',
+        domain: 'pixiv.net',
+        aliases: ['pixiv.net', 'www.pixiv.net', 'pixiv.me'],
     },
 };
 

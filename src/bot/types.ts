@@ -10,6 +10,16 @@ import type { Context, SessionFlavor } from 'grammy';
 import type { PlatformId } from '@/core/config';
 
 // ============================================================================
+// USER TIER SYSTEM
+// ============================================================================
+
+export enum UserTier {
+  FREE = 'free',
+  VIP = 'vip',
+  VVIP = 'vvip',
+}
+
+// ============================================================================
 // DATABASE MODELS
 // ============================================================================
 
@@ -21,10 +31,14 @@ export interface BotUser {
     last_name?: string;            // Telegram last name
     language_code?: string;        // User's language
     is_banned: boolean;            // Whether user is banned
+    is_admin?: boolean;            // Whether user is admin
+    is_vip?: boolean;              // VIP flag set by admin
     ban_reason?: string;           // Reason for ban
-    api_key_id?: string;           // Linked API key (VIP user)
+    api_key_id?: string;           // Linked API key (VVIP user)
     vip_expires_at?: string;       // ISO timestamp when VIP expires
+    premium_expires_at?: string;   // ISO timestamp when premium expires
     daily_downloads: number;       // Downloads today
+    daily_reset_at?: string;       // ISO timestamp when daily count resets
     last_download_at?: string;     // ISO timestamp of last download
     last_download_reset?: string;  // ISO timestamp when daily count was reset
     total_downloads: number;       // Lifetime downloads
@@ -32,9 +46,62 @@ export interface BotUser {
     updated_at: string;            // ISO timestamp
 }
 
+/**
+ * Determine user tier based on their attributes
+ */
+export function getUserTier(user: BotUser): UserTier {
+  // VVIP: Has linked API key
+  if (user.api_key_id) {
+    return UserTier.VVIP;
+  }
+  
+  // VIP: is_vip flag set by admin
+  if (user.is_vip) {
+    return UserTier.VIP;
+  }
+  
+  // Free: Default
+  return UserTier.FREE;
+}
+
 // ============================================================================
 // SESSION DATA
 // ============================================================================
+
+/** Story item for multi-story content */
+export interface StoryItem {
+  index: number;
+  type: 'video' | 'image';
+  url: string;
+  thumbnail?: string;
+}
+
+/** Pending stories data for story navigation */
+export interface PendingStories {
+  visitorId: string;
+  platform: 'facebook' | 'instagram';
+  author: string;
+  stories: StoryItem[];
+  currentIndex: number;
+  timestamp: number;
+}
+
+/** Pending YouTube data for quality selection */
+export interface PendingYouTube {
+  visitorId: string;
+  videoId: string;
+  title: string;
+  author: string;
+  thumbnail: string;
+  duration?: string;
+  views?: string;
+  qualities: Array<{
+    quality: string;
+    size?: string;
+    hasAudio: boolean;
+  }>;
+  timestamp: number;
+}
 
 /** Session data stored per user */
 export interface SessionData {
@@ -59,6 +126,10 @@ export interface SessionData {
         itemCount: number;
         timestamp: number;
     };
+    /** Pending stories for story navigation */
+    pendingStories?: PendingStories;
+    /** Pending YouTube for quality selection */
+    pendingYouTube?: PendingYouTube;
 }
 
 // ============================================================================

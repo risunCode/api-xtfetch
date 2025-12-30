@@ -3,18 +3,21 @@
  * BOT COMMAND - /donate
  * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * Shows donation benefits and handles API key linking.
- * Two buttons: [💬 Contact Admin] [🔑 I Have API Key]
- * Handles API key input and validation, links API key to Telegram user.
+ * Shows donation benefits with VIP vs VVIP comparison.
+ * Handles API key linking and unlink confirmation flow.
+ * Uses new tier system (Free/VIP/VVIP).
  * 
  * @module bot/commands/donate
  */
 
 import { Composer, InlineKeyboard } from 'grammy';
-import type { Context } from 'grammy';
+import type { BotContext } from '../types';
+import { UserTier, getUserTier } from '../types';
+import { TIER_LIMITS, formatTierDisplay, ADMIN_CONTACT_USERNAME } from '../config';
 import { supabaseAdmin } from '@/lib/database/supabase';
 import { apiKeyValidate } from '@/lib/auth/apikeys';
 import { botUserLinkApiKey as botUserLinkApiKeyService } from '../services/userService';
+import { getUserLanguage } from '../helpers';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -27,22 +30,8 @@ const awaitingApiKey = new Map<number, { messageId: number; timestamp: number }>
 const AWAITING_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const ADMIN_CONTACT_USERNAME = process.env.TELEGRAM_ADMIN_USERNAME || 'risunCode';
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Detect user language from Telegram context
- */
-function getUserLanguage(ctx: Context): 'id' | 'en' {
-    const langCode = ctx.from?.language_code;
-    return langCode === 'id' ? 'id' : 'en';
-}
 
 /**
  * Link API key to Telegram user (wrapper around userService)
@@ -99,14 +88,81 @@ function cleanupAwaitingEntries(): void {
     }
 }
 
+/**
+ * Build tier comparison message
+ */
+function buildTierComparisonMessage(lang: 'id' | 'en'): string {
+    const freeConfig = TIER_LIMITS[UserTier.FREE];
+    const vipConfig = TIER_LIMITS[UserTier.VIP];
+    const vvipConfig = TIER_LIMITS[UserTier.VVIP];
+    
+    if (lang === 'id') {
+        return `💝 *Paket Donasi DownAria*
+
+Dengan berdonasi, kamu mendukung pengembangan bot!
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+${freeConfig.icon} *FREE*
+• ${freeConfig.dailyLimit} download/hari
+• Cooldown ${freeConfig.cooldownSeconds} detik
+• Tanpa API access
+
+${vipConfig.icon} *VIP* (Rp5.000/bulan)
+• ${vipConfig.requestsPerWindow} req/${vipConfig.windowMinutes} menit
+• Cooldown ${vipConfig.cooldownSeconds} detik
+• Multi-URL (max 5/pesan)
+• Prioritas support
+
+${vvipConfig.icon} *VVIP* (Rp15.000/bulan)
+• ${vvipConfig.requestsPerWindow} req/${vvipConfig.windowMinutes} menit
+• Cooldown ${vvipConfig.cooldownSeconds} detik
+• Multi-URL (max 5/pesan)
+• ✨ API Access
+• Prioritas support
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi`;
+    }
+    
+    return `💝 *DownAria Donation Plans*
+
+By donating, you support bot development!
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+${freeConfig.icon} *FREE*
+• ${freeConfig.dailyLimit} downloads/day
+• ${freeConfig.cooldownSeconds}s cooldown
+• No API access
+
+${vipConfig.icon} *VIP* (Rp5,000/month)
+• ${vipConfig.requestsPerWindow} req/${vipConfig.windowMinutes} min
+• ${vipConfig.cooldownSeconds}s cooldown
+• Multi-URL (max 5/message)
+• Priority support
+
+${vvipConfig.icon} *VVIP* (Rp15,000/month)
+• ${vvipConfig.requestsPerWindow} req/${vvipConfig.windowMinutes} min
+• ${vvipConfig.cooldownSeconds}s cooldown
+• Multi-URL (max 5/message)
+• ✨ API Access
+• Priority support
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📱 Contact @${ADMIN_CONTACT_USERNAME} to donate`;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // COMMAND HANDLER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const donateComposer = new Composer<Context>();
+const donateComposer = new Composer<BotContext>();
 
 // Handle /donate command
-donateComposer.command('donate', async (ctx: Context) => {
+donateComposer.command('donate', async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId) {
         await ctx.reply('❌ Unable to identify user.');
@@ -114,72 +170,154 @@ donateComposer.command('donate', async (ctx: Context) => {
     }
 
     const lang = getUserLanguage(ctx);
-
-    // Check if user already has donator status
-    const { hasDonatorStatus } = await botUserHasDonatorStatus(userId);
+    const user = ctx.botUser;
     
-    if (hasDonatorStatus) {
-        const keyboard = new InlineKeyboard()
-            .text('📊 My Status', 'cmd:mystatus')
-            .text('🔓 Unlink Key', 'donate_unlink');
+    // Check current tier
+    if (user) {
+        const tier = getUserTier(user);
+        
+        if (tier === UserTier.VVIP) {
+            const keyboard = new InlineKeyboard()
+                .text('📊 My Status', 'cmd:status')
+                .text('🔓 Unlink Key', 'donate_unlink')
+                .row()
+                .text('« Menu', 'cmd:menu');
 
-        const message = lang === 'id'
-            ? `👑 *Kamu Sudah Menjadi Donatur!*
+            const message = lang === 'id'
+                ? `👑 *Kamu Sudah VVIP!*
+
+${formatTierDisplay(tier)}
 
 Akunmu sudah terhubung dengan API key.
-Gunakan /mystatus untuk melihat detail donatur.`
-            : `👑 *You Are Already a Donator!*
+Gunakan /status untuk melihat detail.`
+                : `👑 *You Are Already VVIP!*
+
+${formatTierDisplay(tier)}
 
 Your account is linked to an API key.
-Use /mystatus to see your donator details.`;
+Use /status to see your details.`;
 
-        await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+            return;
+        }
+        
+        if (tier === UserTier.VIP) {
+            const keyboard = new InlineKeyboard()
+                .text('👑 Upgrade to VVIP', 'donate_contact')
+                .row()
+                .text('📊 My Status', 'cmd:status')
+                .row()
+                .text('« Menu', 'cmd:menu');
+
+            const message = lang === 'id'
+                ? `⭐ *Kamu Sudah VIP!*
+
+${formatTierDisplay(tier)}
+
+Upgrade ke VVIP untuk mendapatkan API access!`
+                : `⭐ *You Are Already VIP!*
+
+${formatTierDisplay(tier)}
+
+Upgrade to VVIP to get API access!`;
+
+            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+            return;
+        }
+    }
+
+    // Show donation benefits with tier comparison
+    const keyboard = new InlineKeyboard()
+        .text('🛒 Donasi Sekarang', 'donate_contact')
+        .row()
+        .text('🔑 Saya Punya API Key', 'donate_enter_key')
+        .row()
+        .text('« Menu', 'cmd:menu');
+
+    const message = buildTierComparisonMessage(lang);
+
+    await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+    });
+});
+
+// Handle cmd:donate callback
+donateComposer.callbackQuery('cmd:donate', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.reply('❌ Unable to identify user.');
         return;
     }
 
-    // Show donation benefits
+    const lang = getUserLanguage(ctx);
+    const user = ctx.botUser;
+    
+    // Check current tier
+    if (user) {
+        const tier = getUserTier(user);
+        
+        if (tier === UserTier.VVIP) {
+            const keyboard = new InlineKeyboard()
+                .text('📊 My Status', 'cmd:status')
+                .text('🔓 Unlink Key', 'donate_unlink')
+                .row()
+                .text('« Menu', 'cmd:menu');
+
+            const message = lang === 'id'
+                ? `👑 *Kamu Sudah VVIP!*
+
+${formatTierDisplay(tier)}
+
+Akunmu sudah terhubung dengan API key.
+Gunakan /status untuk melihat detail.`
+                : `👑 *You Are Already VVIP!*
+
+${formatTierDisplay(tier)}
+
+Your account is linked to an API key.
+Use /status to see your details.`;
+
+            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+            return;
+        }
+        
+        if (tier === UserTier.VIP) {
+            const keyboard = new InlineKeyboard()
+                .text('👑 Upgrade to VVIP', 'donate_contact')
+                .row()
+                .text('📊 My Status', 'cmd:status')
+                .row()
+                .text('« Menu', 'cmd:menu');
+
+            const message = lang === 'id'
+                ? `⭐ *Kamu Sudah VIP!*
+
+${formatTierDisplay(tier)}
+
+Upgrade ke VVIP untuk mendapatkan API access!`
+                : `⭐ *You Are Already VIP!*
+
+${formatTierDisplay(tier)}
+
+Upgrade to VVIP to get API access!`;
+
+            await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+            return;
+        }
+    }
+
+    // Show donation benefits with tier comparison
     const keyboard = new InlineKeyboard()
-        .text('🛒 Donasi Sekarang', `donate_contact`)
+        .text('🛒 Donasi Sekarang', 'donate_contact')
         .row()
-        .text('🔑 Saya Punya API Key', 'donate_enter_key');
+        .text('🔑 Saya Punya API Key', 'donate_enter_key')
+        .row()
+        .text('« Menu', 'cmd:menu');
 
-    const message = lang === 'id'
-        ? `💝 *Paket Donasi DownAria*
-
-Dengan berdonasi, kamu mendukung pengembangan bot!
-
-✨ *Keuntungan Donatur:*
-• Download sesuai limit API key
-• Tanpa cooldown
-• Multi-URL (max 5/pesan)
-• Prioritas support
-
-💰 *Harga:*
-• Rp5.000 / 30 hari (PROMO!)
-
-📱 Hubungi @${ADMIN_CONTACT_USERNAME} untuk donasi
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-Sudah punya API key? Klik "Saya Punya API Key" untuk aktivasi.`
-        : `💝 *DownAria Donation Plan*
-
-By donating, you support bot development!
-
-✨ *Donator Benefits:*
-• Downloads based on API key limit
-• No cooldown
-• Multi-URL (max 5/message)
-• Priority support
-
-💰 *Price:*
-• Rp5,000 / 30 days (PROMO!)
-
-📱 Contact @${ADMIN_CONTACT_USERNAME} to donate
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-Already have an API key? Click "I Have API Key" to activate.`;
+    const message = buildTierComparisonMessage(lang);
 
     await ctx.reply(message, {
         parse_mode: 'Markdown',
@@ -188,13 +326,13 @@ Already have an API key? Click "I Have API Key" to activate.`;
 });
 
 // Handle contact admin button (Donate Now)
-donateComposer.callbackQuery('donate_contact', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_contact', async (ctx) => {
     await ctx.answerCallbackQuery();
     
     const lang = getUserLanguage(ctx);
     
     const keyboard = new InlineKeyboard()
-        .url(`💬 Chat with Admin`, `https://t.me/${ADMIN_CONTACT_USERNAME}`)
+        .url('💬 Chat with Admin', `https://t.me/${ADMIN_CONTACT_USERNAME}`)
         .row()
         .text('✅ Sudah Donasi', 'donate_enter_key')
         .row()
@@ -206,12 +344,20 @@ donateComposer.callbackQuery('donate_contact', async (ctx: Context) => {
 Hubungi admin untuk donasi:
 👤 @${ADMIN_CONTACT_USERNAME}
 
+*Pilihan Paket:*
+⭐ VIP - Rp5.000/bulan
+👑 VVIP - Rp15.000/bulan
+
 Setelah donasi, kamu akan menerima API key.
 Klik "Sudah Donasi" untuk memasukkan key.`
         : `🛒 *Donate Now*
 
 Contact admin to donate:
 👤 @${ADMIN_CONTACT_USERNAME}
+
+*Available Plans:*
+⭐ VIP - Rp5,000/month
+👑 VVIP - Rp15,000/month
 
 After donation, you'll receive an API key.
 Click "Already Donated" to enter your key.`;
@@ -220,7 +366,7 @@ Click "Already Donated" to enter your key.`;
 });
 
 // Handle enter API key button
-donateComposer.callbackQuery('donate_enter_key', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_enter_key', async (ctx) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -263,7 +409,7 @@ _Format:_ \`dwa_live_xxxxx...\`
 });
 
 // Handle cancel API key input - just delete the message
-donateComposer.callbackQuery('donate_cancel_input', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_cancel_input', async (ctx) => {
     await ctx.answerCallbackQuery('Cancelled');
     
     const userId = ctx.from?.id;
@@ -278,8 +424,8 @@ donateComposer.callbackQuery('donate_cancel_input', async (ctx: Context) => {
     }
 });
 
-// Handle unlink button
-donateComposer.callbackQuery('donate_unlink', async (ctx: Context) => {
+// Handle unlink button - show confirmation
+donateComposer.callbackQuery('donate_unlink', async (ctx) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -298,17 +444,29 @@ donateComposer.callbackQuery('donate_unlink', async (ctx: Context) => {
         ? `⚠️ *Lepaskan API Key?*
 
 Apakah kamu yakin ingin melepaskan API key?
-Kamu akan kehilangan keuntungan donatur sampai menghubungkan key baru.`
+
+*Konsekuensi:*
+• Kamu akan kehilangan status VVIP
+• Kembali ke tier FREE
+• Harus menghubungkan key baru untuk upgrade
+
+Lanjutkan?`
         : `⚠️ *Unlink API Key?*
 
 Are you sure you want to unlink your API key?
-You will lose donator benefits until you link a new key.`;
+
+*Consequences:*
+• You will lose VVIP status
+• Return to FREE tier
+• Must link a new key to upgrade
+
+Continue?`;
 
     await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
 });
 
 // Handle unlink confirmation
-donateComposer.callbackQuery('donate_unlink_confirm', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_unlink_confirm', async (ctx) => {
     await ctx.answerCallbackQuery();
     
     const userId = ctx.from?.id;
@@ -338,17 +496,26 @@ donateComposer.callbackQuery('donate_unlink_confirm', async (ctx: Context) => {
             return;
         }
 
+        const keyboard = new InlineKeyboard()
+            .text('💝 Donasi Lagi', 'cmd:donate')
+            .row()
+            .text('« Menu', 'cmd:menu');
+
         const message = lang === 'id'
             ? `✅ *API Key Dilepaskan*
 
-Akses donatur kamu telah dihapus.
+Akses VVIP kamu telah dihapus.
+Kamu sekarang di tier ${formatTierDisplay(UserTier.FREE)}.
+
 Gunakan /donate untuk menghubungkan API key baru.`
             : `✅ *API Key Unlinked*
 
-Your donator access has been removed.
+Your VVIP access has been removed.
+You are now on ${formatTierDisplay(UserTier.FREE)} tier.
+
 Use /donate to link a new API key.`;
 
-        await ctx.editMessageText(message, { parse_mode: 'Markdown' });
+        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard });
     } catch (error) {
         console.error('[donate_unlink_confirm] Error:', error);
         await ctx.editMessageText('❌ Error unlinking API key. Please try again.');
@@ -356,13 +523,13 @@ Use /donate to link a new API key.`;
 });
 
 // Handle unlink cancel
-donateComposer.callbackQuery('donate_unlink_cancel', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_unlink_cancel', async (ctx) => {
     await ctx.answerCallbackQuery('Cancelled');
     await ctx.deleteMessage();
 });
 
 // Handle donate refresh button
-donateComposer.callbackQuery('donate_refresh', async (ctx: Context) => {
+donateComposer.callbackQuery('donate_refresh', async (ctx) => {
     await ctx.answerCallbackQuery('Refreshing...');
     
     const userId = ctx.from?.id;
@@ -374,8 +541,8 @@ donateComposer.callbackQuery('donate_refresh', async (ctx: Context) => {
     const lang = getUserLanguage(ctx);
 
     try {
-        // Import dynamically to avoid circular dependency
-        const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('./mystatus');
+        // Import from status.ts (merged from mystatus)
+        const { botUserGetPremiumStatus, botUserGetTotalDownloads } = await import('./status');
         const { donatorStatusKeyboard } = await import('../keyboards');
         
         const { user, apiKey } = await botUserGetPremiumStatus(userId);
@@ -388,25 +555,7 @@ donateComposer.callbackQuery('donate_refresh', async (ctx: Context) => {
                 .row()
                 .text('🔑 Saya Punya API Key', 'donate_enter_key');
 
-            const message = lang === 'id'
-                ? `💝 *Paket Donasi DownAria*
-
-Status donatur kamu telah kadaluarsa atau dilepaskan.
-
-✨ *Keuntungan Donatur:*
-• Download sesuai limit API key
-• Tanpa cooldown
-• Multi-URL (max 5/pesan)
-• Prioritas support`
-                : `💝 *DownAria Donation Plan*
-
-Your donator status has expired or been unlinked.
-
-✨ *Donator Benefits:*
-• Downloads based on API key limit
-• No cooldown
-• Multi-URL (max 5/message)
-• Priority support`;
+            const message = buildTierComparisonMessage(lang);
 
             await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard });
             return;
@@ -434,7 +583,7 @@ Your donator status has expired or been unlinked.
         const keyStatus = apiKey.enabled ? `${statusEmoji} Active` : '❌ Disabled';
 
         const message = lang === 'id'
-            ? `👑 *Status Donatur*
+            ? `👑 *Status VVIP*
 
 *API Key:* \`${apiKey.key_preview}\`
 *Status:* ${keyStatus}
@@ -448,7 +597,7 @@ Your donator status has expired or been unlinked.
 • API Requests: ${apiKey.total_requests}
 
 *Success Rate:* ${apiKey.total_requests > 0 ? Math.round((apiKey.success_count / apiKey.total_requests) * 100) : 100}%`
-            : `👑 *Donator Status*
+            : `👑 *VVIP Status*
 
 *API Key:* \`${apiKey.key_preview}\`
 *Status:* ${keyStatus}
@@ -470,8 +619,51 @@ Your donator status has expired or been unlinked.
     }
 });
 
+// Handle donate_link callback (legacy support)
+donateComposer.callbackQuery('donate_link', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    
+    const userId = ctx.from?.id;
+    if (!userId) {
+        await ctx.reply('❌ Unable to identify user.');
+        return;
+    }
+
+    const lang = getUserLanguage(ctx);
+
+    // Cleanup old entries
+    cleanupAwaitingEntries();
+
+    const keyboard = new InlineKeyboard()
+        .text('❌ Batal', 'donate_cancel_input');
+
+    const message = lang === 'id'
+        ? `🔑 *Masukkan API Key*
+
+Kirim API key kamu di pesan berikutnya.
+
+_Format:_ \`dwa_live_xxxxx...\`
+
+⚠️ Kadaluarsa dalam 5 menit.`
+        : `🔑 *Enter Your API Key*
+
+Send your API key in the next message.
+
+_Format:_ \`dwa_live_xxxxx...\`
+
+⚠️ Expires in 5 minutes.`;
+
+    const msg = await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+
+    // Track that we're waiting for this user's API key
+    awaitingApiKey.set(userId, {
+        messageId: msg.message_id,
+        timestamp: Date.now()
+    });
+});
+
 // Handle text messages (for API key input)
-donateComposer.on('message:text', async (ctx: Context, next: () => Promise<void>) => {
+donateComposer.on('message:text', async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId) {
         return next();
@@ -586,20 +778,20 @@ Use /donate to try again.`);
         }
 
         const keyboard = new InlineKeyboard()
-            .text('📊 My Status', 'cmd:mystatus');
+            .text('📊 My Status', 'cmd:status');
 
         const successMessage = lang === 'id'
-            ? `✅ *Donatur Diaktifkan!*
+            ? `✅ *VVIP Diaktifkan!*
 
-Akunmu sekarang terhubung dengan API key donatur.
+Akunmu sekarang ${formatTierDisplay(UserTier.VVIP)}
 
 *API Key:* \`${validation.key.key}\`
 *Kadaluarsa:* ${expiryText}
 
 Nikmati download tanpa batas! 🎉`
-            : `✅ *Donator Activated!*
+            : `✅ *VVIP Activated!*
 
-Your account is now linked to a donator API key.
+Your account is now ${formatTierDisplay(UserTier.VVIP)}
 
 *API Key:* \`${validation.key.key}\`
 *Expires:* ${expiryText}

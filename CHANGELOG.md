@@ -2,6 +2,98 @@
 
 All notable changes to the DownAria Backend API will be documented in this file.
 
+## [2.0.1] - December 30, 2025 - Facebook Fix + New Platforms + Merge API
+
+### 🧪 EXPERIMENTAL: Convert to Audio
+
+New experimental feature to extract audio from videos:
+- Toggle in Settings → Experimental: "🎵 Convert to Audio"
+- Shows MP3/M4A buttons for videos WITHOUT native audio formats
+- Estimates filesize based on duration (128kbps) or 10% of video size
+- Uses `/api/v1/merge` endpoint with ffmpeg audio extraction
+- Works for Facebook, Instagram, TikTok, etc. (not YouTube - already has audio)
+
+### 🆕 NEW PLATFORMS (yt-dlp/gallery-dl based)
+
+Added support for 9 new platforms via generic scraper:
+
+**yt-dlp backends:**
+- BiliBili (requires VPN/cookies for China region)
+- Reddit (requires VPN due to blocking)
+- SoundCloud ✅ Working
+- Eporner (NSFW)
+- PornHub ✅ Working (NSFW)
+- Rule34Video ✅ Working (NSFW)
+
+**gallery-dl backends:**
+- Threads
+- Erome (NSFW)
+- Pixiv (requires auth)
+
+### 🎵 HLS STREAM HANDLING
+
+- Added `isHLS` flag to MediaFormat for HLS/m3u8 streams
+- Generic scraper detects HLS via URL pattern, protocol field, and format_id
+- Prefers direct HTTP URLs over HLS when both available (better for download)
+
+### 🔀 MERGE API REFACTORED
+
+New unified merge endpoints:
+- `POST /api/v1/merge` - General merge for all platforms (HLS → mp4/mp3/m4a)
+- `POST /api/v1/merge/youtube` - YouTube-specific (video+audio merge)
+
+YouTube-specific features:
+- Video-only streams that need audio merge
+- Complex format selection (AV1 > H.264, skip VP9)
+- Accurate filesize estimation from requested_formats
+- Max filesize: 400MB (increased from 350MB)
+
+General merge features:
+- HLS/m3u8 stream conversion via ffmpeg
+- Auto-retry with re-encode if codec copy fails
+- Supports mp4, mp3, m4a output formats
+
+### 🔒 SECURITY
+
+- All shell commands use `spawn()` with array arguments (no shell injection)
+- URL validation before passing to yt-dlp/gallery-dl
+- Timeout handling (45s for scraping, 180s for merge)
+- Memory protection (reject if RAM > 900MB)
+
+### 📊 QUALITY TIER IMPROVEMENTS
+
+- Added support for 8K, 4K, 2K quality tiers
+- Added 240p quality tier
+- Improved format deduplication by quality tier
+
+### 🐳 DOCKER/DEPLOYMENT
+
+- Added gallery-dl to Dockerfile
+- Updated cache bust for rebuild
+
+### 🐛 FACEBOOK BUG FIXES
+
+#### Fixed: Author Extraction Returns Wrong Name
+- **Problem**: Author extraction returned names from suggested content instead of actual post owner
+- **Fix**: Changed `needsLogin()` to always return true when `id="login_form"` is present
+
+#### Fixed: Inconsistent Cookie Retry Logic  
+- **Fix**: `isValid()` now properly checks for login form, ensuring cookie retry happens when needed
+
+#### Fixed: Facebook UA Rotation Causing Failures
+- **Fix**: Added `fixedUA: true` config - now uses fixed iPad Chrome UA
+
+### 🔧 TECHNICAL CHANGES
+
+- Created `api-xtfetch/src/lib/services/generic/index.ts` - Generic scraper service
+- Created `api-xtfetch/src/app/api/v1/merge/route.ts` - General merge endpoint
+- Created `api-xtfetch/src/app/api/v1/merge/youtube/route.ts` - YouTube merge endpoint
+- Updated platform configs, service configs, HTTP headers, timeouts
+- Improved error mapping for yt-dlp errors (NO_VIDEO, NO_MEDIA, GEO_BLOCKED)
+- Removed Bluesky & XiaoHongShu from supported platforms (not working reliably)
+
+---
+
 ## [2.0.0] - December 28, 2025 - Major Bot Reliability & Multi-User Fixes
 
 ### 🚨 CRITICAL BUG FIXES
@@ -68,6 +160,7 @@ All notable changes to the DownAria Backend API will be documented in this file.
 - None - all changes are backward compatible
 
 ---
+
 
 ## [1.9.0] - December 28, 2025 - Bot Refactor Phase 1-3: Complete Implementation
 

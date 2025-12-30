@@ -83,17 +83,21 @@ export interface PlatformHttpConfig {
     mobile: string;
   };
   extraHeaders?: Record<string, string>;
+  fixedUA?: boolean; // If true, don't rotate UA - use fixed UA for consistency
 }
 
 /**
  * Consolidated platform configuration
  * ALL platforms use iPad Chrome as primary UA
+ * Facebook: FIXED iPad UA (no rotation, no fallback) - critical for consistency
  */
 export const PLATFORM_CONFIG: Record<PlatformId, PlatformHttpConfig> = {
   facebook: {
     referer: 'https://web.facebook.com/',
     origin: 'https://web.facebook.com',
     ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] },
+    // Facebook requires consistent UA - no rotation!
+    fixedUA: true,
   },
   instagram: {
     referer: 'https://www.instagram.com/',
@@ -124,6 +128,16 @@ export const PLATFORM_CONFIG: Record<PlatformId, PlatformHttpConfig> = {
     origin: 'https://www.youtube.com',
     ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] },
   },
+  // New platforms (yt-dlp/gallery-dl based) - minimal config
+  bilibili: { referer: 'https://www.bilibili.com/', origin: 'https://www.bilibili.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  reddit: { referer: 'https://www.reddit.com/', origin: 'https://www.reddit.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  soundcloud: { referer: 'https://soundcloud.com/', origin: 'https://soundcloud.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  eporner: { referer: 'https://www.eporner.com/', origin: 'https://www.eporner.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  pornhub: { referer: 'https://www.pornhub.com/', origin: 'https://www.pornhub.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  rule34video: { referer: 'https://rule34video.com/', origin: 'https://rule34video.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  threads: { referer: 'https://www.threads.net/', origin: 'https://www.threads.net', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  erome: { referer: 'https://www.erome.com/', origin: 'https://www.erome.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
+  pixiv: { referer: 'https://www.pixiv.net/', origin: 'https://www.pixiv.net', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -154,14 +168,25 @@ interface HeaderOptions {
  * Get headers for platform request
  * PRIMARY: iPad Chrome (rotated)
  * FALLBACK: Desktop Chrome (when useFallback=true)
+ * EXCEPTION: Facebook uses FIXED iPad UA (no rotation, no fallback)
  */
 export function httpGetHeaders(platform: PlatformId, options?: HeaderOptions): Record<string, string> {
   const { cookie, referer, useFallback = false, extra } = options || {};
   const config = PLATFORM_CONFIG[platform];
 
-  // iPad Chrome primary, Desktop Chrome fallback
-  const ua = useFallback ? getNextDesktopUA() : getNextIpadUA();
-  const isDesktop = useFallback;
+  // Facebook: FIXED iPad UA (no rotation, no fallback) - critical for consistency
+  // Other platforms: iPad Chrome primary, Desktop Chrome fallback
+  let ua: string;
+  let isDesktop = false;
+  
+  if (config.fixedUA) {
+    // Fixed UA - always use the same iPad UA, ignore useFallback
+    ua = config.ua.desktop; // This is UA_IPAD[0]
+  } else {
+    // Normal rotation
+    ua = useFallback ? getNextDesktopUA() : getNextIpadUA();
+    isDesktop = useFallback;
+  }
 
   const headers: Record<string, string> = {
     'User-Agent': ua,

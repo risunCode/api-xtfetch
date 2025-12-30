@@ -9,25 +9,28 @@ export * from './types';
 // Re-export utils
 export * from './utils';
 
-// Re-export scrapers
-export { scrapeFacebook } from '@/lib/services/facebook';
-export { scrapeInstagram } from '@/lib/services/instagram';
-export { scrapeTwitter } from '@/lib/services/twitter';
-export { scrapeTikTok } from '@/lib/services/tiktok';
-export { scrapeWeibo } from '@/lib/services/weibo';
-export { scrapeYouTube } from '@/lib/services/youtube';
-
-// Types
-import type { ScraperResult, ScraperOptions, ScraperFn, PlatformId } from './types';
-
-// Imports for factory
+// Import scrapers (used for both re-export and factory)
 import { scrapeFacebook } from '@/lib/services/facebook';
 import { scrapeInstagram } from '@/lib/services/instagram';
 import { scrapeTwitter } from '@/lib/services/twitter';
 import { scrapeTikTok } from '@/lib/services/tiktok';
 import { scrapeWeibo } from '@/lib/services/weibo';
 import { scrapeYouTube } from '@/lib/services/youtube';
+import { scrapeGeneric } from '@/lib/services/generic';
+
+// Re-export scrapers
+export { scrapeFacebook, scrapeInstagram, scrapeTwitter, scrapeTikTok, scrapeWeibo, scrapeYouTube, scrapeGeneric };
+
+// Types
+import type { ScraperResult, ScraperOptions, ScraperFn, PlatformId } from './types';
+import type { GenericPlatform } from '@/lib/services/generic';
 import { ScraperErrorCode as ErrorCode } from './types';
+
+// Platforms that use the generic scraper (yt-dlp/gallery-dl)
+const GENERIC_PLATFORMS: GenericPlatform[] = [
+    'bilibili', 'reddit', 'soundcloud',
+    'eporner', 'pornhub', 'rule34video', 'threads', 'erome', 'pixiv',
+];
 
 export function getScraper(platform: PlatformId): ScraperFn | null {
     const scrapers: Partial<Record<PlatformId, ScraperFn>> = {
@@ -46,6 +49,11 @@ export async function runScraper(
     url: string,
     options?: ScraperOptions
 ): Promise<ScraperResult> {
+    // Check if platform uses generic scraper
+    if (GENERIC_PLATFORMS.includes(platform as GenericPlatform)) {
+        return scrapeGeneric(url, platform as GenericPlatform, options);
+    }
+    
     const scraper = getScraper(platform);
     if (!scraper) {
         return {
@@ -64,6 +72,16 @@ export const SUPPORTED_PLATFORMS: PlatformId[] = [
     'tiktok',
     'weibo',
     'youtube',
+    // Generic platforms (yt-dlp/gallery-dl)
+    'bilibili',
+    'reddit',
+    'soundcloud',
+    'eporner',
+    'pornhub',
+    'rule34video',
+    'threads',
+    'erome',
+    'pixiv',
 ];
 
 export function isPlatformSupported(platform: string): platform is PlatformId {

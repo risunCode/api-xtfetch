@@ -3,6 +3,8 @@
  * Environment variables and constants for the bot
  */
 
+import { UserTier } from './types';
+
 // ============================================================================
 // Environment Variables
 // ============================================================================
@@ -43,6 +45,60 @@ export const PREMIUM_DOWNLOAD_LIMIT = 0;
 
 /** Premium cooldown in seconds (auto-queue) */
 export const PREMIUM_COOLDOWN_SECONDS = 0;
+
+// ============================================================================
+// Tier Limits Configuration
+// ============================================================================
+
+// Tier rate limits configuration
+export const TIER_LIMITS = {
+  [UserTier.FREE]: {
+    dailyLimit: 8,
+    cooldownSeconds: 4,
+    hasApiAccess: false,
+    description: 'Free User',
+    icon: '🆓',
+  },
+  [UserTier.VIP]: {
+    requestsPerWindow: 15,
+    windowMinutes: 2,
+    cooldownSeconds: 8, // effective cooldown
+    hasApiAccess: false,
+    description: 'Donator',
+    icon: '⭐',
+  },
+  [UserTier.VVIP]: {
+    requestsPerWindow: 15,
+    windowMinutes: 2,
+    cooldownSeconds: 8,
+    hasApiAccess: true,
+    description: 'Donator Premium',
+    icon: '👑',
+  },
+} as const;
+
+export type TierLimits = typeof TIER_LIMITS;
+
+// ============================================================================
+// Tier Helper Functions
+// ============================================================================
+
+export function getTierInfo(tier: UserTier) {
+  return TIER_LIMITS[tier];
+}
+
+export function getTierIcon(tier: UserTier): string {
+  return TIER_LIMITS[tier].icon;
+}
+
+export function getTierDescription(tier: UserTier): string {
+  return TIER_LIMITS[tier].description;
+}
+
+export function formatTierDisplay(tier: UserTier): string {
+  const info = TIER_LIMITS[tier];
+  return `${info.icon} ${info.description}`;
+}
 
 // ============================================================================
 // Bot Settings
@@ -98,12 +154,10 @@ I'll download it for you! 🚀`,
 3. Receive your video!
 
 *Supported platforms:*
-• Instagram (Reels, Posts, Stories)
-• TikTok
-• Twitter/X
-• Facebook
-• YouTube
-• Weibo
+• Facebook • Instagram • Twitter/X
+• TikTok • YouTube • Weibo
+• BiliBili • Reddit • SoundCloud
+• Threads • Pixiv • Erome • Eporner • PornHub • Rule34Video
 
 *Commands:*
 /start - Start the bot
@@ -125,10 +179,5 @@ export function botConfigIsValid(): boolean {
 
 /** Check if user is admin */
 export function botIsAdmin(userId: number): boolean {
-  const isAdmin = TELEGRAM_ADMIN_IDS.includes(userId);
-  // Debug log for troubleshooting
-  if (!isAdmin && TELEGRAM_ADMIN_IDS.length > 0) {
-    console.log(`[botIsAdmin] User ${userId} not in admin list: [${TELEGRAM_ADMIN_IDS.join(', ')}]`);
-  }
-  return isAdmin;
+  return TELEGRAM_ADMIN_IDS.includes(userId);
 }

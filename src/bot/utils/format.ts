@@ -44,38 +44,11 @@ export function sanitizeTitle(title: string | undefined | null, maxLength: numbe
 }
 
 // ============================================================================
-// MARKDOWN ESCAPING
+// RE-EXPORTS (for backward compatibility)
 // ============================================================================
 
-/**
- * Escape Telegram Markdown special characters
- * For use with parse_mode: 'Markdown' (v1)
- * 
- * Special chars: _ * [ ] ( ) ~ ` > # + - = | { } . !
- * 
- * @param text - Raw text
- * @returns Escaped text safe for Markdown
- */
-export function escapeMarkdownV1(text: string): string {
-    if (!text) return '';
-    return text.replace(/([_*\[\]()~`>#+=|{}.!\\-])/g, '\\$1');
-}
-
-/**
- * Escape Telegram MarkdownV2 special characters
- * For use with parse_mode: 'MarkdownV2'
- * 
- * @param text - Raw text
- * @returns Escaped text safe for MarkdownV2
- */
-export function escapeMarkdownV2(text: string): string {
-    if (!text) return '';
-    return text.replace(/([_*\[\]()~`>#+=|{}.!\\-])/g, '\\$1');
-}
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
+// escapeMarkdown is now in helpers/caption.ts - import from there
+export { escapeMarkdown } from '../helpers';
 
 export {
     sanitizeTitle as default,

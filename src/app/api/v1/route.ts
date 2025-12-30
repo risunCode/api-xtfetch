@@ -68,10 +68,11 @@ export async function GET(request: NextRequest) {
         // Verify API key
         const keyValidation = await validateApiKey(apiKey);
         if (!keyValidation.valid) {
+            // Generic error message - don't reveal if key is invalid vs expired (security)
             return NextResponse.json(
                 {
                     success: false,
-                    error: keyValidation.error || 'Invalid or expired API key',
+                    error: 'Invalid credentials',
                     meta: {
                         tier: 'premium',
                         endpoint: '/api/v1'

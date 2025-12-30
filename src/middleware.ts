@@ -166,6 +166,7 @@ const AUTH_RATE_LIMITS: Record<string, { requests: number; window: number }> = {
     '/api/admin/session': { requests: 5, window: 900000 },  // 5 attempts per 15 minutes
     '/api/admin/login': { requests: 5, window: 900000 },    // 5 attempts per 15 minutes
     '/api/v1/auth': { requests: 10, window: 1800000 },      // 10 attempts per 30 minutes
+    '/api/bot/setup': { requests: 5, window: 900000 },      // 5 attempts per 15 minutes (admin endpoint)
 };
 
 // Get rate limit config for a given path and tier
@@ -282,8 +283,10 @@ function getCorsHeaders(origin: string | null, pathname: string = '', request?: 
             // If origin is present but invalid, don't set CORS headers (browser will block)
         } else {
             // No origin = server-to-server or direct browser navigation (img src, etc.)
-            // Allow these for media embedding functionality
+            // Allow these for media embedding functionality, but WITHOUT credentials
+            // SECURITY: Never use * with credentials - this is a security vulnerability
             headers['Access-Control-Allow-Origin'] = '*';
+            // Explicitly do NOT set Access-Control-Allow-Credentials when using *
         }
         return headers;
     }

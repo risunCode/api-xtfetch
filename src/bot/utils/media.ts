@@ -85,12 +85,7 @@ function needsDownloadFirst(url: string): boolean {
   return CDN_DOMAINS_REQUIRE_DOWNLOAD.some(domain => url.includes(domain));
 }
 
-/**
- * Escape Markdown special characters
- */
-function escapeMarkdown(text: string): string {
-  return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
-}
+import { escapeMarkdown, buildSimpleCaptionFromResult, log } from '../helpers';
 
 /**
  * Build simple caption - just username/author
@@ -99,17 +94,7 @@ function escapeMarkdown(text: string): string {
  * @param _originalUrl - Original URL (kept for API compatibility, not used in caption)
  */
 export function buildSimpleCaption(result: DownloadResult, _originalUrl?: string): string {
-  const platform = result.platform;
-  
-  // Just author/username
-  if (result.author) {
-    // Add @ for Twitter/Instagram/TikTok if not already present
-    const needsAt = ['twitter', 'instagram', 'tiktok'].includes(platform || '');
-    const authorPrefix = needsAt && !result.author.startsWith('@') ? '@' : '';
-    return `${authorPrefix}${escapeMarkdown(result.author)}`;
-  }
-  
-  return '';
+  return buildSimpleCaptionFromResult(result, _originalUrl);
 }
 
 /**
@@ -220,7 +205,7 @@ export async function fetchWithRetry(url: string, maxRetries = MAX_RETRY_ATTEMPT
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[Media.Fetch] Attempt ${attempt}/${maxRetries}${shouldProxy ? ' (via proxy)' : ''}`);
+      log.media(`Fetch attempt ${attempt}/${maxRetries}${shouldProxy ? ' (via proxy)' : ''}`);
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
@@ -241,16 +226,16 @@ export async function fetchWithRetry(url: string, maxRetries = MAX_RETRY_ATTEMPT
       }
       
       const buffer = Buffer.from(await response.arrayBuffer());
-      console.log(`[Media.Fetch] Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+      log.media(`Downloaded ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
       return buffer;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error';
-      console.log(`[Media.Fetch] Attempt ${attempt} failed: ${msg}`);
+      log.media(`Attempt ${attempt} failed: ${msg}`);
       
       if (attempt < maxRetries) {
         // Exponential backoff: 2s, 4s
         const delay = 2000 * attempt;
-        console.log(`[Media.Fetch] Retrying in ${delay}ms...`);
+        log.media(`Retrying in ${delay}ms...`);
         await new Promise(r => setTimeout(r, delay));
       } else {
         throw new Error(`All ${maxRetries} attempts failed: ${msg}`);
@@ -275,7 +260,7 @@ async function sendChatAction(
       await options.api.sendChatAction(options.chatId, action);
     }
   } catch (err) {
-    console.warn('[Media] Chat action failed:', err instanceof Error ? err.message : 'Unknown error');
+    // Silent fail for chat action - not critical
   }
 }
 
@@ -354,7 +339,7 @@ async function deleteMessage(options: SendMediaOptions, messageId: number): Prom
       await options.api.deleteMessage(options.chatId, messageId);
     }
   } catch (err) {
-    console.warn('[Media] Delete message failed:', err instanceof Error ? err.message : 'Unknown error');
+    // Silent fail for delete - not critical
   }
 }
 
@@ -391,7 +376,7 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
   
   // All formats exceed 40MB - send direct link WITHOUT downloading
   if (allExceedLimit) {
-    console.log(`[Media.Video] All formats exceed 40MB limit, sending direct link only`);
+    log.media('All formats exceed 40MB limit, sending direct link only');
     
     if (processingMsgId) {
       await deleteMessage(options, processingMsgId);
@@ -425,7 +410,6 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
           return { success: true };
         }
       } catch (err) {
-        console.warn('[Media] Thumbnail send failed:', err instanceof Error ? err.message : 'Unknown error');
         // Fall through to text message
       }
     }
@@ -468,13 +452,12 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
       const optimizedUrl = videoUrl.includes('fbcdn.net') ? optimizeCdnUrl(videoUrl) : videoUrl;
       
       const expectedSize = videoToSend.filesize ? (videoToSend.filesize / 1024 / 1024).toFixed(1) : '?';
-      console.log(`[Media.Video] Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN`);
-      console.log(`[Media.Video] URL: ${optimizedUrl}`);
+      log.media(`Downloading ${videoToSend.quality} (~${expectedSize}MB) from CDN`);
       
       await sendChatAction(options, 'upload_video');
       
       buffer = await fetchWithRetry(optimizedUrl, MAX_RETRY_ATTEMPTS, result.platform);
-      console.log(`[Media.Video] Uploading to Telegram...`);
+      log.media('Uploading to Telegram...');
       
       await sendChatAction(options, 'upload_video');
       await sendVideo(options, new InputFile(buffer, 'video.mp4'), caption || undefined, keyboard);
@@ -511,21 +494,16 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
             const thumbBuffer = await fetchWithRetry(result.thumbnail, MAX_RETRY_ATTEMPTS, result.platform);
             await sendPhoto(options, new InputFile(thumbBuffer, 'thumb.jpg'), fallbackCaption, fallbackKeyboard);
             if (processingMsgId) {
-              await deleteMessage(options, processingMsgId).catch((err) => {
-                console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
-              });
+              await deleteMessage(options, processingMsgId).catch(() => {});
             }
             return { success: true };
           } catch (err) {
-            console.warn('[Media] Fallback thumbnail download failed:', err instanceof Error ? err.message : 'Unknown error');
             // Fall through
           }
         } else {
           await sendPhoto(options, new InputFile({ url: result.thumbnail }), fallbackCaption, fallbackKeyboard);
           if (processingMsgId) {
-            await deleteMessage(options, processingMsgId).catch((err) => {
-              console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
-            });
+            await deleteMessage(options, processingMsgId).catch(() => {});
           }
           return { success: true };
         }
@@ -533,18 +511,14 @@ async function sendVideoMedia(options: SendMediaOptions): Promise<SendMediaResul
       
       await sendMessage(options, fallbackCaption, fallbackKeyboard);
       if (processingMsgId) {
-        await deleteMessage(options, processingMsgId).catch((err) => {
-          console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
-        });
+        await deleteMessage(options, processingMsgId).catch(() => {});
       }
       return { success: true };
     } catch (fallbackError) {
       logger.error('telegram', fallbackError, 'SEND_VIDEO_FALLBACK');
       // Always cleanup processingMsgId on error
       if (processingMsgId) {
-        await deleteMessage(options, processingMsgId).catch((err) => {
-          console.warn('[Media] Cleanup delete failed:', err instanceof Error ? err.message : 'Unknown error');
-        });
+        await deleteMessage(options, processingMsgId).catch(() => {});
       }
       return { success: false, error: 'Failed to send video and fallback' };
     }
@@ -702,7 +676,7 @@ export async function sendMedia(options: SendMediaOptions): Promise<SendMediaRes
   // Detect content type
   const contentType = detectContentType(result);
   
-  console.log(`[Media.Send] Content type: ${contentType}, Platform: ${result.platform}`);
+  log.media(`Content type: ${contentType}, Platform: ${result.platform}`);
   
   switch (contentType) {
     case 'youtube':
@@ -726,10 +700,12 @@ export async function sendMedia(options: SendMediaOptions): Promise<SendMediaRes
 // ============================================================================
 
 export {
-  escapeMarkdown,
   getPlatformName,
   needsDownloadFirst,
   findHdVideo,
   findSdVideo,
   deduplicateImages,
 };
+
+// Re-export escapeMarkdown from helpers for backward compatibility
+export { escapeMarkdown } from '../helpers';

@@ -67,6 +67,16 @@ export const PLATFORM_TIMEOUTS: Record<PlatformId, number> = {
   tiktok: 10000,     // 10s - optimized CDN
   weibo: 20000,      // 20s - China latency
   youtube: 25000,    // 25s - large payloads
+  // New platforms (yt-dlp/gallery-dl based)
+  bilibili: 30000,   // 30s - China latency
+  reddit: 20000,     // 20s
+  soundcloud: 20000, // 20s
+  eporner: 25000,    // 25s
+  pornhub: 25000,    // 25s
+  rule34video: 25000, // 25s
+  threads: 20000,    // 20s
+  erome: 25000,      // 25s
+  pixiv: 30000,      // 30s - may need auth
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

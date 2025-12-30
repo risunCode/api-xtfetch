@@ -263,6 +263,188 @@ export const SEND_STRATEGY = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// STORIES NAVIGATION KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Stories initial menu keyboard - shown when multiple stories are detected
+ * Allows user to download all stories or select specific ones
+ * 
+ * Callback patterns:
+ * - story:{visitorId}:all - Download all stories
+ * - story:{visitorId}:select - Open story selection/navigation
+ * - cancel - Cancel the operation
+ * 
+ * @param storyCount - Number of stories detected
+ * @param visitorId - Unique identifier for this download session
+ * @returns InlineKeyboard with story menu options
+ */
+export function buildStoriesMenuKeyboard(storyCount: number, visitorId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`📥 Download Semua (${storyCount})`, `story:${visitorId}:all`)
+    .row()
+    .text('🔢 Pilih Story', `story:${visitorId}:select`)
+    .row()
+    .text('❌ Cancel', 'cancel');
+}
+
+/**
+ * Stories navigation keyboard - Prev/Next navigation for browsing stories
+ * Shows current position and allows downloading current or all stories
+ * 
+ * Callback patterns:
+ * - story:{visitorId}:prev - Go to previous story
+ * - story:{visitorId}:next - Go to next story
+ * - story:{visitorId}:current - Download current story
+ * - story:{visitorId}:all - Download all stories
+ * - cancel - Cancel the operation
+ * - noop - Disabled button (no operation)
+ * 
+ * @param visitorId - Unique identifier for this download session
+ * @param currentIndex - Current story index (0-based)
+ * @param totalStories - Total number of stories
+ * @returns InlineKeyboard with navigation and download options
+ */
+export function buildStoriesNavKeyboard(
+  visitorId: string,
+  currentIndex: number,
+  totalStories: number
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  
+  // Prev/Next row
+  if (currentIndex > 0) {
+    kb.text('◀️ Prev', `story:${visitorId}:prev`);
+  } else {
+    kb.text('◀️', 'noop'); // disabled
+  }
+  
+  if (currentIndex < totalStories - 1) {
+    kb.text('Next ▶️', `story:${visitorId}:next`);
+  } else {
+    kb.text('▶️', 'noop'); // disabled
+  }
+  
+  kb.row()
+    .text('📥 Download Story Ini', `story:${visitorId}:current`)
+    .row()
+    .text('📥 Download Semua', `story:${visitorId}:all`)
+    .row()
+    .text('❌ Cancel', 'cancel');
+  
+  return kb;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// YOUTUBE QUALITY KEYBOARDS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * YouTube quality option interface
+ */
+export interface YouTubeQuality {
+  quality: string;  // e.g., '1080p', '720p', 'm4a'
+  label: string;    // e.g., '🎬 1080p', '🎵 M4A'
+}
+
+/**
+ * Build YouTube quality selection keyboard
+ * Displays video qualities (2 per row) and audio qualities (same row)
+ * 
+ * Callback patterns:
+ * - yt:{visitorId}:{quality} - Select specific quality
+ * - yt:{visitorId}:cancel - Cancel the operation
+ * 
+ * @param visitorId - Unique identifier for this download session
+ * @param qualities - Array of available quality options
+ * @returns InlineKeyboard with quality selection buttons
+ * 
+ * @example
+ * const qualities: YouTubeQuality[] = [
+ *   { quality: '1080p', label: '🎬 1080p' },
+ *   { quality: '720p', label: '📺 720p' },
+ *   { quality: 'm4a', label: '🎵 M4A' },
+ * ];
+ * const keyboard = buildYouTubeQualityKeyboard(visitorId, qualities);
+ */
+export function buildYouTubeQualityKeyboard(
+  visitorId: string,
+  qualities: YouTubeQuality[]
+): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  
+  // Video qualities (2 per row)
+  const videoQualities = qualities.filter(q => !['m4a', 'mp3'].includes(q.quality.toLowerCase()));
+  const audioQualities = qualities.filter(q => ['m4a', 'mp3'].includes(q.quality.toLowerCase()));
+  
+  for (let i = 0; i < videoQualities.length; i += 2) {
+    const q1 = videoQualities[i];
+    kb.text(q1.label, `yt:${visitorId}:${q1.quality}`);
+    
+    if (videoQualities[i + 1]) {
+      const q2 = videoQualities[i + 1];
+      kb.text(q2.label, `yt:${visitorId}:${q2.quality}`);
+    }
+    kb.row();
+  }
+  
+  // Audio qualities (same row)
+  if (audioQualities.length > 0) {
+    for (const q of audioQualities) {
+      kb.text(q.label, `yt:${visitorId}:${q.quality}`);
+    }
+    kb.row();
+  }
+  
+  kb.text('❌ Cancel', `yt:${visitorId}:cancel`);
+  
+  return kb;
+}
+
+/**
+ * Helper to build quality label with emoji
+ * Maps quality strings to user-friendly labels
+ * 
+ * @param quality - Quality string (e.g., '1080p', 'm4a')
+ * @returns Formatted label with emoji (e.g., '🎬 1080p', '🎵 M4A')
+ */
+export function getQualityLabel(quality: string): string {
+  const labels: Record<string, string> = {
+    '2160p': '🎬 4K',
+    '1440p': '🎬 2K',
+    '1080p': '🎬 1080p',
+    '720p': '📺 720p',
+    '480p': '📱 480p',
+    '360p': '📼 360p',
+    '240p': '📼 240p',
+    'm4a': '🎵 M4A',
+    'mp3': '🎵 MP3',
+  };
+  return labels[quality.toLowerCase()] || `📥 ${quality}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DONATE UNLINK CONFIRMATION KEYBOARD
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Build unlink confirmation keyboard for donate feature
+ * Shows confirmation buttons for unlinking API key
+ * 
+ * Callback patterns:
+ * - donate_unlink_confirm - Confirm unlink action
+ * - donate_unlink_cancel - Cancel unlink action
+ * 
+ * @returns InlineKeyboard with confirm/cancel buttons
+ */
+export function buildUnlinkConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Ya, Unlink', 'donate_unlink_confirm')
+    .row()
+    .text('❌ Batal', 'donate_unlink_cancel');
+}
+
+// ═══════════════════════════════════════════════════════════════
 // STATUS KEYBOARDS
 // ═══════════════════════════════════════════════════════════════
 
