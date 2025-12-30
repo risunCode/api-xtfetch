@@ -5,34 +5,16 @@
 
 import { NextResponse } from 'next/server';
 import { serviceConfigGetAsync, serviceConfigLoad } from '@/core/config';
-import { supabase } from '@/lib/database';
 
 export async function GET() {
     try {
         // ALWAYS force refresh from DB for status endpoint
         await serviceConfigLoad(true);
         const config = await serviceConfigGetAsync();
-        
+
         const platforms = Object.values(config.platforms);
         const maintenance = config.maintenanceType !== 'off' && config.maintenanceMode;
         const maintenanceMessage = config.maintenanceMessage;
-
-        let maintenanceContent: string | null = null;
-        let maintenanceLastUpdated: string | null = null;
-        
-        if (maintenance && supabase) {
-            const { data } = await supabase
-                .from('global_settings')
-                .select('key, value')
-                .in('key', ['maintenance_content', 'maintenance_last_updated']);
-            
-            if (data) {
-                for (const row of data) {
-                    if (row.key === 'maintenance_content') maintenanceContent = row.value;
-                    if (row.key === 'maintenance_last_updated') maintenanceLastUpdated = row.value;
-                }
-            }
-        }
 
         const status = platforms.map((p: { id: string; name: string; enabled: boolean }) => ({
             id: p.id,
@@ -47,8 +29,6 @@ export async function GET() {
                 maintenance,
                 maintenanceType: config.maintenanceType, // 'off' | 'api' | 'full'
                 maintenanceMessage: maintenance ? maintenanceMessage : null,
-                maintenanceContent: maintenance ? maintenanceContent : null,
-                maintenanceLastUpdated: maintenance ? maintenanceLastUpdated : null,
                 platforms: status,
                 apiVersion: 'v1',
                 endpoints: {

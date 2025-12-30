@@ -68,12 +68,37 @@ export interface ErrorDisplay {
 // --- Constants ---
 
 const ALLOWED_DOMAINS = [
-    'facebook.com', 'fb.com', 'fb.watch', 'fbcdn.net',
+    // Facebook
+    'facebook.com', 'fb.com', 'fb.watch', 'fbcdn.net', 'fbsbx.com',
+    // Instagram
     'instagram.com', 'cdninstagram.com', 'instagr.am',
-    'twitter.com', 'x.com', 't.co', 'twimg.com',
-    'tiktok.com', 'tiktokcdn.com', 'musical.ly',
-    'weibo.com', 'weibo.cn', 'sinaimg.cn',
-    'youtube.com', 'youtu.be', 'googlevideo.com', 'ytimg.com',
+    // Twitter/X
+    'twitter.com', 'x.com', 't.co', 'twimg.com', 'video.twimg.com', 'pbs.twimg.com',
+    // TikTok / Douyin
+    'tiktok.com', 'tiktokcdn.com', 'musical.ly', 'tiktokcdn-us.com', 'tiktokv.com',
+    'douyin.com', 'douyinpic.com', 'douyinvod.com', 'amemv.com', 'snssdk.com', 'bytedance.com', 'bytecdn.cn', 'ixigua.com',
+    // Weibo
+    'weibo.com', 'weibo.cn', 'sinaimg.cn', 'weibocdn.com', 'miaopai.com',
+    // YouTube
+    'youtube.com', 'youtu.be', 'googlevideo.com', 'ytimg.com', 'ggpht.com',
+    // BiliBili
+    'bilibili.com', 'bilivideo.com', 'bilivideo.cn', 'hdslb.com', 'biliimg.com', 'acgvideo.com',
+    // Reddit
+    'reddit.com', 'redd.it', 'redditmedia.com', 'redditstatic.com', 'redgifs.com', 'i.redd.it', 'v.redd.it', 'preview.redd.it',
+    // SoundCloud
+    'soundcloud.com', 'sndcdn.com', 'soundcloud.app.goo.gl',
+    // Eporner
+    'eporner.com', 'cdn.eporner.com', 'static-cdn.eporner.com', 'boomio-cdn.com',
+    // PornHub
+    'pornhub.com', 'phncdn.com', 'pornhubpremium.com', 'modelhub.com',
+    // Rule34Video
+    'rule34video.com', 'rule34.xxx', 'rule34.paheal.net', 'rule34hentai.net', 'thisvid.com',
+    // Threads
+    'threads.net', 'threads.com',
+    // Erome
+    'erome.com', 'cdn.erome.com', 'media.erome.com', 's.erome.com',
+    // Pixiv
+    'pixiv.net', 'pximg.net', 'fanbox.cc', 'i.pximg.net',
 ];
 
 const BLOCKED_PATTERNS = [
@@ -165,13 +190,13 @@ function getDerivedKey(salt: Buffer): Buffer {
  */
 function hasEnoughEntropy(str: string): boolean {
     if (!str || str.length < 32) return false;
-    
+
     // Calculate character frequency
     const freq: Record<string, number> = {};
     for (const char of str) {
         freq[char] = (freq[char] || 0) + 1;
     }
-    
+
     // Calculate Shannon entropy
     let entropy = 0;
     const len = str.length;
@@ -179,7 +204,7 @@ function hasEnoughEntropy(str: string): boolean {
         const p = count / len;
         entropy -= p * Math.log2(p);
     }
-    
+
     // Require at least 3.5 bits of entropy per character
     // A truly random 32-char string should have ~5-6 bits
     return entropy >= 3.5;
@@ -187,22 +212,22 @@ function hasEnoughEntropy(str: string): boolean {
 
 function getEncryptionKey(): string {
     const key = process.env.ENCRYPTION_KEY;
-    
+
     // SECURITY: Always require ENCRYPTION_KEY in all environments
     if (!key) {
         throw new Error('ENCRYPTION_KEY environment variable is required');
     }
-    
+
     // Validate key length
     if (key.length < 32) {
         throw new Error('ENCRYPTION_KEY must be at least 32 characters');
     }
-    
+
     // Validate key entropy to prevent weak keys
     if (!hasEnoughEntropy(key)) {
         throw new Error('ENCRYPTION_KEY has insufficient entropy - use a cryptographically random key');
     }
-    
+
     return key;
 }
 

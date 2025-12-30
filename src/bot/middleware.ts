@@ -179,16 +179,16 @@ export const authMiddleware: MiddlewareFn<BotContext> = async (ctx, next) => {
 export function botRateLimitGetResetTime(): Date {
   const now = new Date();
   const nextMidnight = new Date(now);
-  
+
   // Midnight WIB = 17:00 UTC
   if (now.getUTCHours() >= 17) {
     // Already past 17:00 UTC (midnight WIB), so next reset is tomorrow
     nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
   }
-  
+
   // Set to 17:00 UTC (00:00 WIB)
   nextMidnight.setUTCHours(17, 0, 0, 0);
-  
+
   return nextMidnight;
 }
 
@@ -199,10 +199,10 @@ function getTimeUntilReset(): { hours: number; minutes: number } {
   const resetTime = botRateLimitGetResetTime();
   const now = Date.now();
   const diffMs = resetTime.getTime() - now;
-  
+
   const hours = Math.floor(diffMs / (1000 * 60 * 60));
   const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-  
+
   return { hours: Math.max(0, hours), minutes: Math.max(0, minutes) };
 }
 
@@ -290,10 +290,10 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
       });
       return;
     }
-    
-    ctx.rateLimit = { 
-      remaining: Infinity, 
-      cooldownSeconds: tierConfig.cooldownSeconds 
+
+    ctx.rateLimit = {
+      remaining: Infinity,
+      cooldownSeconds: tierConfig.cooldownSeconds
     };
     return next();
   }
@@ -301,18 +301,18 @@ export const rateLimitMiddleware: MiddlewareFn<BotContext> = async (ctx, next) =
   // Free tier: Check daily limit
   const freeConfig = tierConfig as typeof TIER_LIMITS[UserTier.FREE];
   const { hours, minutes } = getTimeUntilReset();
-  
+
   if (user.daily_downloads >= freeConfig.dailyLimit) {
     const msg = lang === 'id'
       ? `❌ Batas harian tercapai (${user.daily_downloads}/${freeConfig.dailyLimit})\n\n` +
-        `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
-        `💝 Upgrade ke Paket Donasi mulai Rp5.000\n` +
-        `🌐 Atau akses via website untuk lanjut download!`
+      `⏰ Reset: 00:00 WIB (${hours}j ${minutes}m lagi)\n\n` +
+      `💝 Upgrade ke Paket Donasi mulai Rp5.000\n` +
+      `🌐 Atau akses via website untuk lanjut download!`
       : `❌ Daily limit reached (${user.daily_downloads}/${freeConfig.dailyLimit})\n\n` +
-        `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
-        `💝 Upgrade to Donation Plan from Rp5,000\n` +
-        `🌐 Or access via website to continue!`;
-    
+      `⏰ Resets at: 00:00 WIB (in ${hours}h ${minutes}m)\n\n` +
+      `💝 Upgrade to Donation Plan from Rp5,000\n` +
+      `🌐 Or access via website to continue!`;
+
     await ctx.reply(msg, {
       reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
       reply_markup: {
@@ -389,18 +389,18 @@ const FREE_MULTI_URL_DAILY_LIMIT = 10;
  */
 export async function getMultiUrlUsage(userId: number): Promise<{ used: number; remaining: number; resetAt: Date }> {
   const resetAt = botRateLimitGetResetTime();
-  
+
   if (!redis) {
     return { used: 0, remaining: FREE_MULTI_URL_DAILY_LIMIT, resetAt };
   }
-  
+
   try {
     const key = `bot:multiurl:${userId}`;
     const used = parseInt(await redis.get(key) || '0', 10);
-    return { 
-      used, 
+    return {
+      used,
       remaining: Math.max(0, FREE_MULTI_URL_DAILY_LIMIT - used),
-      resetAt 
+      resetAt
     };
   } catch {
     return { used: 0, remaining: FREE_MULTI_URL_DAILY_LIMIT, resetAt };
@@ -421,12 +421,12 @@ export async function canUseMultiUrl(userId: number): Promise<boolean> {
  */
 export async function recordMultiUrlUsage(userId: number): Promise<void> {
   if (!redis) return;
-  
+
   try {
     const key = `bot:multiurl:${userId}`;
     const resetAt = botRateLimitGetResetTime();
     const ttlSeconds = Math.ceil((resetAt.getTime() - Date.now()) / 1000);
-    
+
     // Increment counter with TTL until midnight WIB
     const current = await redis.incr(key);
     if (current === 1) {
@@ -448,19 +448,19 @@ export async function recordMultiUrlUsage(userId: number): Promise<void> {
  */
 export async function isDuplicateRequest(userId: number, url: string): Promise<boolean> {
   if (!redis) return false;
-  
+
   // Create hash of URL for shorter key
   const urlHash = url.split('').reduce((a, b) => {
     a = ((a << 5) - a) + b.charCodeAt(0);
     return a & a;
   }, 0).toString(36);
-  
+
   const key = `bot:dedup:${userId}:${urlHash}`;
-  
+
   try {
     const exists = await redis.get(key);
     if (exists) return true;
-    
+
     await redis.set(key, '1', { ex: DEDUP_TTL_SECONDS });
     return false;
   } catch {
@@ -473,14 +473,14 @@ export async function isDuplicateRequest(userId: number, url: string): Promise<b
  */
 export async function clearDuplicateRequest(userId: number, url: string): Promise<void> {
   if (!redis) return;
-  
+
   const urlHash = url.split('').reduce((a, b) => {
     a = ((a << 5) - a) + b.charCodeAt(0);
     return a & a;
   }, 0).toString(36);
-  
+
   const key = `bot:dedup:${userId}:${urlHash}`;
-  await redis.del(key).catch(() => {});
+  await redis.del(key).catch(() => { });
 }
 
 // ============================================================================
@@ -506,31 +506,31 @@ export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next)
   // Force refresh config from DB
   await serviceConfigLoad(true);
   const config = serviceConfigGet();
-  
+
   const isMaintenanceMode = config.maintenanceMode === true;
   const maintenanceType = String(config.maintenanceType || 'off') as MaintenanceType;
-  
-  // Block on full maintenance or 'all' (not API-only)
-  const shouldBlock = isMaintenanceMode && (maintenanceType === 'full' || maintenanceType === 'all');
-  
+
+  // Block on api, full, or all maintenance (bot uses API internally)
+  const shouldBlock = isMaintenanceMode && (maintenanceType === 'api' || maintenanceType === 'full' || maintenanceType === 'all');
+
   if (shouldBlock) {
     // Allow admins to bypass maintenance mode
     const userId = ctx.from?.id;
     if (userId && botIsAdmin(userId)) {
       return next(); // Admin bypass
     }
-    
+
     // Build maintenance message
     const message = buildMaintenanceMessage({
       isActive: true,
       type: maintenanceType,
       message: config.maintenanceMessage,
     }, ctx.from?.language_code);
-    
+
     await ctx.reply(message, { parse_mode: 'Markdown' });
     return; // Don't proceed to next middleware
   }
-  
+
   return next();
 };
 
@@ -539,25 +539,25 @@ export const maintenanceMiddleware: MiddlewareFn<BotContext> = async (ctx, next)
  */
 function buildMaintenanceMessage(info: MaintenanceInfo, languageCode?: string): string {
   const lang = languageCode?.startsWith('id') ? 'id' : 'en';
-  
+
   // Maintenance type indicator
   const typeIndicator = getMaintenanceTypeIndicator(info.type, lang);
-  
+
   // Header
   const header = lang === 'id'
     ? `🔧 *Sedang Maintenance*`
     : `🔧 *Under Maintenance*`;
-  
+
   // Type badge
   const typeBadge = lang === 'id'
     ? `\n\n📌 *Tipe:* ${typeIndicator}`
     : `\n\n📌 *Type:* ${typeIndicator}`;
-  
+
   // Custom message from admin (if set)
   const customMsg = info.message
     ? `\n\n📝 ${info.message}`
     : '';
-  
+
   // Estimated end time (if set)
   let estimatedTime = '';
   if (info.estimatedEndTime) {
@@ -568,25 +568,25 @@ function buildMaintenanceMessage(info: MaintenanceInfo, languageCode?: string): 
         : `\n\n⏰ *Estimated completion:* ${endTime}`;
     }
   }
-  
+
   // Default message if no custom message
   const defaultMsg = !info.message
     ? (lang === 'id'
-        ? `\n\nLayanan sedang dalam pemeliharaan untuk peningkatan performa dan fitur baru.`
-        : `\n\nService is under maintenance for performance improvements and new features.`)
+      ? `\n\nLayanan sedang dalam pemeliharaan untuk peningkatan performa dan fitur baru.`
+      : `\n\nService is under maintenance for performance improvements and new features.`)
     : '';
-  
+
   // Footer
   const footer = lang === 'id'
     ? `\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Silakan coba lagi nanti.\n` +
-      `Terima kasih atas kesabarannya! 🙏\n\n` +
-      `📢 Update: @downariaxt\\_bot`
+    `Silakan coba lagi nanti.\n` +
+    `Terima kasih atas kesabarannya! 🙏\n\n` +
+    `📢 Update: @downariaxt\\_bot`
     : `\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Please try again later.\n` +
-      `Thanks for your patience! 🙏\n\n` +
-      `📢 Updates: @downariaxt\\_bot`;
-  
+    `Please try again later.\n` +
+    `Thanks for your patience! 🙏\n\n` +
+    `📢 Updates: @downariaxt\\_bot`;
+
   return header + typeBadge + customMsg + defaultMsg + estimatedTime + footer;
 }
 
@@ -600,7 +600,7 @@ function getMaintenanceTypeIndicator(type: MaintenanceType, lang: 'en' | 'id'): 
     'full': { en: 'Full Maintenance', id: 'Maintenance Penuh' },
     'all': { en: 'Complete Shutdown', id: 'Shutdown Total' },
   };
-  
+
   return indicators[type]?.[lang] || indicators['full'][lang];
 }
 
@@ -611,17 +611,17 @@ function formatEstimatedTime(isoTime: string, lang: 'en' | 'id'): string | null 
   try {
     const endDate = new Date(isoTime);
     const now = new Date();
-    
+
     // If end time is in the past, don't show it
     if (endDate <= now) {
       return lang === 'id' ? 'Segera' : 'Soon';
     }
-    
+
     // Calculate time difference
     const diffMs = endDate.getTime() - now.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    
+
     if (diffMins < 60) {
       return lang === 'id'
         ? `~${diffMins} menit lagi`
@@ -673,7 +673,7 @@ export async function botIsInMaintenance(): Promise<boolean> {
 export async function botGetMaintenanceInfo(): Promise<MaintenanceInfo> {
   await serviceConfigLoad(true);
   const config = serviceConfigGet();
-  
+
   return {
     isActive: config.maintenanceMode === true,
     type: (config.maintenanceType || 'off') as MaintenanceType,
@@ -686,13 +686,13 @@ export async function botGetMaintenanceInfo(): Promise<MaintenanceInfo> {
  */
 export async function botGetMaintenanceMessage(languageCode?: string): Promise<string> {
   const info = await botGetMaintenanceInfo();
-  
+
   if (!info.isActive) {
     return languageCode?.startsWith('id')
       ? '✅ Layanan beroperasi normal.'
       : '✅ Service is operating normally.';
   }
-  
+
   return buildMaintenanceMessage(info, languageCode);
 }
 
