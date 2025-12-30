@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { adminCookieGet, type CookiePlatform } from '@/lib/cookies';
+import { cookiePoolGetByPlatform, type CookiePlatform } from '@/lib/cookies';
 
 const PLATFORMS: CookiePlatform[] = ['facebook', 'instagram', 'twitter', 'weibo'];
 
@@ -15,9 +15,12 @@ export async function GET() {
         
         await Promise.all(
             PLATFORMS.map(async (platform) => {
-                const cookie = await adminCookieGet(platform);
+                // Check if there are any enabled cookies in the pool for this platform
+                const poolCookies = await cookiePoolGetByPlatform(platform);
+                const hasEnabledCookie = poolCookies.some(c => c.enabled);
+                
                 status[platform] = {
-                    available: !!cookie,
+                    available: hasEnabledCookie,
                     label: platform.charAt(0).toUpperCase() + platform.slice(1),
                 };
             })

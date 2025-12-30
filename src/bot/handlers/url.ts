@@ -626,6 +626,103 @@ async function sendYouTubePreview(
 }
 
 /**
+ * Send generic video preview with thumbnail and quality selection
+ * Used for new platforms (bilibili, reddit, soundcloud, eporner, pornhub, rule34video, etc.)
+ */
+async function sendGenericVideoPreview(
+    ctx: BotContext,
+    result: DownloadResult,
+    originalUrl: string,
+    visitorId: string,
+    processingMsgId?: number | null
+): Promise<boolean> {
+    const lang = detectLanguage(ctx.from?.language_code);
+    const platformName = botUrlGetPlatformName(result.platform!);
+    
+    // Build caption
+    let caption = `*${platformName}*\n\n`;
+    if (result.title) {
+        const cleanTitle = sanitizeTitle(result.title, 200);
+        if (cleanTitle) caption += `${escapeMarkdown(cleanTitle)}\n`;
+    }
+    if (result.author) {
+        caption += `👤 ${escapeMarkdown(result.author)}\n`;
+    }
+    
+    // Get video formats with sizes
+    const videos = result.formats?.filter(f => f.type === 'video') || [];
+    const audios = result.formats?.filter(f => f.type === 'audio') || [];
+    
+    // Build quality info
+    if (videos.length > 0) {
+        caption += '\n📹 *Available Qualities:*\n';
+        for (const v of videos.slice(0, 5)) { // Max 5 qualities shown
+            const size = v.filesize ? ` (${formatFilesize(v.filesize, lang)})` : '';
+            caption += `• ${v.quality}${size}\n`;
+        }
+    }
+    
+    if (audios.length > 0) {
+        caption += '\n🎵 *Audio:* Available\n';
+    }
+    
+    // Build keyboard with download buttons
+    const keyboard = new InlineKeyboard();
+    
+    // Add video quality buttons (max 4, 2 per row)
+    const videoButtons = videos.slice(0, 4);
+    for (let i = 0; i < videoButtons.length; i++) {
+        const v = videoButtons[i];
+        const size = v.filesize ? ` ${(v.filesize / 1024 / 1024).toFixed(0)}MB` : '';
+        const label = `🎬 ${v.quality}${size}`;
+        keyboard.url(label, v.url);
+        if (i % 2 === 1) keyboard.row();
+    }
+    
+    // Add audio button if available
+    if (audios.length > 0) {
+        keyboard.row();
+        const audio = audios[0];
+        const size = audio.filesize ? ` ${(audio.filesize / 1024 / 1024).toFixed(0)}MB` : '';
+        keyboard.url(`🎵 Audio${size}`, audio.url);
+    }
+    
+    // Add original URL
+    keyboard.row().url('🔗 Original', originalUrl);
+    
+    // Delete processing message
+    if (processingMsgId) {
+        await deleteMessage(ctx, processingMsgId);
+    }
+    
+    try {
+        if (result.thumbnail) {
+            try {
+                await ctx.replyWithPhoto(new InputFile({ url: result.thumbnail }), {
+                    caption: caption.trim(),
+                    parse_mode: 'Markdown',
+                    reply_markup: keyboard,
+                });
+                return true;
+            } catch {
+                // Thumbnail failed, try text message
+            }
+        }
+        
+        // No thumbnail or failed, send text
+        await ctx.reply(caption.trim(), {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
+            link_preview_options: { is_disabled: true },
+        });
+        return true;
+    } catch (error) {
+        logger.error('telegram', error, 'SEND_GENERIC_PREVIEW');
+        return false;
+    }
+}
+
+/**
  * Send single photo directly
  */
 async function sendSinglePhoto(
@@ -972,6 +1069,10 @@ async function sendMediaByType(
                 await deleteMessage(ctx, processingMsgId);
             }
             return await sendYouTubePreview(ctx, result, originalUrl, visitorId);
+        
+        case 'generic_video':
+            // Generic platforms (bilibili, reddit, pornhub, etc.) - show preview with quality buttons
+            return await sendGenericVideoPreview(ctx, result, originalUrl, visitorId, processingMsgId);
             
         case 'video':
             return await sendVideoDirectly(ctx, result, originalUrl, visitorId, processingMsgId);

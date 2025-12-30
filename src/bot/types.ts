@@ -157,7 +157,14 @@ export interface BotContext extends Context, SessionFlavor<SessionData> {
 // ============================================================================
 
 /** Content type for smart media handling */
-export type ContentType = 'video' | 'youtube' | 'photo_single' | 'photo_album';
+export type ContentType = 'video' | 'youtube' | 'generic_video' | 'photo_single' | 'photo_album';
+
+/** Generic platforms that should show preview + quality selection (like YouTube) */
+const GENERIC_PREVIEW_PLATFORMS: PlatformId[] = [
+    'bilibili', 'reddit', 'soundcloud',
+    'eporner', 'pornhub', 'rule34video',
+    'threads', 'erome', 'pixiv'
+];
 
 /**
  * Detect content type from scraper result
@@ -171,7 +178,12 @@ export function detectContentType(result: DownloadResult): ContentType {
         return 'youtube';
     }
     
-    // Has video → send video directly
+    // Generic platforms with video → show preview first (like YouTube)
+    if (result.platform && GENERIC_PREVIEW_PLATFORMS.includes(result.platform) && videos.length > 0) {
+        return 'generic_video';
+    }
+    
+    // Has video → send video directly (for core platforms like FB, IG, TikTok, Twitter)
     if (videos.length > 0) {
         return 'video';
     }
