@@ -21,7 +21,7 @@ import type { BotContext, DownloadResult } from '../types';
 import { detectContentType } from '../types';
 import { botRateLimitRecordDownload, getMultiUrlUsage, canUseMultiUrl, recordMultiUrlUsage } from '../middleware';
 import { botIsInMaintenance, botGetMaintenanceMessage } from '../middleware';
-import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE } from '../keyboards';
+import { errorKeyboard, cookieErrorKeyboard, buildVideoKeyboard, buildPhotoKeyboard, buildYouTubeKeyboard, buildVideoSuccessKeyboard, buildVideoFallbackKeyboard, detectDetailedQualities, MAX_TELEGRAM_FILESIZE, MAX_DOWNLOAD_FILESIZE, MAX_DOWNLOAD_FILESIZE_MB } from '../keyboards';
 import { t, detectLanguage, formatFilesize, type BotLanguage } from '../i18n';
 import { sanitizeTitle } from '../utils/format';
 import { recordDownloadSuccess, recordDownloadFailure } from '../utils/monitoring';

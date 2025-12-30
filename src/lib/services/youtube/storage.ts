@@ -63,11 +63,11 @@ export const DOWNLOAD_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes (merged files - 
 
 // Duration limits - REMOVED, using filesize limit instead
 // export const YOUTUBE_MAX_DURATION_SECONDS = 5 * 60; // OLD: 5 minutes max
-export const YOUTUBE_MAX_FILESIZE_MB = 400; // 400MB max for YouTube videos (prevent OOM)
+export const YOUTUBE_MAX_FILESIZE_MB = 400; // 400MB max (global download limit)
 export const YOUTUBE_MAX_FILESIZE_BYTES = YOUTUBE_MAX_FILESIZE_MB * 1024 * 1024;
 export const GENERAL_MAX_DURATION_SECONDS = 2 * 60 * 60; // 2 hours max for other platforms
-// Note: Non-YouTube platforms are limited by Telegram's 50MB file size limit,
-// which effectively limits video duration to ~10-15 minutes for HD quality
+// Note: All platforms now share the same 400MB download limit
+// Telegram's 50MB limit means files >50MB get sent as direct links
 
 // ============================================================================
 // Storage (Redis-backed with in-memory fallback)

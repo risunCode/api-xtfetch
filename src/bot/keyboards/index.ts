@@ -29,8 +29,14 @@ import { ADMIN_CONTACT_USERNAME } from '../config';
 
 const WEBSITE_URL = 'https://downaria.vercel.app';
 
-/** Maximum filesize Telegram can send directly (40MB) */
-export const MAX_TELEGRAM_FILESIZE = 40 * 1024 * 1024; // 40MB
+/** Maximum filesize Telegram can send directly (50MB) */
+export const MAX_TELEGRAM_FILESIZE = 50 * 1024 * 1024; // 50MB
+
+/** Maximum filesize for downloads (global limit - 400MB) */
+export const MAX_DOWNLOAD_FILESIZE = 400 * 1024 * 1024; // 400MB
+
+/** Maximum filesize in MB for display */
+export const MAX_DOWNLOAD_FILESIZE_MB = 400;
 
 // ═══════════════════════════════════════════════════════════════
 // NAVIGATION

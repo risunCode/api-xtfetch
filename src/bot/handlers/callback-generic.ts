@@ -27,12 +27,12 @@ import { botRateLimitRecordDownload } from '../middleware';
 import { detectLanguage, formatFilesize } from '../i18n';
 import { escapeMarkdown } from '../helpers';
 import { sanitizeTitle } from '../utils/format';
+import { MAX_TELEGRAM_FILESIZE, MAX_DOWNLOAD_FILESIZE } from '../keyboards';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-const MAX_TELEGRAM_FILESIZE = 50 * 1024 * 1024; // 50MB Telegram limit
 const DOWNLOAD_TIMEOUT_MS = 120000; // 2 minutes timeout for large files
 
 // ============================================================================
@@ -176,9 +176,40 @@ export async function botCallbackGenericVideo(
         return;
     }
     
-    // Check filesize before downloading
+    // Check filesize before downloading - global 400MB limit
+    if (formatToSend.filesize && formatToSend.filesize > MAX_DOWNLOAD_FILESIZE) {
+        // File exceeds global download limit - send direct link
+        await ctx.answerCallbackQuery({
+            text: lang === 'id' 
+                ? '⚠️ File melebihi batas 400MB' 
+                : '⚠️ File exceeds 400MB limit',
+        });
+        
+        const filesizeMB = (formatToSend.filesize / 1024 / 1024).toFixed(0);
+        const caption = lang === 'id'
+            ? `⚠️ Video terlalu besar (${filesizeMB}MB).\nBatas download: 400MB.\nKlik tombol untuk download langsung.`
+            : `⚠️ Video too large (${filesizeMB}MB).\nDownload limit: 400MB.\nTap button to download directly.`;
+        
+        const keyboard = new InlineKeyboard()
+            .url('▶️ Download', formatToSend.url)
+            .url('🔗 Original', originalUrl);
+        
+        try {
+            await ctx.editMessageCaption({
+                caption,
+                reply_markup: keyboard,
+            });
+        } catch {
+            await ctx.reply(caption, {
+                reply_markup: keyboard,
+                link_preview_options: { is_disabled: true },
+            });
+        }
+        return;
+    }
+    
+    // Check Telegram's 50MB limit - if exceeds, send direct link
     if (formatToSend.filesize && formatToSend.filesize > MAX_TELEGRAM_FILESIZE) {
-        // File too large - send direct link instead
         await ctx.answerCallbackQuery({
             text: lang === 'id' 
                 ? '⚠️ File terlalu besar untuk Telegram' 
@@ -187,8 +218,8 @@ export async function botCallbackGenericVideo(
         
         const filesizeMB = (formatToSend.filesize / 1024 / 1024).toFixed(0);
         const caption = lang === 'id'
-            ? `⚠️ Video terlalu besar (${filesizeMB}MB) untuk Telegram.\nKlik tombol untuk download langsung.`
-            : `⚠️ Video too large (${filesizeMB}MB) for Telegram.\nTap button to download directly.`;
+            ? `⚠️ Video terlalu besar (${filesizeMB}MB) untuk Telegram (max 50MB).\nKlik tombol untuk download langsung.`
+            : `⚠️ Video too large (${filesizeMB}MB) for Telegram (max 50MB).\nTap button to download directly.`;
         
         const keyboard = new InlineKeyboard()
             .url('▶️ Download', formatToSend.url)

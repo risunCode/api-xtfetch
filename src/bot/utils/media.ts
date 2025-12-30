@@ -28,8 +28,8 @@ import { detectContentType } from '../types';
 // CONSTANTS
 // ============================================================================
 
-/** Maximum filesize Telegram can send directly (40MB) */
-export const MAX_TELEGRAM_FILESIZE = 40 * 1024 * 1024; // 40MB
+/** Maximum filesize Telegram can send directly (50MB) */
+export const MAX_TELEGRAM_FILESIZE = 50 * 1024 * 1024; // 50MB
 
 /** Maximum retry attempts for CDN downloads */
 const MAX_RETRY_ATTEMPTS = 3;

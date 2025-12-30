@@ -6,7 +6,7 @@
 // Constants
 // ============================================================================
 
-export const MAX_TELEGRAM_FILESIZE = 40 * 1024 * 1024; // 40MB
+export const MAX_TELEGRAM_FILESIZE = 50 * 1024 * 1024; // 50MB
 export const DEFAULT_TIMEOUT = 25000; // 25s
 export const DEFAULT_RETRIES = 3;
 
