@@ -8,7 +8,7 @@ import type { MediaFormat, EngagementStats } from '@/lib/types';
 export type PlatformId = 
     | 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube'
     | 'bilibili' | 'reddit' | 'soundcloud'
-    | 'eporner' | 'pornhub' | 'rule34video' | 'threads' | 'erome' | 'pixiv';
+    | 'eporner' | 'pornhub' | 'rule34video' | 'erome' | 'pixiv';
 
 export enum ScraperErrorCode {
     INVALID_URL = 'INVALID_URL',

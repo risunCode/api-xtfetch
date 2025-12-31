@@ -163,7 +163,7 @@ export type ContentType = 'video' | 'youtube' | 'generic_video' | 'photo_single'
 const GENERIC_PREVIEW_PLATFORMS: PlatformId[] = [
     'bilibili', 'reddit', 'soundcloud',
     'eporner', 'pornhub', 'rule34video',
-    'threads', 'erome', 'pixiv'
+    'erome', 'pixiv'
 ];
 
 /**

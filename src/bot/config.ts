@@ -157,7 +157,7 @@ I'll download it for you! 🚀`,
 • Facebook • Instagram • Twitter/X
 • TikTok • YouTube • Weibo
 • BiliBili • Reddit • SoundCloud
-• Threads • Pixiv • Erome • Eporner • PornHub • Rule34Video
+• Pixiv • Erome • Eporner • PornHub • Rule34Video
 
 *Commands:*
 /start - Start the bot

@@ -16,7 +16,7 @@
 export type PlatformId = 
     | 'tiktok' | 'instagram' | 'facebook' | 'twitter' | 'weibo' | 'youtube'
     | 'bilibili' | 'reddit' | 'soundcloud'
-    | 'eporner' | 'pornhub' | 'rule34video' | 'threads' | 'erome' | 'pixiv';
+    | 'eporner' | 'pornhub' | 'rule34video' | 'erome' | 'pixiv';
 
 /** Platform domain configuration */
 export interface PlatformDomainConfig {
@@ -95,11 +95,6 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformDomainConfig> = {
         name: 'Rule34Video',
         domain: 'rule34video.com',
         aliases: ['rule34video.com', 'www.rule34video.com'],
-    },
-    threads: {
-        name: 'Threads',
-        domain: 'threads.net',
-        aliases: ['threads.net', 'www.threads.net', 'threads.com', 'www.threads.com'],
     },
     erome: {
         name: 'Erome',

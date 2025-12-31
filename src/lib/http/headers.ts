@@ -135,7 +135,6 @@ export const PLATFORM_CONFIG: Record<PlatformId, PlatformHttpConfig> = {
   eporner: { referer: 'https://www.eporner.com/', origin: 'https://www.eporner.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
   pornhub: { referer: 'https://www.pornhub.com/', origin: 'https://www.pornhub.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
   rule34video: { referer: 'https://rule34video.com/', origin: 'https://rule34video.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
-  threads: { referer: 'https://www.threads.net/', origin: 'https://www.threads.net', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
   erome: { referer: 'https://www.erome.com/', origin: 'https://www.erome.com', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
   pixiv: { referer: 'https://www.pixiv.net/', origin: 'https://www.pixiv.net', ua: { desktop: UA_IPAD[0], mobile: UA_IPAD[0] } },
 };

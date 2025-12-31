@@ -47,7 +47,6 @@ const SUPPORTED_DOMAINS = [
     'bilibili.com', 'b23.tv',
     'reddit.com', 'redd.it', 'v.redd.it',
     'soundcloud.com',
-    'threads.net', 'threads.com',
     'pixiv.net',
     'erome.com',
     'eporner.com',
@@ -136,7 +135,6 @@ function botUrlGetPlatformName(platform: PlatformId): string {
         eporner: 'Eporner',
         pornhub: 'PornHub',
         rule34video: 'Rule34Video',
-        threads: 'Threads',
         erome: 'Erome',
         pixiv: 'Pixiv',
     };

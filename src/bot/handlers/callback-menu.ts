@@ -141,7 +141,7 @@ Send me any social media link and I'll download it for you.
 *Supported Platforms:*
 • YouTube • Instagram • TikTok • Twitter/X
 • Facebook • Weibo • BiliBili • Reddit
-• SoundCloud • Threads • Pixiv
+• SoundCloud • Pixiv
 • Erome • Eporner • PornHub • Rule34Video`;
 
     await ctx.answerCallbackQuery();

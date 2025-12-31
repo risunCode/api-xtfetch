@@ -24,7 +24,7 @@ Just paste any video link and I'll download it for you.
 *Supported platforms:*
 • YouTube • Instagram • TikTok • Twitter/X
 • Facebook • Weibo • BiliBili • Reddit
-• SoundCloud • Threads • Pixiv
+• SoundCloud • Pixiv
 • Erome • Eporner • PornHub • Rule34Video
 
 *Features:*
@@ -56,7 +56,7 @@ Send a video link from:
 • *Facebook* - Videos & Reels
 • *Weibo* - Videos
 • *BiliBili, Reddit, SoundCloud*
-• *Threads, Pixiv*
+• *Pixiv*
 • *Erome, Eporner, PornHub, Rule34Video*
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
@@ -107,7 +107,7 @@ Website: https://downaria.vercel.app`,
 
 *Supported platforms:*
 YouTube, Instagram, TikTok, Twitter/X, Facebook, Weibo,
-BiliBili, Reddit, SoundCloud, Threads,
+BiliBili, Reddit, SoundCloud,
 Pixiv, Erome, Eporner, PornHub, Rule34Video
 
 *Commands:*

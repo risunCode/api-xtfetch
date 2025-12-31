@@ -74,7 +74,6 @@ export const PLATFORM_TIMEOUTS: Record<PlatformId, number> = {
   eporner: 25000,    // 25s
   pornhub: 25000,    // 25s
   rule34video: 25000, // 25s
-  threads: 20000,    // 20s
   erome: 25000,      // 25s
   pixiv: 30000,      // 30s - may need auth
 };

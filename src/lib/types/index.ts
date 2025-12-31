@@ -2,7 +2,7 @@
 export type PlatformId = 
     | 'facebook' | 'instagram' | 'twitter' | 'tiktok' | 'weibo' | 'youtube'
     | 'bilibili' | 'reddit' | 'soundcloud'
-    | 'eporner' | 'pornhub' | 'rule34video' | 'threads' | 'erome' | 'pixiv';
+    | 'eporner' | 'pornhub' | 'rule34video' | 'erome' | 'pixiv';
 
 // Alert type for monitoring
 export type AlertType = 'error_rate' | 'response_time' | 'cookie_health' | 'rate_limit' | 'platform_down';

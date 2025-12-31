@@ -55,7 +55,6 @@ const PLATFORM_NAMES: Record<PlatformId, string> = {
   eporner: 'Eporner',
   pornhub: 'PornHub',
   rule34video: 'Rule34Video',
-  threads: 'Threads',
   erome: 'Erome',
   pixiv: 'Pixiv',
 };
@@ -74,7 +73,6 @@ const PLATFORM_ICONS: Record<PlatformId, string> = {
   eporner: '🔞',
   pornhub: '🔞',
   rule34video: '🔞',
-  threads: '🧵',
   erome: '🔞',
   pixiv: '🎨',
 };
@@ -100,7 +98,7 @@ Send me a video link and I'll download it for you!
 • 📘 Facebook • 📸 Instagram • 𝕏 Twitter/X
 • 🎵 TikTok • ▶️ YouTube • 🔴 Weibo
 • 📺 BiliBili • 🤖 Reddit • 🎧 SoundCloud
-• 🧵 Threads • 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34`;
+• 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34`;
 
   if (stats) {
     const remaining = user.isPremium ? '∞' : stats.remaining.toString();
@@ -283,7 +281,7 @@ The link you sent is not from a supported platform.
 • 📘 Facebook • 📸 Instagram • 𝕏 Twitter/X
 • 🎵 TikTok • ▶️ YouTube • 🔴 Weibo
 • 📺 BiliBili • 🤖 Reddit • 🎧 SoundCloud
-• 🧵 Threads • 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34
+• 🎨 Pixiv • 🔞 Erome/Eporner/PornHub/Rule34
 
 Your link: \`${truncateUrl(url)}\``;
 }

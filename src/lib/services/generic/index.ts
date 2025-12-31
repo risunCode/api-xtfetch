@@ -19,7 +19,7 @@ import { formatBytes } from '@/lib/utils';
 export type GenericPlatform = 
     | 'bilibili' | 'reddit' | 'soundcloud' 
     | 'eporner' | 'pornhub' | 'rule34video'
-    | 'threads' | 'erome' | 'pixiv';
+    | 'erome' | 'pixiv';
 
 interface PlatformConfig {
     name: string;
@@ -131,14 +131,6 @@ const PLATFORMS: Record<GenericPlatform, PlatformConfig> = {
             /rule34video\.com\/videos?\//i,
         ],
         isNsfw: true,
-    },
-    threads: {
-        name: 'Threads',
-        backend: 'gallerydl',
-        urlPatterns: [
-            /threads\.net\/@[\w.]+\/post\//i,
-            /threads\.com\/@[\w.]+\/post\//i,
-        ],
     },
     erome: {
         name: 'Erome',

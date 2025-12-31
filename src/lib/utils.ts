@@ -93,8 +93,6 @@ const ALLOWED_DOMAINS = [
     'pornhub.com', 'phncdn.com', 'pornhubpremium.com', 'modelhub.com',
     // Rule34Video
     'rule34video.com', 'rule34.xxx', 'rule34.paheal.net', 'rule34hentai.net', 'thisvid.com',
-    // Threads
-    'threads.net', 'threads.com',
     // Erome
     'erome.com', 'cdn.erome.com', 'media.erome.com', 's.erome.com',
     // Pixiv

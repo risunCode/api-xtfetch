@@ -29,7 +29,7 @@ import { ScraperErrorCode as ErrorCode } from './types';
 // Platforms that use the generic scraper (yt-dlp/gallery-dl)
 const GENERIC_PLATFORMS: GenericPlatform[] = [
     'bilibili', 'reddit', 'soundcloud',
-    'eporner', 'pornhub', 'rule34video', 'threads', 'erome', 'pixiv',
+    'eporner', 'pornhub', 'rule34video', 'erome', 'pixiv',
 ];
 
 export function getScraper(platform: PlatformId): ScraperFn | null {
@@ -79,7 +79,6 @@ export const SUPPORTED_PLATFORMS: PlatformId[] = [
     'eporner',
     'pornhub',
     'rule34video',
-    'threads',
     'erome',
     'pixiv',
 ];
