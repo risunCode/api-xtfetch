@@ -18,7 +18,7 @@ import { runScraper } from '@/core/scrapers';
 import { prepareUrl, prepareUrlSync } from '@/lib/url';
 import { logger } from '@/lib/services/shared/logger';
 import { cookiePoolGetRotating } from '@/lib/cookies';
-import { platformDetect } from '@/core/config';
+import { platformDetect, type PlatformId } from '@/core/config';
 import { utilFetchFilesizes } from '@/lib/utils';
 import { recordDownloadStat, getCountryFromHeaders } from '@/lib/database';
 import {
@@ -243,8 +243,10 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Step 7: Fetch file sizes for formats (all platforms - YouTube already has estimated sizes)
-        if (result.success && result.data?.formats) {
+        // Step 7: Fetch file sizes for formats (skip for gallery-dl platforms - their CDNs often timeout)
+        // Gallery-dl platforms: erome, threads, pixiv - skip filesize fetching
+        const SKIP_FILESIZE_PLATFORMS: PlatformId[] = ['erome', 'threads', 'pixiv'];
+        if (result.success && result.data?.formats && !SKIP_FILESIZE_PLATFORMS.includes(urlResult.platform)) {
             try {
                 // Only fetch for formats that don't already have filesize
                 const formatsNeedingSize = result.data.formats.filter(f => !f.filesize);
