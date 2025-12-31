@@ -99,7 +99,7 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformDomainConfig> = {
     threads: {
         name: 'Threads',
         domain: 'threads.net',
-        aliases: ['threads.net', 'www.threads.net'],
+        aliases: ['threads.net', 'www.threads.net', 'threads.com', 'www.threads.com'],
     },
     erome: {
         name: 'Erome',

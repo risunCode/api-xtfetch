@@ -137,6 +137,7 @@ const PLATFORMS: Record<GenericPlatform, PlatformConfig> = {
         backend: 'gallerydl',
         urlPatterns: [
             /threads\.net\/@[\w.]+\/post\//i,
+            /threads\.com\/@[\w.]+\/post\//i,
         ],
     },
     erome: {

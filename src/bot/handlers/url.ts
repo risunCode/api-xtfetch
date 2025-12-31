@@ -47,7 +47,7 @@ const SUPPORTED_DOMAINS = [
     'bilibili.com', 'b23.tv',
     'reddit.com', 'redd.it', 'v.redd.it',
     'soundcloud.com',
-    'threads.net',
+    'threads.net', 'threads.com',
     'pixiv.net',
     'erome.com',
     'eporner.com',
